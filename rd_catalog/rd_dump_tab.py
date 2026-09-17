@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QSettings, Qt, Signal, Slot
+from PySide6.QtCore import QPoint, QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -277,8 +277,18 @@ class RdDumpTab(QWidget):
                 )
             )
         self._rows = tuple(built)
-        self._hydrate_content_cache()
         self._rebuild_table()
+        QTimer.singleShot(0, self._after_dump_rows_painted)
+
+    def _after_dump_rows_painted(self) -> None:
+        """Hydrate content-compare cache after the table is already visible."""
+
+        self._hydrate_content_cache()
+        table = self._table
+        for index in range(table.rowCount()):
+            payload = self._row_at(index)
+            if payload is not None:
+                self._fill_vs_items(index, payload)
         self.enqueue_needed_content_compares()
 
     def set_kit_filter(self, title: str, mark: str) -> None:
@@ -473,14 +483,25 @@ class RdDumpTab(QWidget):
             self._runtime_dir, name=RD_DUMP_CONTENT_COMPARE_CACHE_NAME
         )
         kept: dict[str, _RdDumpContentPair] = {}
+        mtimes: dict[str, int] = {}
+
+        def counterpart_mtime(path: str) -> int:
+            text = str(path or "").strip()
+            if not text:
+                return 0
+            key = text.casefold()
+            if key not in mtimes:
+                mtimes[key] = counterpart_mtime_ns(text)
+            return mtimes[key]
+
         for row in self._rows:
             key = an_content_cache_key(
                 row.file.path,
                 row.file.mtime_ns,
                 row.targets.auto_mto_path,
-                counterpart_mtime_ns(row.targets.auto_mto_path),
+                counterpart_mtime(row.targets.auto_mto_path),
                 row.targets.rd_mto_path,
-                counterpart_mtime_ns(row.targets.rd_mto_path),
+                counterpart_mtime(row.targets.rd_mto_path),
             )
             entry = disk.get(key)
             if not entry:

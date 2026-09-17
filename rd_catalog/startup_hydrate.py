@@ -88,6 +88,7 @@ class StartupSnapshot:
     contour_records: tuple[FileRecord, ...] = ()
     official_current_ids: set[int] | None = None
     log_lines: tuple[str, ...] = ()
+    rd_dump_files: tuple[AnMtoFile, ...] = ()
 
 
 def overlay_current_ids(
@@ -328,6 +329,12 @@ def load_startup_snapshot(
         except Exception as exc:
             an_by_kit = {}
             logs.append(f"АН: {type(exc).__name__}: {exc}")
+        rd_dump_files: tuple[AnMtoFile, ...] = ()
+        try:
+            rd_dump_files = database.list_rd_dump_mto_files()
+        except Exception as exc:
+            rd_dump_files = ()
+            logs.append(f"РД: {type(exc).__name__}: {exc}")
         try:
             last_scan = database.last_scan_info(successful_only=True)
         except Exception:
@@ -350,6 +357,7 @@ def load_startup_snapshot(
             folder_hints=folder_hints,
             auto_mto_by_kit=auto_mto,
             an_by_kit=an_by_kit,
+            rd_dump_files=rd_dump_files,
             mto_content_by_kit=mto_content_equal_by_kit(mto_rows),
             export_pins=pins,
             last_scan=last_scan,

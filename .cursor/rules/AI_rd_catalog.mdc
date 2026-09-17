@@ -109,6 +109,8 @@ Filters persist `window/rd_dump_tab_*`: text; **только неканонич�
 
 Scan button → `RdDumpScanThread`. Included in `_catalog_workers_busy` / `_busy()`. Must not overlap scan / АН / Google / robot / SQ→RD. Start cancels deferred RD↔robot MTO compare.
 
+Startup: `StartupSnapshot.rd_dump_files` via `list_rd_dump_mto_files` ([`rd_catalog/startup_hydrate.py`](rd_catalog/startup_hydrate.py)) — same as АН. Closing the window does **not** wipe SQLite. Cancel mid-walk leaves the previous snapshot. First paint of the tab reads SQLite and shows rows **before** content-compare cache/UNC stats.
+
 `_apply_ban_visibility` also refreshes the РД dump tab.
 
 ## Выдача · Журнал

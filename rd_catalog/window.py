@@ -2754,6 +2754,7 @@ class CatalogWindow(QMainWindow):
             self._folder_hints = snapshot.folder_hints
             self._auto_mto_by_kit = snapshot.auto_mto_by_kit
             self._an_files_by_kit = snapshot.an_by_kit
+            self._rd_dump_files = snapshot.rd_dump_files
             self._mto_content_by_kit = snapshot.mto_content_by_kit
             self._export_pins_by_key = snapshot.export_pins
             self._set_mto_worklist_rows(snapshot.worklist_rows)
@@ -2824,9 +2825,23 @@ class CatalogWindow(QMainWindow):
     def _on_main_tab_changed(self, index: int) -> None:
         """Load deferred widgets when the user opens those tabs."""
 
-        if not self._deferred_widgets or not hasattr(self, "_tabs"):
+        if not hasattr(self, "_tabs"):
             return
         widget = self._tabs.widget(index)
+        if widget is getattr(self, "_rd_dump_tab", None):
+            if _DEFERRED_RD_DUMP in self._deferred_widgets:
+                self._ensure_deferred_widget(_DEFERRED_RD_DUMP)
+            elif self._rd_dump_tab.table().rowCount() == 0:
+                self._refresh_rd_dump_tab()
+            return
+        if widget is getattr(self, "_an_tab", None):
+            if _DEFERRED_AN in self._deferred_widgets:
+                self._ensure_deferred_widget(_DEFERRED_AN)
+            elif self._an_tab.table().rowCount() == 0:
+                self._refresh_an_tab()
+            return
+        if not self._deferred_widgets:
+            return
         if widget is getattr(self, "_revision_matrix_tab", None):
             self._ensure_deferred_widget(_DEFERRED_HEATMAP)
         elif widget is getattr(self, "_mto_worklist_tab", None):
@@ -2841,10 +2856,6 @@ class CatalogWindow(QMainWindow):
             self._ensure_deferred_widget(_DEFERRED_TREE)
         elif widget is getattr(self, "_collision_tab", None):
             self._ensure_deferred_widget(_DEFERRED_COLLISIONS)
-        elif widget is getattr(self, "_an_tab", None):
-            self._ensure_deferred_widget(_DEFERRED_AN)
-        elif widget is getattr(self, "_rd_dump_tab", None):
-            self._ensure_deferred_widget(_DEFERRED_RD_DUMP)
 
     def refresh(
         self,
@@ -2938,6 +2949,12 @@ class CatalogWindow(QMainWindow):
             self._update_ban_action_label()
             self._update_mto_sync_label()
             self._update_action_states()
+            if not defer_secondary:
+                # Full refresh paints heatmap/MTO/tree, but not dump finders.
+                # Keep them lazy so a later tab click still loads SQLite.
+                self._deferred_widgets.update({_DEFERRED_AN, _DEFERRED_RD_DUMP})
+                if hasattr(self, "_tabs"):
+                    self._on_main_tab_changed(self._tabs.currentIndex())
 
     def _load_mto_rows(self, overlay_rows: list[dict[str, Any]] | None = None) -> None:
         """Reload MTO comparison rows and synthetic not-compared placeholders.
@@ -4841,8 +4858,7 @@ class CatalogWindow(QMainWindow):
         self._deferred_widgets.discard(_DEFERRED_RD_DUMP)
         with perf_span("gui.refresh_rd_dump_tab"):
             self._rd_dump_tab.set_content_queue_paused(self._catalog_workers_busy())
-            if not self._rd_dump_files:
-                self._reload_rd_dump_index()
+            self._reload_rd_dump_index()
             known = {
                 kit_identity_key(row.title, row.mark) for row in self._kit_rows
             }

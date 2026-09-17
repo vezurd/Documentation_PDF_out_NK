@@ -80,6 +80,7 @@ class StartupSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot.kit_rows, ())
             self.assertEqual(snapshot.worklist_rows, ())
             self.assertEqual(snapshot.an_by_kit, {})
+            self.assertEqual(snapshot.rd_dump_files, ())
             self.assertFalse(snapshot.google.loaded)
             self.assertEqual(snapshot.log_lines, ())
 
