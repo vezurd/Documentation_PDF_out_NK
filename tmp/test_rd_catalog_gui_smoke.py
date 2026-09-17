@@ -34,6 +34,7 @@ from PySide6.QtTest import QTest
 
 from rd_catalog.ban_dialog import BannedTitlesDialog
 from rd_catalog.f_legalize import LEGALIZE_APPROVAL_ACTION
+from rd_catalog.issuance_journal_tab import LEGALIZE_RD_TREE_ACTION
 from rd_catalog.google_f_write import JournalWriteJob
 from rd_catalog.kits_legend_dialog import KitsPaintLegendDialog
 from rd_catalog.sheet_de_sync import SheetDeSyncRow
@@ -1140,6 +1141,7 @@ def main() -> None:
         assert hasattr(window._issuance_journal_tab, "_add_button")
         assert window._issuance_journal_tab._add_button.text() == "Добавить строку…"
         assert hasattr(window._issuance_journal_tab, "open_add_row_dialog")
+        assert hasattr(window._issuance_journal_tab, "open_legalize_rd_dialog")
         assert hasattr(window, "_open_legalize_rd_dialog")
         worklist_headers = [
             window._mto_worklist_table.horizontalHeaderItem(index).text()
@@ -1357,6 +1359,7 @@ def main() -> None:
         an_filter_src = inspect.getsource(window._an_tab.set_kit_filter)
         assert "sortByColumn" in an_filter_src
         assert "_COL_DATE" in an_filter_src
+        assert "LEGALIZE_RD_ACTION" in kits_menu_src
         assert "Показать в Выдача · Журнал" in kits_menu_src
         assert "issuance=row.issuance" in show_kits_src
         tree_menu_src = inspect.getsource(window._show_document_tree_context_menu)
@@ -1364,8 +1367,11 @@ def main() -> None:
         assert "Пометить папку как аннулированную" in tree_menu_src
         assert "Снять пометку" in tree_menu_src
         assert "LEGALIZE_APPROVAL_ACTION" in tree_menu_src
+        assert "LEGALIZE_RD_TREE_ACTION" in tree_menu_src
         assert hasattr(window, "_open_legalize_approval_f_dialog")
+        assert hasattr(window, "_open_legalize_rd_from_tree")
         assert LEGALIZE_APPROVAL_ACTION.startswith("Легализовать согласование РД")
+        assert LEGALIZE_RD_TREE_ACTION.startswith("Легализовать ревизию РД")
         assert "exec_tracked_menu" in tree_menu_src
         usage = get_context_menu_usage()
         assert usage is not None

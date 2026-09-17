@@ -135,7 +135,12 @@ from rd_catalog.doc_bundle import (
     same_document_path_keys,
     working_folder_tooltip,
 )
-from rd_catalog.issuance_journal_tab import IssuanceJournalTab
+from rd_catalog.issuance_journal_tab import (
+    LEGALIZE_RD_ACTION,
+    LEGALIZE_RD_TREE_ACTION,
+    LEGALIZE_RD_WINDOW_TITLE,
+    IssuanceJournalTab,
+)
 from rd_catalog.issuance_review import (
     JournalAutoMtoHit,
     latest_effective_issuance_kits,
@@ -3221,24 +3226,56 @@ class CatalogWindow(QMainWindow):
             row: Selected комплекты matrix row.
         """
 
-        self._ensure_deferred_widget(_DEFERRED_ISSUANCE_JOURNAL)
-        self._tabs.setCurrentWidget(self._issuance_journal_tab)
-        self._issuance_journal_tab.focus_kit(
-            row.title, row.mark, issuance=row.issuance
-        )
         revision = (row.rd.revision_text or "").strip()
-        self._issuance_journal_tab.open_add_row_dialog(
+        self._run_legalize_issuance_dialog(
             title=row.title,
             mark=row.mark,
             revision_text=revision,
             send_date=_issuance_date_from_mtime_ns(row.rd.max_mtime_ns),
-            note="легализация РД",
-            decision="legalized" if revision else "",
-            lock_identity=True,
-            window_title="Легализовать ревизию РД",
+            issuance=row.issuance,
+            restore_kits=True,
         )
-        self._tabs.setCurrentWidget(self._kits_tab)
-        self._select_kit_row(row.title, row.mark)
+
+    def _run_legalize_issuance_dialog(
+        self,
+        *,
+        title: str,
+        mark: str,
+        revision_text: str,
+        send_date: str,
+        issuance: IssuanceKit | None = None,
+        restore_kits: bool = False,
+    ) -> None:
+        """Open the issuance-journal legalize dialog with explicit fields.
+
+        Комплекты pass official overlay RD rev. The documents tree passes
+        the selected folder's filename revision so an older NN is not
+        replaced by the kit-level official rev.
+
+        Args:
+            title: Four-digit title.
+            mark: Latin AGCC mark.
+            revision_text: Filename revision to legalize.
+            send_date: Optional ``DD.MM.YYYY``.
+            issuance: Kit issuance used to focus the journal (Комплекты).
+            restore_kits: Switch back to Комплекты after the dialog.
+        """
+
+        self._ensure_deferred_widget(_DEFERRED_ISSUANCE_JOURNAL)
+        if restore_kits:
+            self._tabs.setCurrentWidget(self._issuance_journal_tab)
+            self._issuance_journal_tab.focus_kit(
+                title, mark, issuance=issuance
+            )
+        self._issuance_journal_tab.open_legalize_rd_dialog(
+            title=title,
+            mark=mark,
+            revision_text=revision_text,
+            send_date=send_date,
+        )
+        if restore_kits:
+            self._tabs.setCurrentWidget(self._kits_tab)
+            self._select_kit_row(title, mark)
 
     def _on_issuance_journal_prepare_menu(self, menu: QMenu) -> None:
         """Inject ban into the issuance-journal context menu."""
@@ -5628,7 +5665,7 @@ class CatalogWindow(QMainWindow):
         menu = QMenu(self)
         jump_action = menu.addAction('Показать в «Все документы»')
         journal_action = menu.addAction("Показать в Выдача · Журнал")
-        legalize_rd_action = menu.addAction("Легализовать ревизию РД…")
+        legalize_rd_action = menu.addAction(LEGALIZE_RD_ACTION)
         legalize_rd_action.setEnabled(bool(row.title and row.mark and row.rd.present))
         legalize_rd_action.setToolTip(
             "Открыть журнал с предзаполненной строкой текущей ревизии РД."
@@ -7675,6 +7712,7 @@ class CatalogWindow(QMainWindow):
         mark_annulled_action = None
         unmark_annulled_action = None
         legalize_f_action = None
+        legalize_issuance_action = None
         if item.data(0, _ROLE_NODE_KIND) == _NODE_REVISION:
             revision_text = folder_revision_label(self._tree_item_records(item))
             if revision_text == NO_REVISION_LABEL:
@@ -7764,6 +7802,15 @@ class CatalogWindow(QMainWindow):
                     "Пишет код А в столбец F листа «Контроль выдачи» "
                     f"(вместо TRM: {LEGALIZE_APPROVAL_TOKEN})."
                 )
+                legalize_issuance_action = menu.addAction(LEGALIZE_RD_TREE_ACTION)
+                legalize_issuance_action.setEnabled(
+                    bool(revision_text and title and mark and has_rd)
+                    and not scanning
+                )
+                legalize_issuance_action.setToolTip(
+                    "Журнал «Выдача РД ПД»: предзаполнить ревизию этой "
+                    "папки, не официальную «РД · рев.» комплекта."
+                )
         chosen = exec_tracked_menu(
             menu, MENU_DOC_TREE, self._doc_tree.viewport().mapToGlobal(position)
         )
@@ -7790,6 +7837,89 @@ class CatalogWindow(QMainWindow):
             self._apply_tree_annulled_flag(item, remove=True)
         elif legalize_f_action is not None and chosen == legalize_f_action:
             self._open_legalize_approval_f_dialog(item)
+        elif (
+            legalize_issuance_action is not None
+            and chosen == legalize_issuance_action
+        ):
+            self._open_legalize_rd_from_tree(item)
+
+    def _tree_revision_legalize_target(
+        self, item: QTreeWidgetItem
+    ) -> tuple[str, str, str, list[FileRecord]] | None:
+        """Return title, mark, filename rev, and files for a revision node.
+
+        Args:
+            item: Documents-tree revision node.
+
+        Returns:
+            ``(title, mark, revision, records)``, or ``None`` when identity
+            or filename revision is missing.
+        """
+
+        records = self._tree_item_records(item)
+        title = ""
+        mark = ""
+        bundles = item.data(0, _ROLE_ROW) or ()
+        for bundle in bundles:
+            if (
+                isinstance(bundle, DocumentBundle)
+                and bundle.title
+                and bundle.mark
+            ):
+                title = bundle.title
+                mark = bundle.mark
+                break
+        if not title or not mark:
+            title, mark, _transfer = self._tree_item_identity(item)
+        revision = folder_revision_label(records)
+        if revision == NO_REVISION_LABEL:
+            revision = ""
+        if not title or not mark or not revision:
+            return None
+        return title, mark, revision, records
+
+    def _open_legalize_rd_from_tree(self, item: QTreeWidgetItem) -> None:
+        """Legalize this folder's filename rev in the issuance journal.
+
+        Args:
+            item: Documents-tree revision node.
+        """
+
+        if self._busy():
+            QMessageBox.information(
+                self,
+                LEGALIZE_RD_WINDOW_TITLE,
+                "Дождитесь завершения текущей загрузки или сканирования.",
+            )
+            return
+        target = self._tree_revision_legalize_target(item)
+        if target is None:
+            QMessageBox.warning(
+                self,
+                LEGALIZE_RD_WINDOW_TITLE,
+                "У папки нет разобранных титула, марки и ревизии файла.",
+            )
+            return
+        title, mark, revision, records = target
+        if not any(
+            record.source is SourceKind.RD and record.present
+            for record in records
+        ):
+            QMessageBox.warning(
+                self,
+                LEGALIZE_RD_WINDOW_TITLE,
+                "Легализация выдачи доступна только для папки с файлами РД.",
+            )
+            return
+        self._run_legalize_issuance_dialog(
+            title=title,
+            mark=mark,
+            revision_text=revision,
+            send_date=_issuance_date_from_mtime_ns(
+                latest_save_mtime_ns(records)
+            ),
+            restore_kits=False,
+        )
 
     def _open_legalize_approval_f_dialog(self, item: QTreeWidgetItem) -> None:
         """Preview F до/F после and write code A to КСБ ИД.
@@ -7805,27 +7935,15 @@ class CatalogWindow(QMainWindow):
                 "Дождитесь завершения текущей загрузки или сканирования.",
             )
             return
-        records = self._tree_item_records(item)
-        title = ""
-        mark = ""
-        bundles = item.data(0, _ROLE_ROW) or ()
-        for bundle in bundles:
-            if isinstance(bundle, DocumentBundle) and bundle.title and bundle.mark:
-                title = bundle.title
-                mark = bundle.mark
-                break
-        if not title or not mark:
-            title, mark, _transfer = self._tree_item_identity(item)
-        revision = folder_revision_label(records)
-        if revision == NO_REVISION_LABEL:
-            revision = ""
-        if not title or not mark or not revision:
+        target = self._tree_revision_legalize_target(item)
+        if target is None:
             QMessageBox.warning(
                 self,
                 LEGALIZE_APPROVAL_TITLE,
                 "У папки нет разобранных титула, марки и ревизии файла.",
             )
             return
+        title, mark, revision, records = target
         if not any(
             record.source is SourceKind.RD and record.present
             for record in records

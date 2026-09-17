@@ -88,6 +88,11 @@ _FIELD_COLUMNS = {
     _COL_CONFIRM,
     _COL_NOTE,
 }
+LEGALIZE_RD_ACTION = "Легализовать ревизию РД…"
+LEGALIZE_RD_TREE_ACTION = "Легализовать ревизию РД (Выдача)…"
+LEGALIZE_RD_NOTE = "легализация РД"
+LEGALIZE_RD_WINDOW_TITLE = "Легализовать ревизию РД"
+
 _DECISION_LABELS = {
     "": "не задан",
     "active": "Активна",
@@ -1074,6 +1079,42 @@ class IssuanceJournalTab(QWidget):
             [(str(values["title"] or ""), str(values["mark"] or ""))]
         )
         return True
+
+    def open_legalize_rd_dialog(
+        self,
+        *,
+        title: str,
+        mark: str,
+        revision_text: str,
+        send_date: str = "",
+    ) -> bool:
+        """Prefill the add-row dialog for an RD issuance legalize.
+
+        Same fields as Комплекты «Легализовать ревизию РД…»: identity
+        locked, note ``легализация РД``, decision legalized when a
+        revision is present. TRM / incoming-control stay empty.
+
+        Args:
+            title: Four-digit title.
+            mark: Latin AGCC mark.
+            revision_text: Filename revision of the folder (or official
+                kit RD rev when called from Комплекты).
+            send_date: Optional ``DD.MM.YYYY`` (folder/file mtime).
+
+        Returns:
+            ``True`` when a row was persisted.
+        """
+
+        return self.open_add_row_dialog(
+            title=title,
+            mark=mark,
+            revision_text=revision_text,
+            send_date=send_date,
+            note=LEGALIZE_RD_NOTE,
+            decision="legalized" if revision_text else "",
+            lock_identity=True,
+            window_title=LEGALIZE_RD_WINDOW_TITLE,
+        )
 
     @Slot()
     def _on_add_row(self) -> None:

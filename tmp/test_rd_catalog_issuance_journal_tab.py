@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -256,6 +257,9 @@ def main() -> None:
     test_exclude_cancel_after_editor_destroyed_does_not_crash(app)
     test_exclude_comment_persists_after_editor_destroyed(app)
     test_focus_kit_filters_and_selects_effective_row(app)
+    src = inspect.getsource(IssuanceJournalTab.open_legalize_rd_dialog)
+    assert "LEGALIZE_RD_NOTE" in src
+    assert "lock_identity=True" in src
     print("RD catalog issuance journal tab: OK")
 
 
