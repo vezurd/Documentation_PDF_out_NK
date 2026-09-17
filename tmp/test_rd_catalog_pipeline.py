@@ -917,9 +917,9 @@ def test_working_disk_keeps_issued_agreed_status(temp: Path) -> None:
     assert row.status == KitPipelineStatus.AGREED
     assert row.code == "A"
     assert row.code_stale is False
-    assert pipeline_review_label(row) == "Согласован · РД 01-AN01"
+    assert pipeline_review_label(row) == "Согласован (21.11.2025) · РД 01-AN01"
     assert pipeline_review_label(row, issuance=send) == (
-        "Согласован · РД 01-AN01 · отпр. 18.11.2025"
+        "Согласован (21.11.2025) · РД 01-AN01 · отпр. 18.11.2025"
     )
     assert pipeline_approval_label(row, version=PIPELINE_DISPLAY_V1) == (
         "A · 01-AN01 · 21.11.2025"
@@ -1224,9 +1224,9 @@ def test_send_an01_falls_back_to_disk_rev01_package(temp: Path) -> None:
     pipeline = _pipeline(database, "2210", "KSB")
     assert pipeline.official_revision_text == "01-AN01"
     assert pipeline.working_revision_text == "01-AN02"
-    assert pipeline_review_label(pipeline) == "Согласован · РД 01-AN01"
+    assert pipeline_review_label(pipeline) == "Согласован (04.12.2025) · РД 01-AN01"
     assert pipeline_review_label(pipeline, issuance=send) == (
-        "Согласован · РД 01-AN01 · отпр. 18.11.2025"
+        "Согласован (04.12.2025) · РД 01-AN01 · отпр. 18.11.2025"
     )
     official_ids = official_detected_current_ids(
         records, overlay_ids, (pipeline,)
@@ -2711,7 +2711,44 @@ def test_pipeline_display_v2_current_bc_on_review() -> None:
         official_revision_text="01-AN01",
     )
     assert " · A" not in pipeline_review_label(agreed_a)
+    assert pipeline_review_label(agreed_a) == (
+        "Согласован (21.11.2025) · РД 01-AN01"
+    )
     assert pipeline_approval_label(agreed_a) == "—"
+
+
+def test_pipeline_review_label_agreed_date_not_send_date() -> None:
+    row = KitPipelineRow(
+        title="8950",
+        mark="SOT1",
+        status=KitPipelineStatus.AGREED.value,
+        code="A",
+        code_revision_text="03-AN02",
+        code_date="21.03.2026",
+        official_revision_text="03-AN02",
+    )
+    send = _send(
+        title="8950",
+        mark="SOT1",
+        revision="03",
+        appendix="02",
+        status="Принят",
+        send_date="18.03.2026",
+        transmittal="TRM-8950",
+    )
+    assert pipeline_review_label(row, issuance=send) == (
+        "Согласован (21.03.2026) · РД 03-AN02 · отпр. 18.03.2026"
+    )
+    later_a = _event(
+        date="22.03.2026",
+        stage="code_a",
+        stage_label="код А",
+        revision="03",
+        appendix="02",
+    )
+    assert pipeline_review_label(row, events=(later_a,), issuance=send) == (
+        "Согласован (22.03.2026) · РД 03-AN02 · отпр. 18.03.2026"
+    )
 
 
 def test_pipeline_display_v3_google_face_ahead_of_disk() -> None:
@@ -3244,6 +3281,9 @@ def main() -> None:
     test_review_label_appends_send_date_for_all_statuses()
     test_pipeline_approval_relation_suffix()
     test_pipeline_display_v2_current_bc_on_review()
+    test_pipeline_review_label_agreed_date_not_send_date()
+    test_pipeline_display_v3_google_face_ahead_of_disk()
+    test_pipeline_display_v3_de_caption_does_not_force_agreed()
     with tempfile.TemporaryDirectory(prefix="rd_catalog_pipeline_") as raw:
         root = Path(raw)
         test_9110_tdo_review_package_path(root)

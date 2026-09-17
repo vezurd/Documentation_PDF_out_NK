@@ -401,6 +401,7 @@ class PipelineReviewDisplay:
     pass_date: str
     send_date: str
     cycle_letter: str
+    agreed_date: str = ""
 
 
 def _display_version(version: int | None) -> int:
@@ -624,6 +625,45 @@ def _cycle_letter_for_display(
     return letter
 
 
+def _agreed_date_for_display(
+    row: KitPipelineRow,
+    *,
+    status: str,
+    face_revision: str,
+    uses_sheet_face: bool,
+    events: Sequence[KitEvent],
+) -> str:
+    """Return DD.MM.YYYY of A / F «согласовано» on the displayed cycle."""
+
+    if status != KitPipelineStatus.AGREED.value:
+        return ""
+    face = (face_revision or "").strip()
+    event_dates: list[str] = []
+    for event in events:
+        if event.stage not in {"code_a", "agreed"}:
+            continue
+        if not event.date:
+            continue
+        event_rev = format_revision(event.revision, event.appendix)
+        if face and event_rev:
+            if not revision_texts_equivalent(event_rev, face):
+                continue
+        elif face and not event_rev:
+            continue
+        event_dates.append(event.date)
+    if event_dates:
+        return _code_date_text(event_dates[-1])
+    letter = (row.code or "").strip().upper()
+    if letter != "A":
+        return ""
+    if uses_sheet_face:
+        if not pipeline_letter_on_sheet_face(row, face):
+            return ""
+    elif row.code_stale:
+        return ""
+    return _code_date_text(row.code_date)
+
+
 def pipeline_review_display(
     row: KitPipelineRow,
     *,
@@ -696,10 +736,18 @@ def pipeline_review_display(
                 uses_sheet_face=True,
                 face_revision=face,
             ),
+            agreed_date=_agreed_date_for_display(
+                row,
+                status=status,
+                face_revision=face,
+                uses_sheet_face=True,
+                events=resolved,
+            ),
         )
     official = (row.official_revision_text or "").strip()
+    status = row.status
     return PipelineReviewDisplay(
-        status=row.status,
+        status=status,
         face_revision=official,
         face_source=PIPELINE_FACE_RD,
         uses_sheet_face=False,
@@ -714,6 +762,13 @@ def pipeline_review_display(
             version=ver,
             uses_sheet_face=False,
             face_revision=official,
+        ),
+        agreed_date=_agreed_date_for_display(
+            row,
+            status=status,
+            face_revision=official,
+            uses_sheet_face=False,
+            events=resolved,
         ),
     )
 
@@ -865,8 +920,9 @@ def pipeline_approval_shows_letter(
 
 def _format_review_label(row: KitPipelineRow, view: PipelineReviewDisplay) -> str:
     label = pipeline_status_label(view.status)
-    if view.pass_date:
-        label = f"{label} ({view.pass_date})"
+    paren_date = view.pass_date or view.agreed_date
+    if paren_date:
+        label = f"{label} ({paren_date})"
     if view.cycle_letter:
         label = f"{label} · {view.cycle_letter}"
     if view.face_revision:
@@ -901,11 +957,13 @@ def pipeline_review_label(
         version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
 
     Returns:
-        ``{status}[(pass date)][ · B|C] · {РД|выдача|D/E|F} {rev}[ · отпр. {date}][ (AB)]``.
+        ``{status}[(pass or agreed date)][ · B|C] · {РД|выдача|D/E|F} {rev}[ · отпр. {date}][ (AB)]``.
         On v1/v2 and when Google matches disk, ``РД`` is the official
         package (same as «РД · рев.»). v3 with a different table cycle
         uses ``выдача`` / ``D/E`` / ``F`` and the table revision.
-        B/C never make the status «Согласован».
+        B/C never make the status «Согласован». For ``agreed``, the
+        parentheses date is the F code A / «согласовано» of this cycle,
+        not the send date.
     """
 
     view = pipeline_review_display(

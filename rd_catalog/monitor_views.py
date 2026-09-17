@@ -276,6 +276,7 @@ _TIPS_ABBREVS = frozenset(
 )
 _REVIEW_PASS_STAGES = frozenset({"tdo_passed", "incoming_passed"})
 _REVIEW_SEND_STAGES = frozenset({"tdo_sent", "incoming_sent"})
+_REVIEW_AGREED_STAGES = frozenset({"code_a", "agreed"})
 _APPROVAL_CODE_STAGES = frozenset({"code_a", "code_b", "code_c"})
 
 KITS_REV_SOURCE_COLUMNS: dict[str, str] = {
@@ -3524,6 +3525,7 @@ def pipeline_review_tooltip(
     )
     official = (pipeline.official_revision_text or "").strip()
     pass_date = view.pass_date
+    agreed_date = view.agreed_date
     send_date = view.send_date
     anchor_rev = view.face_revision if view.uses_sheet_face else official
     version = PIPELINE_DISPLAY_VERSION
@@ -3545,9 +3547,10 @@ def pipeline_review_tooltip(
         ]
         how_lines = [
             "Как читать подпись:",
-            "  статус [(дата прохождения ТДО)][ · B|C] · {выдача|D/E|F|РД} {рев.}[ · отпр. {дата}][ (AB)]",
+            "  статус [(дата ТДО или согласования)][ · B|C] · {выдача|D/E|F|РД} {рев.}[ · отпр. {дата}][ (AB)]",
             "выдача / D/E / F — рев. из таблиц. «РД» в подписи — только когда таблицы совпадают с папкой РД.",
-            "Дата в скобках — прохождение ТДО / вх.контроля этого табличного цикла.",
+            "Дата в скобках у «Прошел ТДО» — прохождение ТДО / вх.контроля этого табличного цикла.",
+            "Дата в скобках у «Согласован» — код A или F «согласовано», не дата отправки.",
             "отпр. — отправка этой же табличной рев.",
             (
                 f"Табличный цикл: {_pipeline_face_source_label(view.face_source)} · "
@@ -3568,9 +3571,10 @@ def pipeline_review_tooltip(
         ]
         how_lines = [
             "Как читать подпись:",
-            "  статус [(дата прохождения ТДО)][ · B|C] · РД {рев.}[ · отпр. {дата}][ (AB)]",
+            "  статус [(дата ТДО или согласования)][ · B|C] · РД {рев.}[ · отпр. {дата}][ (AB)]",
             "РД — актуальный пакет в папке РД, то же что «РД · рев.».",
-            "Дата в скобках — прохождение ТДО / вх.контроля этой РД-рев.",
+            "Дата в скобках у «Прошел ТДО» — прохождение ТДО / вх.контроля этой РД-рев.",
+            "Дата в скобках у «Согласован» — код A или F «согласовано», не дата отправки.",
             "отпр. — отправка этой же РД-рев. (не письма на более новую выдачу).",
             f"РД рев.: {official or '—'}",
         ]
@@ -3584,9 +3588,10 @@ def pipeline_review_tooltip(
         ]
         how_lines = [
             "Как читать подпись:",
-            "  статус [(дата прохождения ТДО)] · РД {рев.}[ · отпр. {дата}][ (AB)]",
+            "  статус [(дата ТДО или согласования)] · РД {рев.}[ · отпр. {дата}][ (AB)]",
             "РД — актуальный пакет в папке РД, то же что «РД · рев.».",
-            "Дата в скобках — прохождение ТДО / вх.контроля этой РД-рев.",
+            "Дата в скобках у «Прошел ТДО» — прохождение ТДО / вх.контроля этой РД-рев.",
+            "Дата в скобках у «Согласован» — код A или F «согласовано», не дата отправки.",
             "отпр. — отправка этой же РД-рев. (не письма на более новую выдачу).",
             f"РД рев.: {official or '—'}",
         ]
@@ -3646,6 +3651,17 @@ def pipeline_review_tooltip(
         else:
             lines.append(f"  источник: {KITS_F_SHEET_LABEL} или {ISSUANCE_SHEET_LABEL}")
             lines.append("  строка в кэше не сопоставлена")
+    if agreed_date:
+        lines.append("")
+        lines.append(f"Согласование {agreed_date}:")
+        agreed_event = _pick_event_on_date(
+            events, agreed_date, anchor_rev, _REVIEW_AGREED_STAGES
+        )
+        if agreed_event is not None:
+            lines.extend(f"  {item}" for item in _f_event_source_lines(agreed_event))
+        else:
+            lines.append(f"  источник: {KITS_F_SHEET_LABEL}")
+            lines.append("  строка кода A / «согласовано» в кэше не сопоставлена")
     if send_date:
         lines.append("")
         lines.append(f"Отправка {send_date}:")
@@ -3756,6 +3772,7 @@ def pipeline_approval_tooltip(
             lines.append(
                 "Код A этого цикла = «Согласован»; колонку не дублируем."
             )
+            lines.append("Дата согласования — в скобках у «Согласован».")
     if relation:
         meaning = {
             APPROVAL_REL_AHEAD: (
