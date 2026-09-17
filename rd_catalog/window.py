@@ -239,7 +239,7 @@ from rd_catalog.path_actions import (
     open_path,
     path_is_under,
 )
-from rd_catalog.monitor_qt import ROLE_SORT, apply_monitor_cell
+from rd_catalog.monitor_qt import ROLE_SORT, apply_monitor_cell, _qt_tooltip
 from rd_catalog.monitor_views import (
     CARD_PACKAGE_HEADERS,
     KITS_HEADERS,
@@ -1165,6 +1165,16 @@ class CatalogWindow(QMainWindow):
         ) = None
         self._contour_ids_cache: tuple[int, set[int]] | None = None
         self._record_by_id: dict[int, FileRecord] = {}
+        self._records_by_path_key: dict[str, FileRecord] = {}
+        self._records_by_kit: dict[tuple[str, str], list[FileRecord]] = {}
+        self._catalog_index_token: int | None = None
+        self._official_rd_package_cache: (
+            tuple[Any, ...] | None
+        ) = None
+        self._official_rd_package_by_kit: dict[
+            tuple[str, str], KitPackageRow | None
+        ] = {}
+        self._kits_last_card: tuple[str, str, Any] | None = None
         self._mto_rows: list[dict[str, Any]] = []
         self._collision_rows: list[dict[str, Any]] = []
         self._detected_current_ids: set[int] = set()
@@ -2394,6 +2404,9 @@ class CatalogWindow(QMainWindow):
         previous_contour = self._contour_records
         self._all_records = records
         self._record_by_id = {record.id: record for record in records}
+        self._rebuild_catalog_record_indexes()
+        self._official_rd_package_cache = None
+        self._official_rd_package_by_kit = {}
         if contour is not None:
             self._contour_records = tuple(contour)
         else:
@@ -2408,6 +2421,34 @@ class CatalogWindow(QMainWindow):
         self._official_ids_token = None
         self._tree_kit_identities_cache = None
         self._contour_ids_cache = None
+
+    def _rebuild_catalog_record_indexes(self) -> None:
+        """Index catalog files by path_key and kit for GUI lookups."""
+
+        by_path: dict[str, FileRecord] = {}
+        by_kit: dict[tuple[str, str], list[FileRecord]] = {}
+        for record in self._all_records:
+            key = str(record.path_key or "").casefold()
+            if key:
+                by_path[key] = record
+            title = str(record.data.get("title") or "").strip()
+            mark = str(record.data.get("mark") or "").strip()
+            if title and mark:
+                by_kit.setdefault(kit_identity_key(title, mark), []).append(record)
+        self._records_by_path_key = by_path
+        self._records_by_kit = by_kit
+        self._catalog_index_token = id(self._all_records)
+
+    def _ensure_catalog_record_indexes(self) -> None:
+        if getattr(self, "_catalog_index_token", None) == id(self._all_records):
+            return
+        self._rebuild_catalog_record_indexes()
+
+    def _records_for_kit(self, title: str, mark: str) -> Sequence[FileRecord]:
+        """Return in-memory files of one title–mark, or empty."""
+
+        self._ensure_catalog_record_indexes()
+        return self._records_by_kit.get(kit_identity_key(title, mark), ())
 
     def _pipeline_records(self) -> Sequence[FileRecord]:
         """Return contour-filtered records when refresh already computed them."""
@@ -3452,7 +3493,9 @@ class CatalogWindow(QMainWindow):
                     item.setData(_ROLE_ROW, row)
                     if column in (11, 12):
                         path = row.get("rd_path" if column == 11 else "robot_path")
-                        item.setToolTip(str(path or "Файл не найден в паре"))
+                        item.setToolTip(
+                            _qt_tooltip(str(path or "Файл не найден в паре"))
+                        )
                     if column == 0:
                         color = {
                             "ready": "#137333",
@@ -4181,6 +4224,20 @@ class CatalogWindow(QMainWindow):
         self._kits_card_sources.setText("")
         if hasattr(self, "_kits_package_table"):
             self._kits_package_table.setRowCount(0)
+        self._kits_last_card = None
+
+    def _cached_kit_card(self, title: str, mark: str):
+        """Return the last painted kit card when it is still the same kit."""
+
+        cached = getattr(self, "_kits_last_card", None)
+        if cached is None:
+            return None
+        cached_title, cached_mark, card = cached
+        if kit_identity_key(cached_title, cached_mark) != kit_identity_key(
+            title, mark
+        ):
+            return None
+        return card
 
     def _update_kits_card(self) -> None:
         if not hasattr(self, "_kits_package_table"):
@@ -4323,6 +4380,7 @@ class CatalogWindow(QMainWindow):
             ]
             self._kits_card_sources.setText(" · ".join(source_bits))
             self._fill_kits_package_table(row, card, painted)
+            self._kits_last_card = (row.title, row.mark, card)
 
     def _format_source_package_paths(
         self,
@@ -4498,12 +4556,14 @@ class CatalogWindow(QMainWindow):
         if package is None or kit is None:
             return
         liquidity = "—"
-        try:
-            card = get_kit_card(self.database, kit.title, kit.mark)
-            if card is not None:
-                liquidity = self._package_liquidity_label(package, card)
-        except Exception:
-            card = None
+        card = self._cached_kit_card(kit.title, kit.mark)
+        if card is None:
+            try:
+                card = get_kit_card(self.database, kit.title, kit.mark)
+            except Exception:
+                card = None
+        if card is not None:
+            liquidity = self._package_liquidity_label(package, card)
         menu = QMenu(self)
         open_action = menu.addAction("Открыть папку")
         open_action.setEnabled(bool(package.package_path) and not package.is_grey)
@@ -5413,124 +5473,34 @@ class CatalogWindow(QMainWindow):
         row_index = self._kits_table.rowAt(position.y())
         if row_index < 0:
             return
-        self._kits_table.selectRow(row_index)
-        row = self._selected_kit_row()
-        if row is None:
+        with perf_span("gui.show_kits_context_menu"):
+            ctx = self._popup_kits_context_menu(row_index, position)
+        if ctx is None:
             return
-        menu = QMenu(self)
-        jump_action = menu.addAction('Показать в «Все документы»')
-        journal_action = menu.addAction("Показать в Выдача · Журнал")
-        legalize_rd_action = menu.addAction("Легализовать ревизию РД…")
-        legalize_rd_action.setEnabled(bool(row.title and row.mark and row.rd.present))
-        legalize_rd_action.setToolTip(
-            "Открыть журнал с предзаполненной строкой текущей ревизии РД."
-        )
-        an_action = menu.addAction('Показать в „АН“')
-        rd_dump_action = menu.addAction('Показать в „РД“')
-        an_folder_action = menu.addAction("Открыть папку · АН")
-        shown_an = self._an_hit_for(row).shown_file
-        an_folder_action.setEnabled(
-            bool(shown_an is not None and shown_an.parent_dir)
-        )
-        menu.addSeparator()
-        actions: dict[QAction, tuple[str, bool] | tuple[str, str]] = {}
-        for source, label in (("rd", "РД"), ("robot", "робот"), ("sq", "SQ")):
-            snapshot = self._kit_snapshot_for(row, source)
-            path = snapshot.paths[0] if snapshot and snapshot.paths else ""
-            if source == "rd":
-                package = self._official_rd_package(row.title, row.mark)
-                if package is not None and package.package_path:
-                    path = package.package_path
-                    if snapshot and snapshot.paths:
-                        prefix = package.package_path.casefold()
-                        for candidate in snapshot.paths:
-                            folder_path = issued_package_dir(
-                                str(candidate)
-                            ) or str(candidate)
-                            if folder_path.casefold().startswith(prefix):
-                                path = candidate
-                                break
-            present = bool(
-                (snapshot and snapshot.present and path)
-                or (source == "rd" and path)
-            )
-            open_action = menu.addAction(f"Открыть файл · {label}")
-            folder_action = menu.addAction(f"Открыть содержащую папку · {label}")
-            copy_action = menu.addAction(f"Копировать путь · {label}")
-            open_action.setEnabled(present)
-            folder_action.setEnabled(present)
-            copy_action.setEnabled(bool(path))
-            actions[open_action] = (source, False)
-            actions[folder_action] = (source, True)
-            actions[copy_action] = ("copy", path)
-            menu.addSeparator()
-        auto_action = menu.addAction("Открыть файл · Авто МТО")
-        _rd_path, auto_rev, _pinned = self._auto_mto_rd_target(row.title, row.mark)
-        auto = self._auto_mto_for_kit(row.title, row.mark, auto_rev)
-        auto_file = auto_mto_path(auto) if auto is not None else None
-        auto_action.setEnabled(bool(auto_file is not None and auto_file.is_file()))
-        menu.addSeparator()
-        copy_all = menu.addAction("Копировать все пути")
-        outlook_query = outlook_od_search_query(row.title, row.mark)
-        outlook_find_action = menu.addAction("Найти в Outlook")
-        outlook_find_action.setEnabled(bool(outlook_query))
-        outlook_find_action.setToolTip(
-            f"Найти {outlook_query} во всех почтовых ящиках Outlook"
-            if outlook_query
-            else "Нужны титул и марка."
-        )
-        outlook_copy_action = menu.addAction("Копировать поиск Outlook")
-        outlook_copy_action.setEnabled(bool(outlook_query))
-        outlook_copy_action.setToolTip(
-            f"Строка для поиска в Outlook: {outlook_query}"
-            if outlook_query
-            else "Нужны титул и марка."
-        )
-        menu.addSeparator()
-        rescan_action = menu.addAction("Пересканировать РД")
-        rescan_action.setToolTip(
-            "Частичный перескан папки комплекта в РД "
-            r"(РД\титул\марка\Для передачи\NN_…)."
-        )
-        rescan_action.setEnabled(
-            not self._busy() and bool(row.title and row.mark)
-        )
-        mixed_folders = self._mixed_title_open_folders_for_kit(row)
-        mixed_open_action = menu.addAction("Открыть смешанные папки")
-        mixed_open_action.setEnabled(bool(mixed_folders))
-        if mixed_folders:
-            mixed_open_action.setToolTip(
-                "Открыть папки, где лежат файлы комплекта в чужом титуле:\n"
-                + "\n".join(mixed_folders)
-            )
-        else:
-            mixed_open_action.setToolTip(
-                "Нет файлов комплекта в папке другого титула."
-            )
-        sync_action = menu.addAction("Обновить MTO у робота")
-        compare_auto = menu.addAction("Сверить Авто МТО с MTO РД…")
-        rd_mto_path, _rd_rev, _pinned = self._auto_mto_rd_target(
-            row.title, row.mark
-        )
-        compare_auto.setEnabled(
-            bool(rd_mto_path)
-            and bool(self._auto_mto_files_for_kit(row.title, row.mark))
-            and not self._busy()
-        )
-        mto_record = self._record_by_path_key(rd_mto_path) if rd_mto_path else None
-        if mto_record is not None and str(
-            mto_record.data.get("file_kind") or ""
-        ) != FileKind.MTO_XLSX.value:
-            mto_record = None
-        date_menu = self._add_mtime_override_menu(menu, mto_record)
-        sq_to_rd_action = menu.addAction("Перенести SQ в РД (новая передача)")
-        sq_to_rd_action.setEnabled(bool(row.sq.present and row.sq.paths))
-        menu.addSeparator()
-        ban_action = menu.addAction("Скрыть титул–марку (бан-фильтр)")
-        handoff_action = self._add_robot_handoff_action(menu)
-        chosen = exec_tracked_menu(
-            menu, MENU_KITS, self._kits_table.viewport().mapToGlobal(position)
-        )
+        row = ctx["row"]
+        chosen = ctx["chosen"]
+        jump_action = ctx["jump_action"]
+        journal_action = ctx["journal_action"]
+        legalize_rd_action = ctx["legalize_rd_action"]
+        an_action = ctx["an_action"]
+        rd_dump_action = ctx["rd_dump_action"]
+        an_folder_action = ctx["an_folder_action"]
+        shown_an = ctx["shown_an"]
+        actions = ctx["actions"]
+        auto_action = ctx["auto_action"]
+        copy_all = ctx["copy_all"]
+        outlook_query = ctx["outlook_query"]
+        outlook_find_action = ctx["outlook_find_action"]
+        outlook_copy_action = ctx["outlook_copy_action"]
+        rescan_action = ctx["rescan_action"]
+        mixed_open_action = ctx["mixed_open_action"]
+        sync_action = ctx["sync_action"]
+        compare_auto = ctx["compare_auto"]
+        date_menu = ctx["date_menu"]
+        mto_record = ctx["mto_record"]
+        sq_to_rd_action = ctx["sq_to_rd_action"]
+        ban_action = ctx["ban_action"]
+        handoff_action = ctx["handoff_action"]
         if chosen == jump_action:
             self._jump_to_kit_documents(row.title, row.mark)
             return
@@ -5628,6 +5598,156 @@ class CatalogWindow(QMainWindow):
         else:
             self._open_kit_source(command[0], folder=bool(command[1]))
 
+    def _popup_kits_context_menu(
+        self, row_index: int, position
+    ) -> dict[str, Any] | None:
+        """Build and exec the Комплекты menu without disk existence checks."""
+
+        if self._kits_table.currentRow() != row_index:
+            self._kits_table.selectRow(row_index)
+        row = self._selected_kit_row()
+        if row is None:
+            return None
+        menu = QMenu(self)
+        jump_action = menu.addAction('Показать в «Все документы»')
+        journal_action = menu.addAction("Показать в Выдача · Журнал")
+        legalize_rd_action = menu.addAction("Легализовать ревизию РД…")
+        legalize_rd_action.setEnabled(bool(row.title and row.mark and row.rd.present))
+        legalize_rd_action.setToolTip(
+            "Открыть журнал с предзаполненной строкой текущей ревизии РД."
+        )
+        an_action = menu.addAction('Показать в „АН“')
+        rd_dump_action = menu.addAction('Показать в „РД“')
+        an_folder_action = menu.addAction("Открыть папку · АН")
+        shown_an = self._an_hit_for(row).shown_file
+        an_folder_action.setEnabled(
+            bool(shown_an is not None and shown_an.parent_dir)
+        )
+        menu.addSeparator()
+        actions: dict[QAction, tuple[str, bool] | tuple[str, str]] = {}
+        for source, label in (("rd", "РД"), ("robot", "робот"), ("sq", "SQ")):
+            snapshot = self._kit_snapshot_for(row, source)
+            path = snapshot.paths[0] if snapshot and snapshot.paths else ""
+            if source == "rd":
+                package = self._official_rd_package(row.title, row.mark)
+                if package is not None and package.package_path:
+                    path = package.package_path
+                    if snapshot and snapshot.paths:
+                        prefix = package.package_path.casefold()
+                        for candidate in snapshot.paths:
+                            folder_path = issued_package_dir(
+                                str(candidate)
+                            ) or str(candidate)
+                            if folder_path.casefold().startswith(prefix):
+                                path = candidate
+                                break
+            present = bool(
+                (snapshot and snapshot.present and path)
+                or (source == "rd" and path)
+            )
+            open_action = menu.addAction(f"Открыть файл · {label}")
+            folder_action = menu.addAction(f"Открыть содержащую папку · {label}")
+            copy_action = menu.addAction(f"Копировать путь · {label}")
+            open_action.setEnabled(present)
+            folder_action.setEnabled(present)
+            copy_action.setEnabled(bool(path))
+            actions[open_action] = (source, False)
+            actions[folder_action] = (source, True)
+            actions[copy_action] = ("copy", path)
+            menu.addSeparator()
+        auto_action = menu.addAction("Открыть файл · Авто МТО")
+        rd_mto_path, auto_rev, _pinned = self._auto_mto_rd_target(
+            row.title, row.mark
+        )
+        auto = self._auto_mto_for_kit(row.title, row.mark, auto_rev)
+        auto_file = auto_mto_path(auto) if auto is not None else None
+        auto_action.setEnabled(auto_file is not None)
+        menu.addSeparator()
+        copy_all = menu.addAction("Копировать все пути")
+        outlook_query = outlook_od_search_query(row.title, row.mark)
+        outlook_find_action = menu.addAction("Найти в Outlook")
+        outlook_find_action.setEnabled(bool(outlook_query))
+        outlook_find_action.setToolTip(
+            f"Найти {outlook_query} во всех почтовых ящиках Outlook"
+            if outlook_query
+            else "Нужны титул и марка."
+        )
+        outlook_copy_action = menu.addAction("Копировать поиск Outlook")
+        outlook_copy_action.setEnabled(bool(outlook_query))
+        outlook_copy_action.setToolTip(
+            f"Строка для поиска в Outlook: {outlook_query}"
+            if outlook_query
+            else "Нужны титул и марка."
+        )
+        menu.addSeparator()
+        rescan_action = menu.addAction("Пересканировать РД")
+        rescan_action.setToolTip(
+            "Частичный перескан папки комплекта в РД "
+            r"(РД\титул\марка\Для передачи\NN_…)."
+        )
+        rescan_action.setEnabled(
+            not self._busy() and bool(row.title and row.mark)
+        )
+        mixed_folders = self._mixed_title_open_folders_for_kit(row)
+        mixed_open_action = menu.addAction("Открыть смешанные папки")
+        mixed_open_action.setEnabled(bool(mixed_folders))
+        if mixed_folders:
+            mixed_open_action.setToolTip(
+                "Открыть папки, где лежат файлы комплекта в чужом титуле:\n"
+                + "\n".join(mixed_folders)
+            )
+        else:
+            mixed_open_action.setToolTip(
+                "Нет файлов комплекта в папке другого титула."
+            )
+        sync_action = menu.addAction("Обновить MTO у робота")
+        compare_auto = menu.addAction("Сверить Авто МТО с MTO РД…")
+        compare_auto.setEnabled(
+            bool(rd_mto_path)
+            and bool(self._auto_mto_files_for_kit(row.title, row.mark))
+            and not self._busy()
+        )
+        mto_record = self._record_by_path_key(rd_mto_path) if rd_mto_path else None
+        if mto_record is not None and str(
+            mto_record.data.get("file_kind") or ""
+        ) != FileKind.MTO_XLSX.value:
+            mto_record = None
+        date_menu = self._add_mtime_override_menu(menu, mto_record)
+        sq_to_rd_action = menu.addAction("Перенести SQ в РД (новая передача)")
+        sq_to_rd_action.setEnabled(bool(row.sq.present and row.sq.paths))
+        menu.addSeparator()
+        ban_action = menu.addAction("Скрыть титул–марку (бан-фильтр)")
+        handoff_action = self._add_robot_handoff_action(menu)
+        chosen = exec_tracked_menu(
+            menu, MENU_KITS, self._kits_table.viewport().mapToGlobal(position)
+        )
+        return {
+            "row": row,
+            "chosen": chosen,
+            "jump_action": jump_action,
+            "journal_action": journal_action,
+            "legalize_rd_action": legalize_rd_action,
+            "an_action": an_action,
+            "rd_dump_action": rd_dump_action,
+            "an_folder_action": an_folder_action,
+            "shown_an": shown_an,
+            "actions": actions,
+            "auto_action": auto_action,
+            "copy_all": copy_all,
+            "outlook_query": outlook_query,
+            "outlook_find_action": outlook_find_action,
+            "outlook_copy_action": outlook_copy_action,
+            "rescan_action": rescan_action,
+            "mixed_open_action": mixed_open_action,
+            "sync_action": sync_action,
+            "compare_auto": compare_auto,
+            "date_menu": date_menu,
+            "mto_record": mto_record,
+            "sq_to_rd_action": sq_to_rd_action,
+            "ban_action": ban_action,
+            "handoff_action": handoff_action,
+        }
+
     def _update_collision_tab_label(self) -> None:
         """Show the current collision count on the tab without filling the table."""
 
@@ -5661,7 +5781,9 @@ class CatalogWindow(QMainWindow):
                     item = QTableWidgetItem(str(value))
                     item.setData(_ROLE_ROW, row)
                     if column == 5:
-                        item.setToolTip("\n".join(paths) or "Путь не определён")
+                        item.setToolTip(
+                            _qt_tooltip("\n".join(paths) or "Путь не определён")
+                        )
                     table.setItem(table_row, column, item)
             table.setSortingEnabled(True)
 
@@ -6306,6 +6428,18 @@ class CatalogWindow(QMainWindow):
             whose filename revision matches ``official_revision_text``.
         """
 
+        token = (
+            id(self._all_records),
+            id(self._kit_pipelines),
+            self._official_ids_token,
+        )
+        key = kit_identity_key(title, mark)
+        if getattr(self, "_official_rd_package_cache", None) != token:
+            self._official_rd_package_cache = token
+            self._official_rd_package_by_kit = {}
+        cached = self._official_rd_package_by_kit
+        if key in cached:
+            return cached[key]
         try:
             packages = self.database.list_kit_packages(title, mark)
         except Exception:
@@ -6315,36 +6449,43 @@ class CatalogWindow(QMainWindow):
             for pkg in packages
             if pkg.source == "rd" and not pkg.is_grey and pkg.is_current
         ]
+        result: KitPackageRow | None
         if current:
-            return max(
+            result = max(
                 current,
                 key=lambda pkg: (
                     pkg.sequence if pkg.sequence is not None else -1,
                     pkg.id or 0,
                 ),
             )
-        pipeline = self._kit_pipelines.get(kit_identity_key(title, mark))
-        official = (
-            pipeline.official_revision_text if pipeline is not None else ""
-        )
-        if not official:
-            return None
-        matched = [
-            pkg
-            for pkg in packages
-            if pkg.source == "rd"
-            and not pkg.is_grey
-            and revision_texts_equivalent(pkg.revision_text, official)
-        ]
-        if not matched:
-            return None
-        return max(
-            matched,
-            key=lambda pkg: (
-                pkg.sequence if pkg.sequence is not None else -1,
-                pkg.id or 0,
-            ),
-        )
+        else:
+            pipeline = self._kit_pipelines.get(key)
+            official = (
+                pipeline.official_revision_text if pipeline is not None else ""
+            )
+            if not official:
+                result = None
+            else:
+                matched = [
+                    pkg
+                    for pkg in packages
+                    if pkg.source == "rd"
+                    and not pkg.is_grey
+                    and revision_texts_equivalent(pkg.revision_text, official)
+                ]
+                result = (
+                    max(
+                        matched,
+                        key=lambda pkg: (
+                            pkg.sequence if pkg.sequence is not None else -1,
+                            pkg.id or 0,
+                        ),
+                    )
+                    if matched
+                    else None
+                )
+        cached[key] = result
+        return result
 
     def _official_rd_transfer_name(self, title: str, mark: str) -> str:
         """Return the issued-folder name of the official (non-working) RD package.
@@ -6889,7 +7030,7 @@ class CatalogWindow(QMainWindow):
         """
 
         return mixed_title_open_folders(
-            self._all_records,
+            self._records_for_kit(row.title, row.mark),
             title=row.title,
             mark=row.mark,
             rd_root=self.config.rd_root,
@@ -7765,10 +7906,11 @@ class CatalogWindow(QMainWindow):
         key = make_path_key(path)
         if not key:
             return None
-        for record in self._all_records:
-            if record.path_key.casefold() == key:
-                return record
-        return None
+        self._ensure_catalog_record_indexes()
+        hit = self._records_by_path_key.get(key)
+        if hit is not None:
+            return hit
+        return self._records_by_path_key.get(str(path).casefold())
 
     def _code_letter_for_record(self, record: FileRecord) -> tuple[str, str]:
         """Return last F code A/B/C date and stage for this MTO revision."""
@@ -7823,8 +7965,15 @@ class CatalogWindow(QMainWindow):
         if not package:
             return [record]
         pkg_key = make_path_key(package)
+        title = str(record.data.get("title") or "").strip()
+        mark = str(record.data.get("mark") or "").strip()
+        pool = (
+            self._records_for_kit(title, mark)
+            if title and mark
+            else self._all_records
+        )
         files: list[FileRecord] = []
-        for candidate in self._all_records:
+        for candidate in pool:
             if not candidate.present:
                 continue
             other = issued_package_dir(candidate.path)
@@ -7865,15 +8014,14 @@ class CatalogWindow(QMainWindow):
         )
 
     def _record_has_mtime_override(self, record: FileRecord) -> bool:
+        if record.data.get("mtime_override_applied") or record.data.get(
+            "mtime_override_stale"
+        ):
+            return True
         try:
-            if self.database.get_file_mtime_override(record.path_key) is not None:
-                return True
+            return self.database.get_file_mtime_override(record.path_key) is not None
         except Exception:
-            pass
-        return bool(
-            record.data.get("mtime_override_applied")
-            or record.data.get("mtime_override_stale")
-        )
+            return False
 
     def _add_mtime_override_menu(
         self,
@@ -7905,7 +8053,13 @@ class CatalogWindow(QMainWindow):
             if mto_record is not None
             else []
         )
-        has_override = any(self._record_has_mtime_override(item) for item in targets)
+        has_override = any(
+            bool(
+                item.data.get("mtime_override_applied")
+                or item.data.get("mtime_override_stale")
+            )
+            for item in targets
+        )
         if mto_record is not None and not has_override:
             has_override = self._record_has_mtime_override(mto_record)
         busy = self._busy()
@@ -8325,7 +8479,9 @@ class CatalogWindow(QMainWindow):
                 if column == _HISTORY_COL_PIN:
                     self._apply_pin_view(cell, pin_view)
                 if column == _HISTORY_COL_PACKAGE:
-                    cell.setToolTip(package_path or "Папка комплекта неизвестна")
+                    cell.setToolTip(
+                        _qt_tooltip(package_path or "Папка комплекта неизвестна")
+                    )
                 if column == _HISTORY_COL_DATE:
                     tips = [
                         file_save_date_tooltip(files)

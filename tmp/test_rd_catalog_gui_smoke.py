@@ -229,6 +229,99 @@ def _check_scan_keep_view_tree_rebuild_contract() -> None:
     assert "rebuild_document_tree = restore is None or stay_on_documents" in src
 
 
+def _check_kits_context_menu_popup_cost(window: CatalogWindow) -> None:
+    """Комплекты right-click must not walk the whole catalog or stat Auto MTO."""
+
+    popup_src = inspect.getsource(CatalogWindow._popup_kits_context_menu)
+    assert "is_file()" not in popup_src
+    assert "currentRow()" in popup_src
+    pkg_src = inspect.getsource(CatalogWindow._package_folder_records)
+    assert "_records_for_kit" in pkg_src
+    rec_src = inspect.getsource(CatalogWindow._record_by_path_key)
+    assert "_records_by_path_key" in rec_src
+
+    rd_root = Path(window.config.rd_root)
+    mto = _stub_record(
+        801,
+        path=_pipeline_rd_path(
+            rd_root,
+            title="8181",
+            mark="KSB",
+            folder=_issued_nn("8181", "KSB"),
+            filename="AGCC.287-8181-KSB.MTO-0001_01_RU.xlsx",
+        ),
+        title="8181",
+        mark="KSB",
+        file_kind=FileKind.MTO_XLSX.value,
+    )
+    pdf = _stub_record(
+        802,
+        path=_pipeline_rd_path(
+            rd_root,
+            title="8181",
+            mark="KSB",
+            folder=_issued_nn("8181", "KSB"),
+            filename="AGCC.287-8181-KSB.OD-0001_01_RU.pdf",
+        ),
+        title="8181",
+        mark="KSB",
+    )
+    noise = [
+        _stub_record(
+            9000 + index,
+            path=_pipeline_rd_path(
+                rd_root,
+                title="9090",
+                mark="POS",
+                folder=_issued_nn("9090", "POS", sequence=1 + (index % 9)),
+                filename=f"AGCC.287-9090-POS.OD-{index:04d}_01_RU.pdf",
+            ),
+            title="9090",
+            mark="POS",
+        )
+        for index in range(400)
+    ]
+    saved_records = list(window._all_records)
+    saved_by_id = dict(window._record_by_id)
+    saved_contour = window._contour_records
+    try:
+        window._assign_catalog_records([mto, pdf, *noise])
+        found = window._record_by_path_key(mto.path)
+        assert found is mto
+        issued_calls = {"n": 0}
+        real_issued = issued_package_dir
+
+        def _count_issued(path: str) -> str:
+            issued_calls["n"] += 1
+            return real_issued(path)
+
+        with patch("rd_catalog.window.issued_package_dir", side_effect=_count_issued):
+            siblings = window._package_folder_records(mto)
+        assert mto in siblings
+        assert pdf in siblings
+        assert all(str(item.data.get("title")) != "9090" for item in siblings)
+        assert issued_calls["n"] < 20
+        kit_row = KitMatrixRow(
+            title="8181",
+            mark="KSB",
+            title_system="8181-KSB",
+            rd=SourceKitSnapshot(present=True, revision_text="01"),
+            robot=SourceKitSnapshot(),
+            sq=SourceKitSnapshot(),
+            google=None,
+            issuance=None,
+            flags=(),
+            summary=KitSummary.GAP_ROBOT,
+        )
+        mixed_src = inspect.getsource(CatalogWindow._mixed_title_open_folders_for_kit)
+        assert "_records_for_kit" in mixed_src
+        assert window._mixed_title_open_folders_for_kit(kit_row) == ()
+        assert len(window._records_for_kit("8181", "KSB")) == 2
+    finally:
+        window._assign_catalog_records(saved_records, contour=saved_contour)
+        window._record_by_id = saved_by_id
+
+
 def _check_mto_compare_not_planned_on_gui(window: CatalogWindow) -> None:
     """RD↔robot MTO plan must be built in the child job, not on the GUI thread."""
 
@@ -957,6 +1050,7 @@ def main() -> None:
         window._revision_matrix_tab._auto_mto_compare_thread = None
         _check_overlay_auto_mto_enqueue_while_heatmap_deferred(window)
         _check_scan_keep_view_tree_rebuild_contract()
+        _check_kits_context_menu_popup_cost(window)
         _check_mto_compare_not_planned_on_gui(window)
         _check_scoped_gui_refresh(window)
         _check_scoped_kits_table_refresh(window)
@@ -1250,16 +1344,20 @@ def main() -> None:
         assert "window/an_tab_header_v1" not in header_keys
         assert "window/history_header_v8" in header_keys
         assert "window/history_header_v7" not in header_keys
-        kits_menu_src = inspect.getsource(window._show_kits_context_menu)
+        kits_menu_src = inspect.getsource(window._popup_kits_context_menu)
         assert 'Показать в „АН“' in kits_menu_src
         assert "Открыть папку · АН" in kits_menu_src
         assert "Открыть смешанные папки" in kits_menu_src
         assert "exec_tracked_menu" in kits_menu_src
+        assert "is_file()" not in kits_menu_src
+        show_kits_src = inspect.getsource(window._show_kits_context_menu)
+        assert "gui.show_kits_context_menu" in show_kits_src
+        assert "currentRow()" in kits_menu_src
         an_filter_src = inspect.getsource(window._an_tab.set_kit_filter)
         assert "sortByColumn" in an_filter_src
         assert "_COL_DATE" in an_filter_src
         assert "Показать в Выдача · Журнал" in kits_menu_src
-        assert "issuance=row.issuance" in kits_menu_src
+        assert "issuance=row.issuance" in show_kits_src
         tree_menu_src = inspect.getsource(window._show_document_tree_context_menu)
         assert "Пометить папку как рабочую" in tree_menu_src
         assert "Пометить папку как аннулированную" in tree_menu_src

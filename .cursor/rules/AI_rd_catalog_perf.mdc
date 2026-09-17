@@ -105,3 +105,9 @@ limited to `kit_keys`. Ban-list identity cache uses `BanFilterStore.revision`.
    was still deferred (or the tree widget empty). A live tree must only
    hide+select (`_sync_document_tree_filter_hidden`). Two consecutive
    unindented `BEGIN gui.rebuild_document_tree` is the old bug.
+6. Комплекты right-click is `gui.show_kits_context_menu`. Must not `Path.is_file()`
+   / UNC `stat` to enable «Авто МТО»; must not walk `_all_records` for mixed
+   folders, package mean date, or path lookup (`_records_by_kit` /
+   `_records_by_path_key`). Do not `selectRow` when the row is already current
+   (that retriggers `gui.update_kits_card` / `get_kit_card`). Existence of the
+   Auto MTO file is checked on open (`_open_auto_mto_cell`).
