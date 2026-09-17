@@ -2003,8 +2003,7 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         self.assertEqual(f_cell.text, "04")
         self.assertNotIn("auto", f_cell.text)
         self.assertEqual(f_cell.fill, REV_MATCH_FILL)
-        self.assertIn("Строка F записана автоматом (робот).", f_cell.tooltip)
-        self.assertIn("auto", painted.haystack)
+        self.assertFalse(f_cell.tooltip)
         with_mto = self._paint(
             line=(
                 "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03 auto"
@@ -2016,7 +2015,7 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         self.assertEqual(auto_cell.text, "04 · MTO 03")
         self.assertNotIn("auto", auto_cell.text)
         self.assertEqual(auto_cell.fill, REV_MATCH_FILL)
-        self.assertIn("auto", with_mto.haystack)
+        self.assertNotIn("автоматом", auto_cell.tooltip)
 
     def test_f_mto_when_disk_missing_is_yellow(self) -> None:
         painted = self._paint(
@@ -2045,7 +2044,7 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         self.assertNotIn("auto", f_cell.text)
         self.assertEqual(f_cell.fill, REV_MATCH_FILL)
         self.assertIn("MTO Нет", f_cell.tooltip)
-        self.assertIn("автоматом", f_cell.tooltip)
+        self.assertNotIn("автоматом", f_cell.tooltip)
         self.assertIn("mto нет", painted.haystack)
         mto_cell = painted.cells["MTO · рев."]
         self.assertEqual(mto_cell.text, OFFICIAL_FOLDER_MTO_MISSING)

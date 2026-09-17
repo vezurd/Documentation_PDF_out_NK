@@ -326,7 +326,6 @@ KITS_WORKING_REV_TOOLTIP = (
 _MTO_COMPARE_PENDING_TIP = (
     "Сверка MTO ещё не завершена; показано по дате файла"
 )
-KITS_F_ROBOT_AUTO_TIP = "Строка F записана автоматом (робот)."
 
 WORKLIST_HEADERS = (
     "Титул",
@@ -1228,8 +1227,7 @@ def kits_paint_legend(
                 sample(
                     "Google · рев. F",
                     "04 · MTO Нет",
-                    "В передаче не было файла MTO. Служебный auto в журнале F "
-                    "в эту ячейку не выводится (только подсказка). "
+                    "В передаче не было файла MTO. "
                     "Жёлтый, только если на диске MTO всё же есть.",
                     fill=REV_MATCH_FILL,
                 ),
@@ -1853,8 +1851,8 @@ def format_kits_google_f_rev(event: KitEvent | None) -> str:
 
     OD revision stays the same as ``last_event_parts`` (still a 4-tuple).
     When the F line has an MTO suffix, append `` · MTO <rev>`` or
-    `` · MTO Нет``. The journal token ``auto`` is not a revision: it stays
-    on the F line and in the tooltip, not in this cell.
+    `` · MTO Нет``. The journal token ``auto`` stays only in Google
+    column F; this cell does not show it.
 
     Args:
         event: Last Google F event, or ``None``.
@@ -1899,7 +1897,6 @@ def _kits_rev_yellow_wins(cell: MonitorCell) -> MonitorCell:
 def _paint_kits_google_f_rev_cell(
     cell: MonitorCell,
     *,
-    event: KitEvent | None,
     event_rev: str,
     rd_rev: str,
     od_match: bool | None,
@@ -1949,8 +1946,6 @@ def _paint_kits_google_f_rev_cell(
             tips.append(
                 f"F MTO {f_mto_text} расходится с MTO · рев. {shown_disk}"
             )
-    if event is not None and event.from_robot_auto:
-        tips.append(KITS_F_ROBOT_AUTO_TIP)
     for tip in tips:
         cell = _append_tooltip(cell, tip)
     return cell
@@ -4387,7 +4382,6 @@ def build_kits_monitor_row(
         if header == "Google · рев. F":
             cell = _paint_kits_google_f_rev_cell(
                 cell,
-                event=event,
                 event_rev=event_rev,
                 rd_rev=row.rd.revision_text if row.rd.present else "",
                 od_match=match_flags.get("google_f"),
