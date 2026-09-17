@@ -1,0 +1,212 @@
+---
+description: RFP из частей (RFP_Зиновьев, сумма в свод) — диагностика, Lot qty, список ДС, GUI, preflight Запуска
+globs: RFQ/rfp_parts/**/*.py,ds_compare_center/rfp_parts_panel.py,tmp/rfp_parts*.md,tmp/analyze_rfp_parts.py
+alwaysApply: false
+---
+
+# RFP parts — сбор сводного из папки частей
+
+> Отдельный контур от боевого step1–4 ([AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc)). Финальный Excel Запуска: [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc).  
+> Дата снимка: **2026-09-03**.
+
+## Когда читать
+
+- `RFQ/rfp_parts/`, Lot qty, суммирование частей, вкладка **RFP · Сбор частей**
+- раскладка `rfp_parts_net.xlsx` для Step1: `_write_net_xlsx` / `step1_net_core_columns()`
+- **preflight Запуска:** свежесть `RFP_Зиновьев` vs `rfp_parts_net.xlsx` — [parts_net_preflight.py](RFQ/rfp_parts/parts_net_preflight.py)
+- покрытие RFP↔папки УЛ по фактическому номеру ДС ([ds_identity.py](RFQ/rfp_parts/ds_identity.py), [ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py)); ключ посадки Step4 — тот же `actual`, см. [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc)
+
+## Карта файлов
+
+| Путь | Роль |
+|------|------|
+| [analyze_rfp_parts.py](RFQ/rfp_parts/analyze_rfp_parts.py) | сумма частей → `rfp_parts_net.xlsx` + `rfp_parts_net_no_tags.xlsx`; unit conversion; `run_rfp_parts_analyze` |
+| [parts_net_preflight.py](RFQ/rfp_parts/parts_net_preflight.py) | свежесть свода vs папка; read-only reconcile deps; автопересборка для **RFP · Запуск** |
+| [ds_checklist.py](RFQ/rfp_parts/ds_checklist.py) | сверка списка ДС; в сборе по умолчанию **выкл.** (нет реестра); Launch **не** вызывает; `parse_ds_name_from_file_name` по-прежнему отдаёт префикс (`ДС92_24Б`) для `DS_NAME` |
+| [ds_identity.py](RFQ/rfp_parts/ds_identity.py) | фактический = число сразу после `ДС`; после `_` — информационный порядковый (`ДС92_24Б` → actual 92, sequential 24) |
+| [ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py) | покрытие файлов RFP vs папок УЛ; GUI/CLI; milestone `ds_id_check` |
+| [__main__.py](RFQ/rfp_parts/__main__.py) | `python -m RFQ.rfp_parts` |
+| [rfp_parts_panel.py](ds_compare_center/rfp_parts_panel.py) | GUI вкладка; слева компактная таблица файлов ОК / ошибка |
+| [file_status.py](RFQ/rfp_parts/file_status.py) | `rfp_parts_file_status.json`; русские тексты; fallback из diagnostics; GUI только ERROR/OK |
+| [rfp_supply_status.py](RFQ/tags_rfp_compare/rfp_supply_status.py) | канон. «Исключен из поставки»; замена тега; unknown → `RfpSupplyStatusError` |
+| `…\rfp_parts_net.xlsx` | свод Step1 с раскрытием тегов; см. **раскладка** ниже |
+| `…\rfp_parts_net_no_tags.xlsx` | тот же штамп, лот как в ДС, пустые TAGS (`load_tags=false`) |
+| `…\rfp_parts_build_deps.json` | снимок зависимостей конвертации (analyze write) |
+| `…\rfp_parts_sources.json` | снимок файлов папки частей |
+| `…\rfp_parts_file_status.json` | статус каждого xlsx для GUI (ошибки первыми, затем ОК) |
+| `…\Отчет по тегам - сбор частей.xlsx` | дубли тегов, «Лот > тегов», «Тегов > лота» (ссылка над таблицей GUI; ASCII `-`) |
+| `…\Отчет по позициям без кода - сбор частей.xlsx` | sidecar: строки без CODE (не в net; копия в result_dir при Запуске) |
+| `…\rfp_parts_collisions.xlsx` | коллизии ед. изм. vs Google |
+
+## Точки входа
+
+```powershell
+python -X utf8 -m RFQ.rfp_parts
+python -m ds_compare_center --tab rfp_parts
+```
+
+**RFP · Запуск** при `rfp_parts.use_latest_net=true` (default): preflight → при необходимости тот же analyze → чтение последнего net (`rfp_parts_net.xlsx` или `rfp_parts_net_no_tags.xlsx` при `load_tags=false`).
+
+## UNC / DEFAULT
+
+База: `\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP`
+
+- части: `RFP_Зиновьев` (`DEFAULT_PARTS_DIR`)
+- отчёты: `RFP сводный файл\YYYY.MM.DD_HH.MM\`
+- checklist / increase / decrease — **пока выключены** в сборе (реестра нет); CLI `--with-checklist`; Launch preflight не вызывает
+
+## Qty: блок «Закупка по Лоту»
+
+Для частей `VALUES`/`UNITS` = Excel **№17–18** (индексы 16–17). Блок РД №9–10 **не** читать. Пустой/нечисловой Lot на строке с данными → **ERROR**.
+
+## Контракт колонок `rfp_parts_net.xlsx`
+
+`RFP · Запуск` читает свод через [step1_load_rfp.py](RFQ/tags_rfp_compare/step1_load_rfp.py) → `RFP_AGGREGATED`.
+
+**Источник истины:** integer keys `ColNames.RFP_AGGREAGATED` — [step1_net_core_columns()](RFQ/rfp_parts/analyze_rfp_parts.py) + [step1_net_extra_columns()](RFQ/rfp_parts/analyze_rfp_parts.py). `_write_net_xlsx` / `_ensure_net_layout_matches_step1()` падают при дрейфе.
+
+| Excel | индекс | Поле Step1 | В своде |
+|-------|--------|------------|---------|
+| A–E | 0–4 | `DS_NAME` … `TAGS` | как в частях |
+| F | 5 | `DS_CODE_1C` | **тип оборудования** (Google) |
+| G–I | 6–8 | `CODE`, `NAME`, `TYPE_MARK` | как в частях |
+| **J** | **9** | **`VALUES`** | сумма Lot |
+| **K** | **10** | **`UNITS`** | ед. изм. |
+| N | 14 | `NAME_2` | пусто |
+| **P** | **15** | **`RFP_SUPPLY_STATUS`** | «Статус поставки»; канон. **«Исключен из поставки»** |
+| **R** | **17** | **`VALUES_2`** | то же qty (лот) |
+| **S** | **18** | **`UNITS_CHECK_STATUS`** | статус конвертации |
+| **T** | **19** | **`UNITS_CONVERSION_TRACE`** | trace |
+| **U–Z** | **20–25** | — | **фильтры коллизий** (не qty Step1) |
+
+Не вставлять «Поставщик» между TYPE_MARK и VALUES (ключ `8.5: VENDOR` не читается). `get_row_type`: `VALUES_2` и `RFP_SUPPLY_STATUS` опциональны (вес 3).
+
+**Статус поставки в частях.** Шапка ловится в `_match_header` по `статус\s*позиц` (как у ДС29: `MTO, Статус позиции`) — **без** фиксированного T/19. Нет шапки → пусто, файл валиден. Допустимо: пусто; канон. **«Исключен из поставки»** (net P); **«{старый} тег заменен на {новый}»** — `TAGS` меняется на новый до агрегации/сравнения, в net P остаётся канон. текст замены. Любое иное непустое (или Tag не содержит старый тег) → **ERROR**, сбор и Запуск **останавливаются** (`RfpSupplyStatusError`: файл, строка Excel, код, прочитанный текст). Агрегация по `AGGREGATION_KEY`: **хотя бы одна** исходная запись ключа исключена → net-строка исключена; смешение → WARN. Не путать с `POSITION_STATUS` Step4 («Исключен» при qty MTO < RFP). Хелпер: [rfp_supply_status.py](RFQ/tags_rfp_compare/rfp_supply_status.py). Step1 (`step1_load_rfp_raw`) повторно применяет те же правила к своду (идемпотентно).
+
+## Конвертация ед. изм. в сборе
+
+После извлечения записей, **до** `_build_unit_counters`, coarse collisions и суммирования:
+
+1. Strict **single** Google index (`_load_google_rows_strict` / `build_google_units_index`).
+2. `RFQ.units_convert`: plan + apply (`_build_parts_conversion_requests`, `_apply_parts_conversion_plan`).
+3. `_assert_unified_target_units` на итог свода.
+4. Status/trace **merge из всех** исходных записей ключа (не только survivor).
+
+**Build** пишет [rfp_parts_build_deps.json](RFQ/rfp_parts/parts_net_preflight.py): `ALGORITHM_VERSION`, `AGGREGATION_KEY` (`ds_name+title+code+tag`), `matrix_path`, tuples `(code, source_unit, target_unit, coefficient)`, `google_units_by_code` для **релевантных** кодов.
+
+**Preflight** ([parts_net_preflight.py](RFQ/rfp_parts/parts_net_preflight.py)):
+
+1. Сначала снимок **файлов** папки (`rfp_parts_sources.json`) vs mtime net / новые/удалённые файлы.
+2. Затем read-only сравнение stored deps vs текущие matrix + Google **только для кодов из deps** — без re-extraction, без build plan, без temp matrix; посторонние коды Google игнорируются.
+
+**Rebuild**, если: нет net / net старее частей / изменился состав файлов / нет или устарел `rfp_parts_build_deps.json` / сменился `ALGORITHM_VERSION` (**текущий v5**; stored v1–v4 → rebuild) / сменился `AGGREGATION_KEY` (ключ суммирования; нет поля в старом snapshot → rebuild) / путь матрицы / coef или Google unit для релевантного кода / placeholder `?` в матрице.
+
+**Матрица:** `paths.units_convert_matrix` (+ optional override в preflight). Parts preflight только читает матрицу; parts analyze и общий Launch gate выполняют reconcile/write через `build_conversion_plan` (strict Google/network risk). Если xlsx открыт в Excel и запись (или чтение) нужна — `UnitsConversionError` «файл занят»: закрыть «матрица_ед_изм.xlsx» и повторить сбор/запуск; матрица и net не перетираются. Если reconcile не меняет файл, открытый Excel не мешает. Настоящая дробь после coef≠1 **не останавливает** сбор: qty/ЕИ применяются, лог `дробные значения после конвертации RFP.xlsx` в штамп-папке. Строки с `?` в коэффициенте получают **C `Статус кода` = `Требует уточнения`** (фильтр Excel). **`collision`:** все найденные ЕИ в парах; эталон можно задать в D без Google-базы.
+
+## Timing (сбор частей)
+
+Live-фазы в stdout Job monitor — префикс **`[parts timing]`** (`run_rfp_parts_analyze`):
+
+| Метка | Смысл |
+|-------|--------|
+| `START` / `DONE` / `ERROR` | фаза; `DONE`/`ERROR` — секунды фазы и **всего** с начала run |
+| `PROGRESS` | извлечение частей: каждые 10 файлов и последний (`файлы N/M`) |
+| `SLOW` | один workbook ≥ **2.0 с** (индекс, имя, секунды) |
+| `TOTAL` | успешное завершение run |
+
+Ключевые фазы: список файлов → извлечение → Google base → index/lookups → запросы конвертации → **`чтение матрицы и построение плана ЕИ`** → apply + assert → deps snapshot → агрегация / коллизии / net rows → отдельно каждый XLSX/снимок → текстовый отчёт.
+
+Подтверждённый bottleneck этой фазы — random SMB read/write в matrix xlsx; оптимизировано: one-shot BytesIO load/write, sequential `iter_rows`, indexed plan lookup O(rows+pairs+requests).
+
+Артефакт (best-effort, UTF-8): `<out-dir>/rfp_parts_timing.txt` — накопленные строки; при ошибке run пишется в `finally` до re-raise. Смоук: `tmp/test_rfp_parts_timing_smoke.py`.
+
+## Листы книги и пустой файл
+
+Жёсткое требование «только `Перечень материалов`» снято.
+
+| Случай | Поведение |
+|--------|-----------|
+| Один рабочий лист | читаем **любое** имя вкладки |
+| Несколько рабочих | предпочитаем `Перечень материалов` (без учёта регистра); позиции — с одного листа |
+| Непрочитанные рабочие при >1 кандидате | **WARN** «позиции прочитаны только с …; не читались: …» |
+| Файл есть, позиций 0 | **ERROR** «файл есть, но позиции не прочитаны» (нет шапки / нет `NAME` / сдвиг столбцов / пустая таблица) |
+| В поле Tag есть подстрока `RFQ` | **ERROR** «в поле Tag недопустима подстрока RFQ»; строка **не** в свод (номер документа вместо тега) |
+
+**Никогда не читаем** (`is_never_read_sheet` / `NEVER_READ_SHEET_PATTERNS`): титульный лист / `Титул` / Title / Cover, лист регистрации изменений, содержание, общие данные/сведения, легенда, инструкция, примечания, revision history. После отсечения этих вкладок остаётся набор **рабочих** листов.
+
+Типичный RFP (`Титульный лист` + `Перечень материалов`) → один рабочий лист, без WARN.
+
+## GUI: таблица файлов
+
+Вкладка **RFP · Сбор частей**, левая колонка, блок «Файлы последнего прогона»: компактная таблица xlsx прогона. Только **ОК** / **Ошибка** (ошибки сверху по алфавиту, затем ОК). Описание — критичные замечания (нет шапки, нет обязательных столбцов, пустой файл, лот, Tag содержит `RFQ` и т.п.). Дубли тегов и TAG≠лот **не** в GUI: файл `Отчет по тегам - сбор частей.xlsx` в штамп-папке и короткая кликабельная ссылка над таблицей.
+
+Источник статуса — `rfp_parts_file_status.json`; если JSON ещё нет — сборка из `rfp_parts_sources.json` + `rfp_parts_diagnostics.xlsx`.
+
+## Суммирование
+
+Вычитание increase − decrease **вырезано**. Ключ: `ds_name + title_system + code + tag` (или `+ <NO_TAG>`). Коллизии ед. изм.: разные ед. изм. на одном `title_system + code` (без ДС — конвертация по коду). `ds_name` — из имени файла (`ДС47_13`), не «№ п/п» листа.
+
+**Tagged counters** (`_build_unit_counters`, **v5**): целое `lot > tags` → +1 на каждый тег, остаток `lot − tags` на `<NO_TAG>` (сольётся с соседней безтеговой строкой того же ДС/титула/кода; в net одна строка на сумму, не N единиц). `tags == lot` — только +1/тег. `tags > lot` — полное раскрытие по тегам, без отрицательного остатка. Дробь+теги — out of scope (остаток не пишется). Net-строка с тегом: `VALUES=1`; безтеговая — одна сумма.
+
+**Без тегов** (`_build_no_tags_summary_rows` → `rfp_parts_net_no_tags.xlsx`): N исходных позиций → N строк, `VALUES` = лот как в части, `TAGS` пустые. Не `+1` на тег и не сумма всех строк одного `CODE`. Боевой `rfp_parts_net.xlsx` не затирается. Сбор частей всегда пишет оба файла в один штамп.
+
+Инцидент **2265-KSB / BCC0000642 / ДС67**: лот 3 + 1 тег и 9 без тега → net **1 + 11** (не 1+9). MTO/УЛ/Step1 split в том же шаге **не** менялись: УЛ уже раскладывает целое qty в слоты по 1 (лишние без тега); MTO и Step1 при **одном** теге + VALUES>1 строку не сплитуют. Режим без тегов для той же пары даст **3 + 9**.
+
+## Отчёты по тегам
+
+Две папки (файлы не свозятся в одну). Имена — ASCII дефис `-` (не U+2010 / em-dash).
+
+| Контур | Папка | Файл | Фильтр tags≠qty |
+|--------|-------|------|-----------------|
+| Сбор частей | штамп `RFP сводный файл/YYYY.MM.DD_HH.MM/` | `Отчет по тегам - сбор частей.xlsx` | типы «Лот > тегов» / «Тегов > лота» (колонки Кол-во лота, Число тегов); плюс «Дубль тега» |
+| Step1 RFP | `_результат_проверки_…` | `Отчет по несоответствию тегов - RFP_*.xlsx` | компактно как MTO (№ / title_system / CODE / NAME / DS_NAME / кол-во тегов / VALUES / Теги). На net после сбора частей tagged `VALUES=1` — в файл идут строки штампа «Лот > тегов» / «Тегов > лота»; без net — теги ≠ VALUES на строках свода |
+| Step1 RFP | то же | `Отчет по дублям тегов - RFP_*.xlsx` | кросс-строчные дубли |
+| MTO | то же | `Отчет по несоответствию тегов - MTO_*.xlsx` | Кол-во тегов ≠ VALUES |
+| MTO / VO / TAG_EFFECTIVE | то же | `Отчет по дублям тегов - {MTO\|VO\|TAG_EFFECTIVE}_*.xlsx` | только дубли |
+| УЛ Step4 | то же | `ul_compare_report_*.txt` | код `packing_tags_exceed_quantity` — **fatal**, match Excel не пишется |
+| УЛ ТСД | папка свода УЛ | `tsd_packing_critical.txt` | тот же код; свод УЛ пишется |
+| VO | — | нет xlsx «теги ≠ VALUES» | — |
+
+Sidecar **`Отчет по позициям без кода - сбор частей.xlsx`** пишется в штамп-папку при сборе (строки без CODE, уже исключённые из net). **RFP · Запуск** копирует его в `_результат_проверки_*`, если файл лежит рядом с текущим net (preflight unchanged или rebuilt stamp). **Не** лист Step4. Пустой CODE по-прежнему не входит в net.
+
+## Preflight Запуска
+
+`ensure_rfp_parts_net_current()` до Step1 при `use_latest_net=true`. As-build / `use_latest_net=false` / `mto_vo_only` → skipped.
+
+Свежесть папки частей считается по **теговому** `rfp_parts_net.xlsx`. При `load_tags=false` дополнительно нужен соседний `rfp_parts_net_no_tags.xlsx`; его нет → пересборка в **новый** штамп (оба файла), старый теговый net не переписывается in-place. `resolve_effective_rfp_path` тогда читает no-tags.
+
+Отдельный свод/кэш УЛ «без тегов» **не** делается: УЛ не раскрывает лот=1 + два тега в две строки; `apply_load_tags_mode` обнуляет `TAGS` в памяти.
+
+Сразу после него **RFP · Запуск** проверяет свод УЛ (`ul_preflight` / `ensure_tsd_packing_cache_current`) при `include_packing_lists`.
+
+## Verification
+
+```powershell
+$env:PYTHONUTF8='1'
+python -m py_compile RFQ/rfp_parts/analyze_rfp_parts.py RFQ/rfp_parts/parts_net_preflight.py RFQ/rfp_parts/ds_checklist.py RFQ/rfp_parts/file_status.py RFQ/tags_rfp_compare/rfp_supply_status.py ds_compare_center/rfp_parts_panel.py
+python tmp/test_rfp_parts_net_preflight_smoke.py
+python tmp/test_rfp_parts_net_step1_layout_smoke.py
+python tmp/test_rfp_parts_unit_conversion_smoke.py
+python tmp/test_rfp_parts_collisions_google_units_smoke.py
+python tmp/test_rfp_progress_markers_smoke.py
+python tmp/test_rfp_parts_sheet_select_smoke.py
+python tmp/test_rfp_parts_file_status_smoke.py
+python tmp/test_rfp_parts_empty_code_report_smoke.py
+python tmp/test_rfp_parts_tag_lot_remainder_smoke.py
+python tmp/test_rfp_effective_path_smoke.py
+python tmp/test_rfp_load_tags_smoke.py
+python tmp/test_rfp_supply_status_smoke.py
+python tmp/test_rfp_tag_count_mismatch_smoke.py
+python tmp/test_rfp_parts_timing_smoke.py
+python tmp/test_rfp_native_settings_smoke.py
+python tmp/test_rfp_packing_compare_smoke.py
+python -X utf8 -m RFQ.rfp_parts --help
+```
+
+Смоуки (counts): preflight **19**, layout **2**, unit conversion **8**, tag-lot remainder **6**, supply status **4**, collisions Google **5**, progress **5**, parts timing **7**, sheet select **8**, file status **9**, native settings **5**, packing **72**, units matrix **64**, step4 gate order **14**.
+
+## Связанные правила
+
+- [AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc) — launch pipeline, units gate
+- [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc) — финальный Excel
+- [AI_memory.mdc](.cursor/rules/AI_memory.mdc) §16 — UNC

@@ -1,0 +1,30 @@
+{
+  "rfp": {
+    "DS_NAME": {"load": true, "truncate": 50},
+    "DS_NUMBER": {"load": true},
+    "DS_TITLE": {"load": true, "truncate": 100},
+    "DS_SPECIFICATION": {"load": false},
+    "tags": {"load": true},
+    "DS_CODE_1C": {"load": false},
+    "code": {"load": true},
+    "name": {"load": true, "truncate": 20},
+    "type_mark": {"load": true, "truncate": 20},
+    "values": {"load": true},
+    "units": {"load": true, "truncate": 20},
+    "name_2": {"load": false},
+    "rfp_supply_status": {"load": true},
+    "values_2": {"load": false}
+  },
+  "mto": {
+    "tags": {"load": true},
+    "numbers": {"load": true},
+    "name": {"load": true, "truncate": 20},
+    "type_mark": {"load": true, "truncate": 20},
+    "code": {"load": true, "truncate": 50},
+    "vendor": {"load": false},
+    "units": {"load": false},
+    "values": {"load": true},
+    "mass": {"load": false},
+    "annotation": {"load": false}
+  }
+}

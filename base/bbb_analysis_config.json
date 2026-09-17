@@ -1,0 +1,46 @@
+{
+  "folder_rules": {
+    "search_only_in_dwg": false
+  },
+  "mto_vs_code_base": {
+    "enabled": true,
+    "check_by_code": true,
+    "check_equipment_codes": true,
+    "check_tags_value": true,
+    "check_value": true,
+    "check_duplicate_tags": true,
+    "check_mass": true,
+    "check_prohibition": true,
+    "check_tags_4_2_4_4": true,
+    "check_position_numeration": true
+  },
+  "mto_vs_code_base_correction": {
+    "enabled": true,
+    "check_by_code": true,
+    "check_tags_value": true,
+    "check_value": true,
+    "check_duplicate_tags": true,
+    "check_tags_4_2_4_4": true,
+    "check_position_numeration": false
+  },
+  "bbb_vs_code_base": {
+    "enabled": true,
+    "check_by_code": true,
+    "check_equipment_codes": false,
+    "check_tags_value": true,
+    "check_value": true,
+    "check_duplicate_tags": true,
+    "check_mass": false,
+    "check_prohibition": false,
+    "check_work_code_and_mtr_group": true
+  },
+  "bbb_vs_mto": {
+    "enabled": true,
+    "compare_fields": false,
+    "compare_values": true,
+    "compare_tags": true,
+    "compare_title_marka_revision": true,
+    "compare_bom_annotation_with_mto": true,
+    "check_missing_mto_codes": true
+  }
+}

@@ -1,0 +1,5 @@
+﻿# pdf_parsing_v2/templates/test_pdf/
+pdf_parsing_v2/templates/agcc_287/
+__pycache__/
+*.pyc
+.cursor/rules/*_ARCHIVE*

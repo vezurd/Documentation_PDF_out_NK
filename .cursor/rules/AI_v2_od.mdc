@@ -1,0 +1,84 @@
+---
+description: "PDF v2 — разбор ведомости документов ОД (пакет pdf_parsing_v2_od/, интеграция в pipeline и monitor)."
+globs:
+  - "pdf_parsing_v2_od/**"
+alwaysApply: false
+---
+
+# PDF v2 — ОД (ведомость документов)
+
+Пакет **`pdf_parsing_v2_od/`** — разбор таблицы «Общие данные» / ведомостей основного комплекта и прилагаемых документов из PDF типа **OD**. Нижний слой извлечения таблиц — **pdfplumber** (`od_raw_reader.py`), с обрезкой страницы по **тому же manifest clip**, что и у движка (рамка минус полоса штампа), когда переданы **`cfg` + шаблоны**. Не путать с извлечением полей штампа по JSON в `pdf_parsing_v2_engine` — это отдельный парсер строк ведомости.
+
+## Когда читать это правило
+
+- правки в `pdf_parsing_v2_od/**`
+- этап pipeline **`od_table_parsing`**, payload для GUI, НК (`proj_od_list`)
+- поведение вкладки **«ОД»** в `pdf_v2_monitor`
+
+Для control center см. **`AI_v2_monitor.mdc`**. Для оркестрации постпроцесса — `pdf_parsing_v2/v2_pipeline.py` (`run_v2_postprocess`).
+
+## Точки входа (API)
+
+| Символ | Файл | Назначение |
+|--------|------|------------|
+| `od_table_parsing_f` | `od_parsing.py` | `pdf_full_path=...`: `list[DocOdAttributes]` или `0`. С **`cfg` + непустой `templates`**: один проход **`extract_od_manifest_geometry_rows`** → pdfplumber **`page.crop`** по clip на стр. 1..4 (`od_read_raw(..., page_clip_rects=...)`). **`curr_proj`**, **`manifest_geometry_out`**, опционально **`debug_trace_out`** (список блоков `function` / `stage` / `body` для GUI). Без cfg/шаблонов — прежний режим: pdfplumber по **полной странице**. |
+| `extract_od_manifest_geometry_rows`, `OdManifestGeometryRow` | `od_manifest_geometry.py` | По страницам: `extract_page` или кэш из `curr_proj`, расчёт clip (`build_manifest_clip_frame_minus_stamp`). Реэкспорт из `__init__.py`. |
+| `find_od_pdf_path` | `od_parsing.py` | Первый `.pdf` в каталоге с `getDocTypeFromFile(...) == "OD"`. |
+| `build_od_table_payload` | `od_parsing.py` | Сериализация в JSON-safe dict: `status`, `error`, `warnings`, `od_pdf_path`, `columns`, `rows`. |
+| `append_od_parse_warning`, `od_parse_warning_line`, константы **3001** / **3002** | `od_parse_warnings.py` | Строки для `warnings_out`: формат **`3001: …`**, **`3002: …`** (четырёхзначный код + текст). Реэкспорт имён **`PAGE_FORMAT_WHITESPACE_WARNING_CODE`**, **`PAGE_FORMAT_UNKNOWN_KEY_CODE`** из `__init__.py`. |
+| `build_od_table_warning_rows` | `pdf_parsing_v2_rules/od_table_checks.py` | Преобразование `od_table["warnings"]` в строки НК (`CheckRow`), вызывается из **`rules_check_start_v2`**. |
+| `error_message_for_invalid_od_parse_result` | `od_parsing.py` | Текст для `status=error`, когда парсер вернул не-`list` (в т.ч. `0`). |
+| `od_read_raw` | `od_raw_reader.py` | pdfplumber **`find_tables` → `Table.extract`** (как `extract_tables`), опционально **`page_clip_rects`**. После детекции сетки: **слияние узких колонок** (< **15 mm** по ширине bbox ячейки) с колонкой слева; для группы из **нескольких** колонок текст собирается из **`page.chars`** в **объединённом bbox** (порядок **LTR / TTB**), не конкатенацией строк ячеек. См. § **pdfplumber / od_raw_reader**. |
+| `append_od_debug_trace` | `od_debug_trace.py` | Опциональная структурированная трассировка для GUI (standalone ОД). |
+| `build_manifest_clip_frame_minus_stamp`, `find_tables_od_manifest_region` | `od_manifest_clip.py` | Clip «рамка минус полоса штампа» + MuPDF `find_tables` в displayed space. |
+| `collect_od_manifest_findtables_debug` | `od_engine_findtables_debug.py` | Диагностика `find_tables` по clip на стр. 1..4. Если передан **`geometry_rows`** (из `od_table_parsing_f`), **повторный `extract_page` не выполняется** — только открытие PDF и `find_tables`. |
+| `DocOdAttributes`, `DOC_OSNOVNOI`, `DOC_PRILAGAEMIE` | `od_parsing.py` | Модель строки и константы комплектов. |
+
+Реэкспорт: `pdf_parsing_v2_od/__init__.py`.
+
+## Поток данных (production, 04.2026)
+
+1. **`extract_od_manifest_geometry_rows`** (или кэш страниц из **`curr_proj`** при совпадении пути к OD-файлу).
+2. **`build_manifest_clip_frame_minus_stamp`** → bbox для каждой страницы или отказ (нет `stamp_effective_bbox` / пустой clip → pdfplumber по полной странице + предупреждение в **`warnings`**).
+3. **`od_read_raw`** обрезает страницу перед детекцией таблицы pdfplumber — отсечение полосы штампа от основной ведомости (типичный нижний штамп).
+4. **`collect_od_manifest_findtables_debug`** получает те же строки геометрии через **`geometry_rows`**, чтобы не дублировать `extract_page`.
+
+## pdfplumber и `od_raw_reader` (2026)
+
+- Детекция сетки: **`page.find_tables({ edge_min_length: 60 })`** (остальное — дефолты **pdfplumber**). Не использовать большой **`snap_x_tolerance`** как «минимальную ширину колонки» — на реальных ОД это **склеивает настоящие** вертикальные линии и ломает таблицу.
+- **Узкие колонки:** по геометрии **`Table`**: на каждый индекс колонки берётся max по строкам ширина **(x1−x0)** bbox ячейки. Если **0 < width < 15 mm** (в pt), колонка **вливается влево**; **width == 0** (нет ячейки) — **не** вливается, чтобы не схлопнуть сетку.
+- **Текст после слияния:** для группы из **одной** колонки — строка из **`Table.extract()`**. Для группы из **нескольких** колонок — символы **`page.chars`**, центр в **объединённом bbox** ячеек группы, порядок **слева направо**, строки **сверху вниз** (между «словами» на строке возможна вставка пробела по зазору); если результат пустой — fallback: конкатенация текстов ячеек.
+- Поле **«Формат»** в **`_get_page_count`** (`od_parsing.py`): нормализация **А**→**A**, переносы/табы → пробел; сначала **по запятым**, внутри каждого фрагмента — **по пробелам** (несколько форматов через пробел без запятой не склеиваются в один ключ). Неизвестный ключ после разбора → **`(-1, -1)`** по строке, предупреждение **3002**, без падения пайплайна. При разделении только пробелами — предупреждение **3001** и разбор как через запятую. Суммы листов/A4 — справочник **`utils/formats_A`** (`get_a4_count_in_format`).
+
+## Интеграция в pipeline (`run_v2_postprocess`)
+
+- Вызывается **`find_od_pdf_path(pdf_path)`**; если пусто — `proj_od_list = []`, payload **`status: no_od_file`**.
+- Иначе **`od_table_parsing_f(..., pdf_full_path=..., cfg=..., templates=..., curr_proj=..., manifest_geometry_out=od_geom_out, debug_print_out_list=1)`** — геометрия и обрезка pdfplumber согласованы с движком; консольная таблица при `debug_print_out_list=1`.
+- В **`artifacts["od_table"]`** кладётся результат **`build_od_table_payload`**; в итоговом **`run_v2_pipeline` summary** ключ **`od_table`** вынесен на верхний уровень (из `artifacts` убирается, чтобы не дублировать в дампе артефактов).
+- При наличии **`templates`** и пути к OD: опционально **`engine_findtables_debug`** — **`collect_od_manifest_findtables_debug(..., geometry_rows=od_geom_out)`**: без второго **`extract_page`**, если после разбора строк список геометрии непустой. Поля **`geometry_source`** в debug: **`cached_v2_result`** при попадании OD-файла в **`curr_proj`** и валидном **`stamp_effective_bbox`** на странице, иначе **`extract_page`** (уже выполненный внутри **`od_table_parsing_f`**).
+- Статусы payload: **`ok`** | **`no_od_file`** | **`no_rows`** (файл прочитан, `DocOdAttributes` не получены) | **`error`** (исключение или не-`list`/`0` от парсера — текст в **`error`**). Поле **`warnings`**: `list[str]` (краткая диагностика, в т.ч. pdfplumber; разбор «Формат» — строки **`3001:`** / **`3002:`**).
+- Список **`proj_od_list`** передаётся в **`rules_check_start_v2`**. Из **`artifacts["od_table"]`** в **`rules_check_start_v2`** пробрасываются **`od_warnings`** и **`od_pdf_path`** (`pdf_parsing_v2/v2_pipeline.py`); **`pdf_parsing_v2_rules/od_table_checks.build_od_table_warning_rows`** превращает их в **`CheckRow`** и добавляет в общий **`check_list`** НК (колонка «Код ошибки»: **3001**, **3002**; строка без префикса **`dddd:`** → **3099**). В xlsx и GUI НК те же строки, что и у extraction-диагностик (**21xx**). Для строк ОД в **`CheckRow.pdf_path`** — путь к PDF ведомости, **`doc_name`** — basename файла ОД.
+
+Ранние выходы pipeline (нет PDF / нет шаблонов): в summary передаётся **`od_table: {}`**.
+
+## Интеграция в Control Center (внесённые правки, 04.2026)
+
+- Отдельная вкладка **`ОД`** (заголовок вкладки — коротко **«ОД»**), порядок: Run → Результат Нормоконтроля → **ОД** → Reports.
+- Заполнение из **`summary["od_table"]`** после завершения pipeline (`_populate_od_table_from_summary` в `monitor_window.py`).
+- Таблица: те же колонки, что и в консоли; многострочность; read-only delegate для копирования; стиль выделения/hover как у НК (**`_TABLE_SELECTION_HOVER_STYLE`**); компактная высота строк (**`_OD_TABLE_DEFAULT_ROW_HEIGHT`**). Список **`warnings`** на вкладке ОД: строки вида **`• 3001: …`** (полный pipeline и тот же текст в НК после **`rules_check`**).
+- Без полного pipeline: ПКМ по строке OD → **«ОД чтение ведомости»** или **«ОД чтение ведомости (отладка)»** — загрузка шаблонов (`resolve_templates_dir` + `load_project_templates` / `load_all_templates`), затем **`od_table_parsing_f`** с **`cfg`**, **`templates`**, **`manifest_geometry_out`** (при отладке — **`debug_trace_out`**), затем **`collect_od_manifest_findtables_debug(..., geometry_rows=...)`**; вкладка **«ОД»**. Без **`curr_proj`** геометрия только через **`extract_page`** внутри одного вызова **`od_table_parsing_f`**. Этот путь **не** вызывает **`rules_check_start_v2`** — предупреждения ОД в таблицу **«Результат Нормоконтроля»** попадают только после **полного** **`run_v2_postprocess`** (стадия **`rules_check`**).
+
+## Ловушки
+
+- Тип файла OD определяется **`getDocTypeFromFile`** по имени; несоответствие шаблону имени → файл не считается OD.
+- **`od_table_parsing_f(..., pdf_full_path=...)`** не сканирует папку; каталог используется только там, где API исторически принимает папку (**`find_od_pdf_path`** и т.д.).
+- На Windows не держать один и тот же PDF открытым в разных библиотеках параллельно с устаревшими сценариями — см. архив памяти про порядок вызовов.
+- Отключение обрезки: пустой **`templates`** или отсутствие **`cfg`** у **`od_table_parsing_f`** → pdfplumber снова по **полной странице** (как legacy).
+- Подмена **`snap_x_tolerance`** в настройках `extract_tables` для имитации минимальной ширины колонки на этом проекте **не применялась** (см. § выше).
+
+## См. также
+
+- `AI_v2.mdc`
+- `AI_v2_monitor.mdc`
+- `AI_v2_engine.mdc` (общая архитектура v2)
+- `pdf_parsing_v2/INTERFACES.md` при смене контрактов оркестратора

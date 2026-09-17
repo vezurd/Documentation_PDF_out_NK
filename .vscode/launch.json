@@ -1,0 +1,90 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+    {
+      "name": "Python: ds_compare_center (DS vs MTO)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ds_compare_center",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "python": "${command:python.interpreterPath}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Python: ds_compare_center (ДС · УПД)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ds_compare_center",
+      "args": ["--tab", "upd"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "python": "${command:python.interpreterPath}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Python: ds_compare_center (no debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ds_compare_center",
+      "noDebug": true,
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "python": "${command:python.interpreterPath}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Python: rd_catalog (каталог РД)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "rd_catalog",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "python": "${command:python.interpreterPath}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Python: rd_catalog (no debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "rd_catalog",
+      "noDebug": true,
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "python": "${command:python.interpreterPath}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Python: rd_catalog_web (LAN монитор)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "rd_catalog_web",
+      "args": ["--host", "0.0.0.0", "--port", "8765"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "python": "${command:python.interpreterPath}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    }
+  ]
+}

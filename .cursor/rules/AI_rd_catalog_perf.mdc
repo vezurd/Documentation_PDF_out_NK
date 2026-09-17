@@ -1,0 +1,107 @@
+---
+description: "rd_catalog: GUI hang profiling (perf_span) and refresh-scope contracts."
+globs:
+  - rd_catalog/**
+  - tmp/test_rd_catalog_*.py
+alwaysApply: false
+---
+
+# RD Catalog — GUI performance
+
+Domain overlay / pipeline / tabs stay in [AI_rd_catalog.mdc](AI_rd_catalog.mdc).
+This file is only **where time goes** and **what a one-kit GUI action may rebuild**.
+RFQ Step4 timings live in [AI_performance.mdc](AI_performance.mdc) — do not mix.
+
+## Where timings appear
+
+There is **no** `print()` / stdout channel like Step4 `timing_log`. Комплекты and
+the rest of the catalog use nested `perf_span` from [`rd_catalog/perf_log.py`](rd_catalog/perf_log.py):
+
+- File: `%LOCALAPPDATA%\Documentation_PDF_out_NK\rd_catalog\perf.log`
+- Duplicate: Qt tab **Журнал** (`set_perf_sink` → `_append_log`)
+- Off: `RD_CATALOG_PERF=0` / `false` / `off`
+
+Look for `BEGIN` / `END … elapsed_ms=`. Nested spans indent. Lines are **not**
+PyCharm console output unless the process is launched so that journal text is
+also echoed.
+
+Wrap **coarse** GUI/domain operations only. Do **not** span per-cell paint,
+`_apply_kits_filter`, or every helper (I/O on the GUI thread). A user-visible
+action (mark working, legalize, keep_view scan) **must** have an outer span so
+the total freeze is one number.
+
+## Before: «Пометить папку как рабочую» (~10 s)
+
+`_apply_tree_working_flag` used to persist one `kit_working_flag`, then
+`rebuild_pipeline(..., kit_keys={that kit})` (cheap), then a **full GUI
+refresh** on the GUI thread. Outer span: `gui.apply_tree_working_flag`.
+
+Measured 2026-09-16 (~253 kits, ~2903 overlay-current files), one mark:
+
+| Span | ms | Notes |
+|---|---:|---|
+| `pipeline.rebuild_pipeline kits=1` | 246 | scoped SQLite — OK |
+| `gui.load_folder_tree_hints` | 89 | full catalog hints |
+| `gui.reload_mto_worklist_rows` | 116 | full `list_mto_worklist` |
+| `gui.refresh_kits_table` | 1362 | `official_detected_current_ids` 444 + `build_kit_matrix` 757 + paint 139 |
+| `gui.refresh_revision_matrix` | **4859** | SQL ~9; rest is heatmap Qt + identities + export index |
+| `gui.rebuild_document_tree` | **3402** | all titles/marks; `clear()` + new `QTreeWidgetItem`s |
+| **sum of inner spans** | **~10 s** | plus `gui.auto_mto_compare_finished` after |
+
+Same tree rebuild (~2.9 s) also ran when toggling «В узле ревизии» checkboxes.
+
+## After: scoped refresh
+
+One-kit derived writes (working flag, annulled flag, issuance journal decision) go through
+`_refresh_after_scoped_pipeline` (`gui.refresh_after_scoped_pipeline`). That
+path must **not** `QTreeWidget.clear()` the documents tree, must **not**
+force-paint a still-deferred heatmap, must **not** `build_kit_matrix` over
+every kit, must **not** walk `record_has_canonical_layout` over `_all_records`
+on the GUI thread, and must **not** `hydrate_auto_mto_compare_cache` for the
+whole catalog. «Пометить папку как аннулированную» uses the same path
+(`gui.apply_tree_annulled_flag` → `gui.refresh_after_scoped_pipeline`).
+
+| API / span | Role |
+|---|---|
+| `gui.refresh_after_scoped_pipeline` | Shared after-pipeline: hints, worklist rows, scoped kits, heatmap, live worklist, tree relabel |
+| `gui.relabel_document_tree` | Repaint live revision nodes; no `clear()`. Label checkboxes use this |
+| `_refresh_revision_matrix(kit_keys=, force=)` | Deferred heatmap stays deferred unless `force=True` (first visit) |
+| `RevisionMatrixTab.patch_cells_for_kits` | In-place heatmap cell replace; `False` if never painted |
+| `set_export_records(..., in_contour=)` | Skip a second layout walk when records are already contour |
+| `_document_tree_kit_identities` | Cached; contour records skip `record_has_canonical_layout` |
+| `_record_in_contour` | Contour id-set when `_contour_records` is set; else layout walk |
+| `patch_official_detected_current_ids` | Patch official overlay ids for `kit_keys` only |
+| `gui.jump_to_kit_documents` | Комплекты → «Все документы». Filter first, then tab switch. Must not `QTreeWidget.clear()` / `_rebuild_document_tree` when `_DEFERRED_TREE` is already discarded. Rebuild only if the documents tab is still deferred or the tree widget is empty. A live tree only hides+selects (`_sync_document_tree_filter_hidden`). |
+| `_doc_bundles` | In-memory grouping cache keyed by `id(_all_records)` + overlay ids + skip_dirs + pending/problems; miss after `list_files`. |
+
+`_ensure_deferred_widget(_DEFERRED_HEATMAP)` calls
+`_refresh_revision_matrix(force=True)`. Ban / skip-dir / palette: live widgets
+refresh, deferred stay deferred. Kits table is always live.
+`gui.refresh` with `pipeline_subtrees` that resolve to `kit_keys` must
+`_refresh_kits_table(kit_keys=)`, not `kits=all`.
+SQ→RD keep_view must not force `gui.rebuild_document_tree`; same deferral as robot keep_view.
+`_enqueue_mto_compare` must not run
+[`official_rd_mto_overlay`](rd_catalog/pipeline.py) /
+[`build_mto_compare_plan`](rd_catalog/mto_compare_queue.py) on the GUI
+thread; the child job [`mto_compare_job.py`](rd_catalog/mto_compare_job.py)
+already plans (`list_present_robot_mto_files` included).
+
+Still catalog-wide on the scoped path (cheap vs tree/heatmap rebuild):
+`gui.load_folder_tree_hints`, `gui.reload_mto_worklist_rows`. A live heatmap
+still rebuilds the export index (`set_export_records`); «РД · рев.» paint is
+limited to `kit_keys`. Ban-list identity cache uses `BanFilterStore.revision`.
+
+## How to read a freeze
+
+1. Reproduce the click.
+2. Open **Журнал** or tail `perf.log`.
+3. Find the outer `BEGIN`/`END` for the action, then the longest child.
+4. After keep_view scan the chain is still
+   `gui.scan_finished` → `gui.refresh` → `pipeline.rebuild_pipeline` /
+   `gui.refresh_kits_table`. After mark-working it is
+   `gui.apply_tree_working_flag` → `gui.refresh_after_scoped_pipeline`.
+5. Jump Комплекты → «Все документы» is `gui.jump_to_kit_documents`. Nested
+   `gui.rebuild_document_tree` at most once, and only if the documents tab
+   was still deferred (or the tree widget empty). A live tree must only
+   hide+select (`_sync_document_tree_filter_hidden`). Two consecutive
+   unindented `BEGIN gui.rebuild_document_tree` is the old bug.

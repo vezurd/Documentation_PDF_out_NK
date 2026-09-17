@@ -1,0 +1,100 @@
+ def compare_specifications(ds_base_full, mto_dict, replacement_table)
+        │
+        ├── self.replacement_table = replacement_table  # Загрузка таблицы замен
+        │
+        ├── self._group_ds_rows(ds_base_full)  # Группировка DS по спецификациям и кодам
+        │   │
+        │   ├── Итерация по ds_base_full
+        │   ├── Фильтрация RowType.position_row
+        │   ├── Группировка по DS_SPECIFICATION → CODE
+        │   └── Возврат: Dict[spec_name: Dict[code: List[RowStd]]]
+        │
+        ├── Цикл по спецификациям (spec_name, codes_dict)
+        │   │
+        │   ├── Есть spec_name в mto_dict? → НЕТ → self._handle_missing_specification()
+        │   │   ├── Установка желтого цвета для всех строк
+        │   │   ├── Добавление комментариев об отсутствии
+        │   │   └── Очистка правых столбцов
+        │   │
+        │   ├── ДА → mto_base = mto_dict[spec_name]
+        │   │   │
+        │   │   ├── Цикл по кодам (code, ds_rows)
+        │   │   │   │
+        │   │   │   ├── Поиск прямых совпадений: RowStd.get_row_list_by_code(code, mto_base)
+        │   │   │   │
+        │   │   │   ├── Поиск через замены: self._find_replacement_mto_rows(code, mto_base)
+        │   │   │   │   ├── Проверка code в replacement_table
+        │   │   │   │   ├── Поиск новых кодов в MTO
+        │   │   │   │   └── Добавление replacement_info в mto_row
+        │   │   │   │
+        │   │   │   ├── Объединение mto_rows + replacement_mto_rows
+        │   │   │   │
+        │   │   │   ├── Нет совпадений → self._handle_code_not_found()
+        │   │   │   │   ├── Установка желтого цвета
+        │   │   │   │   ├── Комментарии об отсутствии кода
+        │   │   │   │   └── Очистка правых столбцов
+        │   │   │   │
+        │   │   │   ├── Есть совпадения → self._distribute_amounts_sequentially()
+        │   │   │       │
+        │   │   │       ├── Расчет total_mto_amount и total_ds_amount
+        │   │   │       │
+        │   │   │       ├── Цикл по ds_rows с распределением:
+        │   │   │       │   ├── Остаток MTO > 0? → НЕТ → self._handle_insufficient_mto()
+        │   │   │       │   │   ├── Установка красного цвета
+        │   │   │       │   │   ├── Комментарии о недостатке
+        │   │   │       │   │   └── Очистка правых столбцов
+        │   │   │       │   │
+        │   │   │       │   ├── ДА → Проверка последней строки
+        │   │   │       │   │   ├── Последняя строка → allocated_amount = remaining_mto
+        │   │   │       │   │   ├── Остальные → allocated_amount = min(ds_amount, remaining_mto)
+        │   │   │       │   │   │
+        │   │   │       │   │   ├── self._find_mto_row_for_amount()  # Поиск подходящей MTO строки
+        │   │   │       │   │   │
+        │   │   │       │   │   ├── Обновление remaining_mto
+        │   │   │       │   │   │
+        │   │   │       │   │   └── self._process_allocation_result()
+        │   │   │       │   │       │
+        │   │   │       │   │       ├── Проверка replacement_info → установка ANNOTATION_3 и цветов
+        │   │   │       │   │       │
+        │   │   │       │   │       ├── self._transfer_mto_to_ds()  # Перенос данных в правые столбцы
+        │   │   │       │   │       │   ├── Копирование значений
+        │   │   │       │   │       │   └── Копирование цветов (если исправлено)
+        │   │   │       │   │       │
+        │   │   │       │   │       ├── Установка VALUES_2 = allocated_amount
+        │   │   │       │   │       │
+        │   │   │       │   │       ├── Сравнение allocated_amount vs ds_amount:
+        │   │   │       │   │       │   ├── Равно → self._handle_match()  # Зеленый
+        │   │   │       │   │       │   ├── Меньше → self._handle_insufficient()  # Красный/Желтый
+        │   │   │       │   │       │   └── Больше → self._handle_excess()  # Желтый/Красный
+        │   │   │       │   │       │
+        │   │   │       │   │       └── Добавление комментариев в ANNOTATION_2
+        │   │   │       │   │
+        │   │   │       │   └── Обновление индексов и остатков
+        │   │   │       │
+        │   │   │       └── Завершение распределения для кода
+        │   │   │
+        │   │   └── Завершение обработки спецификации
+        │   │
+        │   └── Завершение цикла по спецификациям
+        │
+        ├── self._add_new_positions()  # Добавление отсутствующих в DS позиций из MTO
+        │   │
+        │   ├── Сбор всех обработанных кодов (включая замены)
+        │   │
+        │   ├── Цикл по mto_dict
+        │   │   │
+        │   │   ├── Проверка: код не в обработанных? → self._insert_new_position()
+        │   │   │   ├── Поиск места вставки
+        │   │   │   ├── self._create_new_position_row()
+        │   │   │   │   ├── Создание новой RowStd
+        │   │   │   │   ├── Установка признака новой позиции
+        │   │   │   │   ├── Копирование данных из MTO
+        │   │   │   │   └── Установка цветов
+        │   │   │   │
+        │   │   │   └── Вставка в ds_base_full
+        │   │   │
+        │   │   └── Иначе → пропуск (уже обработан)
+        │   │
+        │   └── Завершение добавления новых позиций
+        │
+        └── Возврат управления → STDTable.to_excel_ds_vs_mto_spec()

@@ -1,0 +1,103 @@
+---
+description: Память проекта — компактно. Детали и история — в ARCHIVE.
+alwaysApply: true
+---
+
+# AI Memory — Documentation_PDF_out_NK (компактно)
+
+> Полный снимок и длинные хроники: `AI_memory_ARCHIVE.md`.
+> PDF v2 детали: `AI_v2.mdc` + специализированные `AI_v2_*.mdc`.
+
+Файл должен оставаться коротким. Сюда попадают только межзональные факты и напоминания, которые трудно восстановить из локальных правил.
+
+## Индекс зон
+
+- Стандарты, планы, делегирование -> `AI_project_standards.mdc`
+- RFQ / tags / step4 / performance -> `AI_rfq_context.mdc`
+- RFP Запуск, финальный Excel Step4 (столбцы / цвета / УЛ) -> `AI_rfp_step4_excel.mdc`
+- RFP из частей (RFP_Зиновьев → сумма в свод) -> `AI_rfp_parts.mdc`
+- DS vs MTO (закупочная спецификация) -> `AI_ds_compare.mdc`
+- PDF v2 индекс -> `AI_v2.mdc`
+- PDF v2 движок -> `AI_v2_engine.mdc`
+- PDF v2 редактор -> `AI_v2_editor.mdc`
+- PDF v2 control center -> `AI_v2_monitor.mdc`
+- PDF v2 ОД (ведомость) -> `AI_v2_od.mdc`
+- PDF v2 анализ тегов (MTO / payload) -> `AI_v2_tag_analysis.mdc`
+- RD catalog GUI/overlay / вкладка АН (dump, не overlay) -> `AI_rd_catalog.mdc`; SQLite schema 10 / pipeline / матрица ревизий MTO / карточка комплекта / `an_mto_file` -> `AI_rd_catalog_db.mdc`; Статус рассмотрения / согласования, подписи ячеек, Подсказки → `AI_rd_catalog_pipeline_status.mdc`; WEB-монитор + dual GUI → `AI_rd_catalog_web.mdc`; GUI hangs / `perf_span` → `AI_rd_catalog_perf.mdc`
+- Выгрузка ПИ заказчика (xlsb→pickle, BCC) -> `AI_rd_catalog_customer_pi.mdc`
+- TB вынесен в отдельный проект: `C:\Users\ydruzev\PycharmProjects\TB` (не часть release zip PDF/RFQ).
+
+## 1. Назначение
+
+Проект сравнивает теги оборудования RFP с МТО и VO.
+
+- Точка входа RFP↔MTO: `main.py` -> `RFQ/tags_rfp_compare/agregate_tags.py::main()`
+- DS vs MTO (закупочная спецификация): `python -m ds_compare_center` или кнопка в `main.py` — см. `AI_ds_compare.mdc`
+- PDF v2 разделён на отдельные пакеты:
+  - движок -> `pdf_parsing_v2_engine/`
+  - оркестратор -> `pdf_parsing_v2/`
+  - редактор -> `pdf_template_editor/`
+  - control center -> `pdf_v2_monitor/`
+
+## 13. ZIP для коллег
+
+- Инструменты: `utils/release_zip.py`, `.release_zipignore`, `build_release_zip.bat`
+- Папка `tmp/` исключается из release zip
+- Временные проверки по возможности выполнять в корневом `tmp/`
+
+## 14. Ловушки (кратко)
+
+- **xlsx на Windows:** после чтения закрывать `wb`, не держать дескрипторы.
+- **`get_files_single`:** расширения передавать в lower-case; `factory=None` по умолчанию — ленивый `V2Document.from_file_path`. Не импортировать v2 на уровне модуля `utils/path.py`.
+- **BBB:** тип файла определяется из имени; несоответствие шаблону -> файл не участвует в анализе.
+- **PDF v2:** rotation/grid/debug детали смотреть в `AI_v2_*.mdc`.
+- **ОД (ведомость):** pdfplumber обрезает страницу по тому же manifest clip, что движок (`stamp_effective_bbox` + рамка); pipeline и монитор вызывают один **`od_table_parsing_f`** с **`cfg` + templates** — подробно **`AI_v2_od.mdc`**.
+
+## 15. Указатели
+
+- Исторический контекст v1 PDF -> `AI_memory_ARCHIVE.md`, `AI_pdf_parsing_optimization.mdc` (архив)
+- PDF v2 parallel -> `AI_v2_parallel.mdc`
+- PDF v2 roadmap -> `AI_v2_dev_phases.mdc`
+
+## 16. Пути: локальный репозиторий, UNC, чаты и скрипты
+
+**Почему «чаты не видят» `\\bcc\eng\...`:** путь ведёт на корпоративную сеть. У агента/песочницы часто нет монтирования того же SMB-тома, VPN или учётки Windows — `Path.exists()` будет `False` или сразу `OSError`, хотя у вас в PyCharm всё открывается. Это нормально: для работы в репозитории опирайтесь на файлы под корнем проекта (например `pdf_parsing_v2_engine/templates/agcc_287/od_page1.json`) или копируйте нужный артефакт в `tmp/` и ссылайтесь на локальную копию.
+
+**Локальные пути в Python (Windows):**
+
+- От корня репозитория можно писать со слэшами Unix: `pdf_parsing_v2_engine/templates/agcc_287/od_page1.json` — `pathlib.Path` это понимает.
+- Надёжно от скрипта: `Path(__file__).resolve().parents[...]` / `ROOT = Path(__file__).resolve().parents[1]` и дальше `ROOT / "pdf_parsing_v2_engine" / ...`.
+- Не хардкодить диск `C:\Users\...` в общих утилитах — только там, где осознанно «моя машина».
+
+**UNC в Python:**
+
+- В исходнике всегда raw-string или удвоенные обратные слэши: `Path(r"\\bcc\eng\PrDoc\...")` либо `"\\\\bcc\\eng\\PrDoc\\..."`.
+- Строка вида `"\\bcc\eng\..."` без `r` — ловушка: `\e` и т.д. дают `SyntaxWarning` / неверный путь.
+- После `\\server\share` остальные сегменты можно собирать через `/` в `Path`: `Path(r"\\bcc\eng") / "PrDoc" / "file.json"` — обычно ок.
+
+**Кодировки и «невидимые» символы в имени папки:**
+
+- В путях из проводника/Word встречается **дефис U+2010 (`‐`)** вместо ASCII **`-` (U+002D)**. Это **разные** символы: сравнение строк, glob и ручной набор пути легко ломаются. Проверять: `print(repr(path_string))` или смотреть `ascii(path_string)`.
+- JSON/текст с диска читать как UTF-8 (`read_text(encoding="utf-8")` / `Path.read_bytes()` + `decode("utf-8")`).
+- Вывод полного пути в консоль Windows с кодовой страницей вроде cp1251 может дать **`UnicodeEncodeError`** при `print` — не ошибка диска, а кодировки stdout. Варианты: `chcp 65001`, `PYTHONUTF8=1`, логировать `ascii(...)` / `errors="backslashreplace"`, писать в файл UTF-8.
+
+**PowerShell:**
+
+- В Windows PowerShell 5.1 цепочка `cd ... && python ...` часто **недоступна**; используйте `;` или отдельные строки, либо PowerShell 7+.
+- Для UNC и путей с пробелами/кириллицей предпочтительно `-LiteralPath` у `Test-Path` / `Get-Item`.
+- Чтение JSON UTF-8: например `[System.IO.File]::ReadAllText($p, [System.Text.UTF8Encoding]::new($false))`.
+
+**Проверочные скрипты только на чтение (в репозитории):**
+
+- `tmp/test_paths_readonly.py` — Python: локальный шаблон + при необходимости UNC (ничего не пишет).
+- `tmp/test_paths_readonly.ps1` — PowerShell: локальный JSON UTF-8 (параметр `-Path`).
+
+Запуск из корня проекта: `python tmp/test_paths_readonly.py`; для UNC в другой среде ожидайте `exists: False` / `OSError` без доступа к сети.
+
+## 17. GitHub backup (аккаунт [vezurd](https://github.com/vezurd))
+
+- Репозиторий **private**: `https://github.com/vezurd/Documentation_PDF_out_NK`
+- Git смотрит **только** на эту папку проекта, не на весь диск. Не делать `git init` в `C:\Users\...` или `PycharmProjects`.
+- На GitHub уходит исходный код и конфиги. Не уходят: `cache/`, `tmp/` (кроме скриптов), PDF/xlsx, pickle, `rd_catalog/База заказчика/`, ключи `base_check/client_secret.json`.
+- Ручная выгрузка: двойной щелчок `backup_to_github.bat`
+- В чате после порции правок можно попросить: «сохрани на GitHub».

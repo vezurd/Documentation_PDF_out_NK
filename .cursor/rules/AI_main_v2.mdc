@@ -1,0 +1,52 @@
+---
+description: main_v2 Qt6 hub architecture, runners, settings bridge, and appearance themes
+globs: main_v2/**/*.py
+alwaysApply: false
+---
+
+# main_v2 — Qt6 Hub
+
+`main_v2` is the new PySide6 control hub launched as `python -m main_v2`. It does not replace legacy `main.py` by rewriting CTk layout; it wraps the same business workflows with Qt dialogs, a process monitor, and isolated settings bridges.
+
+## Architecture
+
+- Entry point: `main_v2/__main__.py`; main window: `main_v2/window.py`.
+- UI shell: `QMainWindow` + `QTabWidget` + lower `JobMonitorPanel` in a vertical `QSplitter`.
+- Tabs: `PDF / v2`, `MTO / BBB`, `Сравнения`, `RFQ / as-build`, `Сервисы`.
+- Use `QFileDialog` in `main_v2`; do not call `utils.folder_select` or Tk dialogs directly from the Qt process.
+- Headless wrappers live in `main_v2/legacy_actions.py` and return an `ActionResult`-like object: `success`, `message`, `result_path`.
+
+## Runners
+
+- RFQ/as-build uses `ProcessJobRunner` (`main_v2/job_runner.py`) with `QProcess`, `sys.executable -u`, streamed stdout/stderr, and `PYTHONPATH=<project root>`.
+- Blocking legacy Python functions use `FunctionJobRunner` (`main_v2/function_runner.py`) so the GUI stays responsive and `print()` output goes to `JobMonitorPanel`.
+- Before starting one runner, check the other is idle; there should be one visible long-running job at a time.
+- `JobMonitorPanel` owns user feedback: elapsed time, indeterminate progress, live log, result button, and optional stop for `QProcess`.
+
+## Settings
+
+- Do not mix Qt and CTk event loops in one process.
+- Existing CTk settings windows are launched via `python -m main_v2.settings_launchers bbb|rfq|asbuild|ds` (legacy; `main.py` still uses them).
+- Native PySide6 settings for RFP/as-build and MTO/BBB live in `ds_compare_center` (`rfp_settings_panel.py`, `bbb_settings_panel.py`). Remaining `main.py` actions (PDF v2 launch, MTO/BBB, КЖ, MTO revisions, NanoCAD, ZIP) are on `ds_compare_center` tab **Прочее · Запуск** (`misc_run_panel.py`). `main_v2` itself is not removed.
+- Full Qt clones of RFQ/as-build settings inside `main_v2` are still deferred; use `ds_compare_center` as the unified hub.
+
+## Appearance Themes
+
+- Theme code lives in `main_v2/appearance.py`.
+- Built-in ids:
+  - `system` — `Системная`
+  - `light_high_contrast` — `Светлая контрастная`
+  - `dark_high_contrast` — `Тёмная контрастная`
+  - `dark_blue` — `Тёмно-синяя`
+- User choice is persisted in `QSettings("Documentation_PDF_out_NK", "MainV2")`, key `ui/theme`.
+- Custom themes use `Fusion` + `QPalette` + light QSS for common widgets. Prefer improving these local palettes over adding an external theme dependency.
+- The current preferred scheme is `Светлая контрастная`; keep it readable with black text, white/light backgrounds, clear borders, and a strong blue selection color. `Тёмная контрастная` exists for dark high-contrast usage.
+
+## Verification
+
+After changes run:
+
+```bash
+python -m py_compile main_v2/*.py
+python -c "from main_v2.window import MainWindow; print('main_v2 import OK')"
+```

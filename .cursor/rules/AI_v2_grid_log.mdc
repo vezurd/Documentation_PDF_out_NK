@@ -1,0 +1,144 @@
+---
+description: "Формат alignment_log.txt — self-contained debug-тикет grid alignment. Читать при анализе adapt_debug_*.txt."
+globs:
+  - "pdf_parsing_v2/grid_matcher.py"
+  - "pdf_template_editor/adapt_debug.py"
+alwaysApply: false
+---
+
+# alignment_log.txt — формат и инструкция по анализу
+
+> Этот файл описывает структуру `adapt_debug_XXXXXX.txt`.
+> AI-чат, получив `.txt` файл, читает **этот** `.mdc` для полного контекста.
+
+## 1. Назначение
+
+Самодостаточный debug-тикет. В актуальном формате файл начинается с краткого **prealign summary** (`=== ADAPT DEBUG PREALIGN ===`), а затем содержит основной блок **`=== GRID ALIGNMENT LOG ===`** из `_align_grid_lines_ordered()`.
+
+Создаётся: `adapt_debug.py :: save_adapt_debug_snapshot()` — рядом с `adapt_debug_XXXXXX.json`.
+
+## 2. Структура файла
+
+```text
+=== ADAPT DEBUG PREALIGN ===
+Template: <name>
+Template path: <path>
+PDF: <filename> (page <P>)
+Search bbox: ...
+Base bbox: ...
+Proposed bbox: ...
+Effective bbox: ...
+Detected union bbox: ...
+Counts: raw=... probe=... effective=...
+Inferred edges: ...
+
+=== GRID ALIGNMENT LOG ===
+Template: <name> (<N> grid lines)
+PDF: <filename> (page <P>)
+Frame: x0=... y0=... x1=... y1=...
+Scale: sx=... sy=... dx=... dy=...
+Params: MATCH_THRESHOLD=0.35 BORDER_MERGE=X.Xpts CO_LOCATE=X.Xpts refine_max_delta=2.0pts
+Log format: .cursor/rules/AI_v2_grid_log.mdc
+Engine rules: .cursor/rules/AI_v2_grid.mdc
+Code: pdf_parsing_v2/grid_matcher.py :: _align_grid_lines_ordered()
+
+VERDICT: OK|WARNING|FAIL (N problems)
+
+COUNTS:
+  H: <tpl> TPL | <raw> det(raw) -> <merged> det(merged) -> <filtered> det(in-stamp) | <skip> skip-artifact
+  V: <tpl> TPL | <raw> det(raw) -> <merged> det(merged) -> <filtered> det(in-stamp) | <skip> skip-artifact
+
+WALK H (<N> TPL groups, <M> det pool):
+  TPL:<id> -> PDF:<id> (<pos>) score=X.XX interp=X.X delta=+/-X.X anchors=(<lo_id>,<hi_id>) ✓
+  TPL:<id> -> NO MATCH, interp=X.X (nearest PDF:<id> dist=X.Xpts, score=X.XX < THRESHOLD) anchors=(<lo_id>,<hi_id>) ⚠
+    [skip PDF:<id> (<pos>) split-artifact, span=XXXpts]
+  ...
+
+WALK V (<N> TPL groups, <M> det pool):
+  ...
+
+PROBLEMS:
+  ⊘ PDF:<id> (<pos>) skip: <reason>
+  ⚠ TPL:<id> no_match -> interpolated X.X
+
+SNAPPED POSITIONS (final):
+  Line ID              Pos pts  Method             Matched to
+  -------------------- -------- ------------------ ------------
+  h_bottom               786.2  boundary           PDF:h_20
+  h_top                  511.2  boundary           PDF:h_1
+  h_104.8                523.0  match              PDF:h_2
+  h_39.97                686.3  interp
+  ...
+```
+
+## 3. Секции — что смотреть
+
+| Секция | Что даёт |
+|--------|----------|
+| **Prealign summary** | Что решил production path до ordered alignment: `search/base/proposed/effective bbox`, counts, inferred edges |
+| **Header** | Контекст: какой шаблон, PDF, масштаб, пороги алгоритма |
+| **VERDICT** | Быстрая оценка: `OK` (всё matched), `WARNING` (no-match ≤ max(5, 15% TPL) или avg_score < 0.5), `FAIL` (превышен порог) |
+| **COUNTS** | Сколько линий на входе/выходе по осям. Ожидание: `det(in-stamp) ≥ TPL count` |
+| **WALK H/V** | Per-line details: `interp` = ожидаемая позиция (progressive), `delta` = отклонение snapped от interp, `anchors=(lo,hi)` = пара якорей для интерполяции. Большой delta = подозрительный match |
+| **PROBLEMS** | Все skip и no-match в одном месте |
+| **SNAPPED POSITIONS** | Итоговая таблица: ID линии, финальная позиция (pts), метод (`boundary` / `boundary-top-pref` / `match` / `interp`), ID detected линии |
+| ~~**REFINE**~~ | *(disabled)* Cell-consensus refine и validate отключены — grid-bound = единственный источник позиций полей |
+
+## 4. Параметры алгоритма (строка Params)
+
+| Параметр | Описание | Типичное значение |
+|----------|----------|-------------------|
+| `MATCH_THRESHOLD` | Min score для принятия match. Ниже → линия получает interp-позицию | 0.35 |
+| `BORDER_MERGE` | Расстояние слияния border-pairs (detected), pts | зависит от PDF |
+| `CO_LOCATE` | Порог группировки TPL-линий с одинаковой позицией, pts | 2× SCALE |
+| ~~`refine_max_delta`~~ | *(disabled)* Max сдвиг cell-consensus refinement, pts | 2.0 |
+
+## 5. Типичные паттерны проблем
+
+### 5.1 «Линия match с большим delta»
+```
+TPL:v_24.98 -> PDF:v_14 (1113.7) score=0.28 interp=1100.0 delta=+13.7 ✓
+```
+Score близок к MATCH_THRESHOLD → возможно ложный match. Следующая линия может остаться без match.
+**Действие:** если повторяется — повысить MATCH_THRESHOLD или проверить шаблон.
+
+### 5.2 «NO MATCH с nearest далеко»
+```
+TPL:h_5.01 -> NO MATCH, interp=773.6 ⚠
+```
+Нет detected линии рядом с ожидаемой позицией. PDF не содержит эту линию (пунктир / тонкая).
+**Действие:** проверить PDF визуально; если линия есть — проблема в find_tables.
+
+### 5.3 «Много skip-artifact»
+```
+H: 23 TPL | 31 det(raw) -> 21 det(merged) -> 20 det(in-stamp) | 7 skip-artifact
+```
+Лишние линии в PDF (серая заливка, подписи). Нормально если skip < TPL count.
+**Действие:** если skip > TPL count — шаблон может быть неполным.
+
+### 5.5 `boundary-top-pref` для `TPL:h_top`
+```
+TPL:h_top -> PDF:h_1 (526.4) score=0.60 boundary-top-pref ✓
+```
+Узкая эвристика для верхней boundary-линии: если в boundary-window есть несколько длинных full-span кандидатов, верхний кандидат находится чуть выше template `h_top` и почти не хуже "ближайшего" кандидата, движок может предпочесть именно внешний верхний anchor.
+**Действие:** смотреть парой с соседними `sy`-кейсами benchmark; если даже при `boundary-top-pref` остаётся систематический drift ниже по штампу, следующая гипотеза уже не про top-choice, а про `d_all` / transform.
+
+### 5.4 ~~«REFINE сильно сдвинул»~~ *(disabled)*
+
+Секция REFINE и `_validate_grid_against_assignment` отключены. Grid-bound (`expand_fields_by_bindings`) — единственный источник позиций полей. Cell-assignment используется только как fallback bbox для полей без полных bindings.
+
+## 6. Как передавать в чат
+
+1. Пользователь запускает «Тест-адаптация» в редакторе.
+2. В папке `adapt_debug/` появляется `adapt_debug_XXXXXX.txt`.
+3. Пользователь передаёт файл: `@path/to/adapt_debug_XXXXXX.txt`.
+4. AI читает **этот** `.mdc` → понимает и prealign summary, и основной alignment block.
+
+Дополнительно (если нужны данные полей/ячеек): рядом лежит `adapt_debug_XXXXXX.json`.
+
+## 7. Связанные файлы
+
+- **Правила движка:** `AI_v2_grid.mdc` — инварианты, типичные проблемы PDF, именование линий.
+- **Roadmap редактора:** `AI_v2_editor.mdc` — T9.* задачи.
+- **Код:** `grid_matcher.py :: _align_grid_lines_ordered()` — генератор лога.
+- **Сохранение:** `adapt_debug.py :: save_adapt_debug_snapshot()` — запись .txt файла.

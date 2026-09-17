@@ -1,0 +1,194 @@
+---
+description: "PDF v2 — параллельная обработка (фазы 4–5 dev roadmap). Обе фазы реализованы (09.04.2026)."
+globs:
+  - "pdf_parsing_v2/parallel.py"
+  - "pdf_parsing_v2/v2_timing.py"
+  - "pdf_parsing_v2/v2_pipeline.py"
+alwaysApply: false
+---
+
+# PDF v2 — параллельная обработка
+
+**Статус:** фазы 4A+4B+5 реализованы (09.04.2026), UX/config доработаны 10.04.2026, selective per-page PPE для тяжёлых DW-файлов добавлен 15.04.2026 и подтверждён в полном folder-run (`12H-44M`). Спека: `pdf_parsing_v2/SPEC_parallel.md`. Код: `pdf_parsing_v2/parallel.py`, `pdf_parsing_v2/v2_timing.py`, `pdf_parsing_v2/v2_pipeline.py`. Конфиг: `cfg["parallel"]`, `cfg["max_workers"]`, nested **`cfg["per_page"]`**, `cfg["timing_log"]`. GUI monitoring / control center → пакет `pdf_v2_monitor/`, правила: **`AI_v2_monitor.mdc`**.
+
+**Актуально (09.04.2026):** вся детальная спека по параллели **только в этом файле**. В `AI_v2_dev_phases.mdc` фазы 4–5 — краткие указатели без повторения текста.
+
+## Разграничение с v1
+
+| Тема | Где описано |
+|------|-------------|
+| Исторический v1 pipeline (каталог `pdf_parsing/` и `pdf_pipeline_config.json` удалены из репо, 2026-04) | **`AI_pdf_parallel_roadmap.mdc`** + `AI_memory_ARCHIVE.md` |
+| Много-PDF извлечение штампа **v2** (`pdf_parsing_v2/`, `run_v2_pipeline`, fitz, шаблоны JSON) | **этот файл** |
+
+Общий паттерн **ProcessPoolExecutor + pickle + `worker_init`** сознательно похож на v1/step4, но код, конфиг и точки входа **не смешивать**.
+
+**Точки входа по зонам:** индекс `AI_v2.mdc`, движок `AI_v2_engine.mdc`.
+
+---
+
+## Цель
+
+Параллельная обработка нескольких PDF в `v2_pipeline` с опциональным GUI мониторинга (`pdf_v2_monitor/`).
+
+---
+
+## Фаза 4A: аудит + дизайн [PREMIUM] — ✅ реализовано (09.04.2026)
+
+**Аудит stateless (завершён):**
+
+- `extract_page` — без глобалов, пригодно к PPE. ✅
+- `grid_matcher` — аудит: `_CACHED_V2_CFG` (обратная зависимость engine→orchestrator), `_snap_4_boundaries._max_shape_change` (thread-unsafe, process-safe), `cfg` flat dict контракт. Задокументировано в `INTERFACES.md` engine. ✅
+- `load_v2_config()` — read-only dict, thread-safe. ✅
+- Шаблоны (`StampTemplate`, `FieldDef`) — pickle-safe. ✅
+
+**Дизайн:** спека `pdf_parsing_v2/SPEC_parallel.md`.
+
+- `run_parallel(tasks, templates, cfg, *, max_workers, callback, timing)` — низкоуровневый.
+- `run_parallel_extraction(curr_proj, templates, cfg, ...)` — drop-in замена `run_v2_extraction`.
+- DTOs: `V2FileExtractResult`, `V2ParallelResult` (pickle-safe).
+- `ParallelCallback` Protocol: `on_file_start/done/error`, `on_batch_progress`.
+- Worker: `_worker_init` (pre-pickled templates+cfg в initargs) + `_worker_extract` (collect-and-continue).
+- Тайминги: `TimingCollector` в `v2_timing.py`.
+
+---
+
+## Фаза 4B: реализация [C2] — ✅ реализовано (09.04.2026)
+
+1. ✅ `parallel.py` — `run_parallel`, `run_parallel_extraction`, DTOs, worker.
+2. ✅ `v2_pipeline.py` — `cfg["parallel"]` + `cfg["max_workers"]` + `cfg["timing_log"]`.
+3. Тесты: smoke на 3+ PDF — ожидается при первом production-прогоне.
+4. ✅ `pdf_parsing_v2/__init__.py` — реэкспорт `run_parallel`, `run_parallel_extraction`, `TimingCollector`.
+5. ✅ `v2_timing.py` — `TimingEntry`, `TimingCollector`, `to_excel`.
+6. ✅ **10.04.2026:** `v2_config.py` теперь реально читает/сохраняет `parallel` и `max_workers` через standard config path; `pdf_v2_config.json` может включать parallel как production default.
+
+---
+
+## Фаза 5: GUI мониторинга — ✅ реализовано (09.04.2026)
+
+Пакет `pdf_v2_monitor/` (PySide6). Запуск: `python -m pdf_v2_monitor`. Интеграция в `main.py` — subprocess. Детали: **`AI_v2_monitor.mdc`**.
+
+- `run_v2_pipeline` принимает `extraction_callback` → пробрасывает в `run_v2_extraction` / `run_parallel_extraction`.
+- `MonitorCallback(QObject)` реализует `ParallelCallback` через Qt сигналы.
+- `PipelineThread(QThread)` — запуск pipeline в фоне.
+
+---
+
+## Предпосылки
+
+- `extract_page` пригоден к PPE; главный риск — **`grid_matcher`**.
+- `pdf_v2_config.json` — передавать в воркер **копией** (read-only dict в main).
+
+---
+
+## Разделение extraction / postprocess (пререквизит к PPE)
+
+Сначала выделить **`run_v2_extraction`** (файлы + шаблоны + обработка страницы через `extract_page` + мост в `PageStampAttributes`) и **`run_v2_postprocess`** (`parse_tags` → OD → `tag_parser.analyze` → `rules_check` → отчёты). **`run_v2_pipeline`** = compose. Параллелить имеет смысл **только extraction**; postprocess — один процесс после сборки `curr_proj`.
+
+**Актуально (10.04.2026):** `run_extraction` и `run_v2_tags(parse_tags)` в текущем `run_v2_pipeline` выполняются **последовательно**. Overlap extraction + tags **не реализован**. При обсуждении возможной параллелизации помнить:
+- прямого write-conflict по PDF не ожидается (оба прохода read-only),
+- но возможна деградация из-за конкуренции за I/O,
+- главный риск — orchestration/tag-state, а не файловые locks.
+
+Идеи фиксировались в Cursor-плане `v2_pipeline_split_*` (если план сохранён в `.cursor/plans/` проекта — использовать как черновик сигнатур).
+
+**Два стека чтения PDF (не путать):**
+
+- Extraction v2: **PyMuPDF (`fitz`)** — рамка, сетка, bbox, текст полей.
+- `parse_tags`: **pdfminer** `extract_pages(..., LAParams(detect_vertical=True))` — отдельный проход по `document.file_full_path`.
+
+Следствие: пока постпроцесс вызывает `parse_tags` как сейчас, на диске нужны **исходные PDF** (кэш только `V2PageResult` без файлов не заменяет теги). Вариант «постпроцесс без PDF» — отдельный рефактор (предсобранный текст / кэш pdfminer).
+
+---
+
+## DTO и сборка после воркеров
+
+- Рабочий тип: `list[V2Document]` с `pages: list[V2PageData]` и `_v2_results: list[V2PageResult]`. Ранее `list[doc_ATTRIBUTES]` — заменено (09.04.2026).
+- PPE/сериализация: `V2FileExtractResult`, `V2ParallelResult` (pickle-safe DTOs в `parallel.py`).
+- Конвертеры: прямое заполнение `document.pages` из `V2FileExtractResult` через `V2PageData.from_v2_result(v2r, doc)` после **сортировки по исходному индексу файла** (детерминизм).
+- Между процессами: pickle **`V2FileExtractResult`** или `list[V2PageResult]` без fitz-объектов внутри.
+
+**Ошибки:** `status` + `error_message` на файл; **collect-and-continue**; в постпроцессе и `rules_check` — guard для `FAILED` / пустых `pages`.
+
+---
+
+## Постпроцесс: глобальные теги и OD
+
+- `parse_tags(curr_proj, tag_dict=merged)` уже может писать в переданный dict — ок для одного прохода.
+- `tag_parser.analyze` — параметр **`source_dict_override=None`** добавлен (09.04.2026). При `None` — текущее поведение (глобальный `source_dict`). При передаче dict — использует его. Готово к PPE тегов.
+- Разбиение `curr_proj` по чанкам (редко): на чанк `local = {}`, `parse_tags(..., tag_dict=local)`, затем `tag_parser.merge_dicts(merged, local)`, затем один `analyze(..., source_dict_override=merged)`.
+
+**OD (`od_table_parsing_f`):** оставить в **postprocess**; в DTO хранить **`file_full_path`** / `pdf_root`. Не тащить OD в fitz-воркер. Офлайн-постпроцесс при необходимости — кэш результата OD в DTO/sidecar.
+
+---
+
+## Параллель извлечения: практика воркера
+
+- Инструмент: **`ProcessPoolExecutor`**, не сырой `multiprocessing.Pool`.
+- Аргументы воркера: путь, метаданные документа, шаблоны, `cfg` — **pickle** (на Windows spawn обязательно).
+- Оптимизация: **`initializer=worker_init`** и однократная установка `WORKER_TEMPLATES` / `WORKER_CFG`, чтобы не пиклить огромный список шаблонов на каждый `submit`. `shared_memory` — только если замеры покажут узкое место.
+- Сборка: упорядочить по индексу файла → единый **`run_v2_postprocess`**.
+
+---
+
+## Selective per-page PPE (15.04.2026)
+
+### Зачем
+
+После оптимизаций `find_frame` / `find_tables` стало видно, что для отдельных тяжёлых DW-листов bottleneck остаётся page-local. Benchmark на `C:\\YandexDisk\\темп\\PDF` показал:
+
+- `AGCC.287-2869-SOS.DW-0006` (8 стр.) — устойчивый выигрыш примерно **`~2.05x`** у `page_tasks x4` и **`~1.95x`** у `chunked x4`.
+- `AGCC.287-2869-SOS.LAY-0002` (2 стр.), `AGCC.287-2869-SOS.CJ-0007` (21 стр.), `AGCC.287-2869-SOS.OD-0001` (24 стр.) — per-page PPE хуже sequential.
+
+Следствие: per-page PPE должен быть **селективным**, а не глобальным.
+
+### Product-вариант
+
+- Nested config section: **`cfg["per_page"]`**.
+- Поля:
+  - `enabled`
+  - `min_pages` (default `4`)
+  - `max_workers`
+  - `chunk_size_pages`
+  - `doc_types: {DW,WIR,LAY,CAE,GA,PL,NI,MTO,BOE,BOM,BOQ,OD,CJ,VO}` — **GA**/**PL**/**NI** в одном DWG-кластере с **LAY**/**CAE** (те же рекомендации по selective PPE).
+- Дефолт: включён только `DW`.
+
+### Runtime-contract
+
+- Внешний selector: `_should_use_per_page_parallel(document, cfg)`.
+- Product worker path: **`run_parallel_extraction_for_document(document, templates, cfg)`**.
+- Реализация: **page-range chunks**, не `shared fitz.Document`, не threads.
+- Каждый worker делает свой `fitz.open(file_path)` и обрабатывает contiguous список страниц.
+- Сборка строго по `page_num`; payload должен совпадать с sequential.
+- Timing detail для Extraction: `per_page_parallel_used`, `per_page_parallel_workers`, `per_page_parallel_chunk_size`, `per_page_parallel_chunks`, `per_page_parallel_total`.
+- Mixed multi-file PPE path тоже учитывает `cfg["per_page"]`: в одном верхнем `ProcessPoolExecutor` обычные документы идут как whole-file tasks, а подходящие `DW` — как page-range chunk tasks с последующей агрегацией назад в один `V2FileExtractResult`.
+
+### Что не делать
+
+- Не шарить один `fitz.Document` между процессами/потоками.
+- Не включать per-page PPE для всех типов документов подряд.
+- Не вкладывать per-page PPE внутрь уже запущенного multi-file PPE без отдельного аудита nested parallelism.
+
+### Практическое правило
+
+- Текущий product-path безопасен как selective optimization и для одиночного файла, и для folder-run через mixed multi-file PPE.
+- Для multi-file extraction сохраняется per-file PPE, но `DW`-документы, прошедшие эвристику `cfg["per_page"]`, внутри него раскладываются на page-range chunk tasks.
+- Если нужно расширять дефолт за пределы `DW`, делать это только после benchmark на реальных `WIR/LAY/CAE` наборах.
+
+### Подтверждение по production run
+
+- В логе `C:\\YandexDisk\\темп\\PDF\\__результат_проверки_2026.04.15_12H-44M\\v2_timing_log.xlsx` лист `Extraction` уже содержит колонки `per_page_parallel_*`.
+- Для `AGCC.287-2869-SOS.DW-0006_0-AN01_RU.pdf` зафиксировано:
+  - `per_page_parallel_used = true`
+  - `per_page_parallel_workers = 8`
+  - `per_page_parallel_chunk_size = 1`
+  - `per_page_parallel_chunks = 8`
+  - `elapsed_sec ≈ 8.344` против baseline `≈ 13.871`
+- Это подтверждает, что интеграция в multi-file PPE сработала, а не только smoke/benchmark helper.
+
+---
+
+## Тайминги (10.04.2026)
+
+- `TimingCollector` теперь пишет multi-sheet workbook: `Summary`, `Phases`, `Extraction`, `Tags`, `OD`, `Rules`, `Events`.
+- `Extraction` содержит per-file breakdown только по “заметным” подэтапам; шумные колонки, не достигающие примерно `0.2s` ни на одном файле, скрываются.
+- UI/Excel округляют float-времена до тысячных.

@@ -1,0 +1,165 @@
+---
+description: ARCHIVED — описывало v1 `pdf_parsing/` (удалён 2026-04). Для актуального PDF см. `AI_v2_parallel.mdc` и `AI_v2_engine.mdc`.
+alwaysApply: false
+globs:
+  - pdf_parsing/**
+---
+
+# PDF Parsing — Оптимизация производительности
+
+> Создан 27.03.2026. Источник: чаты Запуск 5–7 (timing_log + inner parallelism + profiling).
+
+---
+
+## 1. Инфраструктура профилирования (реализована)
+
+### Модули и флаги
+
+| Что | Где | Назначение |
+|---|---|---|
+| `pdf_timing_log.py` | `pdf_parsing/` | Буфер замеров → `pdf_timing_log.xlsx` в папке результатов |
+| `timing_log: bool` | `pdf_pipeline_config.json` | Включает запись timing log (default: `true`) |
+| `profiling_enabled: bool` | `pdf_pipeline_config.json` | Детальные sub-тайминги (default: `false` — только для диагностики) |
+| Чекбоксы | `pdf_settings_gui.py` | GUI для обоих флагов |
+
+### Измеряемые этапы в timing log
+
+**Top-level** (всегда при `timing_log=true`):
+`find_files`, `parallel/sequential_pdf_processing_total`, `od_table_parsing_f`, `tag_parser_analyze`, `rules_check_start`, `total_pipeline`
+
+**Per-file** (при `use_parallel=true`):
+`file_{name}` (total), `file_{name}_pdfplumber_fitz` (Thread1), `file_{name}_pdfminer_tags` (Thread2)
+
+**Sub-тайминги** (при `profiling_enabled=true`):
+`file_{name}_open_pdfplumber_fitz`, `file_{name}_p{N}_find_tables`, `file_{name}_p{N}_inner_extract_pages`, `file_{name}_p{N}_table_extract`, `file_{name}_p{N}_get_cur_page_total`, `file_{name}_p{N}_post_processing`
+
+### Как включить детальное профилирование
+
+GUI → кнопка ⚙ рядом с «Открыть папку с PDF» → включить оба чекбокса → запустить → смотреть `pdf_timing_log.xlsx` в папке результатов.
+
+---
+
+## 2. Архитектура per-file обработки
+
+```
+process_single_pdf(fp, profiling_enabled)
+  ├── Thread1: _extract_page_attrs(fp, doc, profiling_enabled)
+  │     ├── pdfplumber.open(fp)  +  fitz.open(fp)         [open_pdfplumber_fitz]
+  │     ├── for page in pdf_pdfplumber.pages:
+  │     │     ├── get_cur_page_1(page, doc, prof_dict)     [get_cur_page_total]
+  │     │     │     ├── page.find_tables()                 [p{N}_find_tables]
+  │     │     │     ├── get_crop_table_dwg():
+  │     │     │     │     ├── extract_pages() ← pdfminer  [p{N}_inner_extract_pages]
+  │     │     │     │     └── table_crop.extract()         [p{N}_table_extract]
+  │     │     │     └── get_crop_table_OD_MTO():
+  │     │     │           └── table_crop.extract()         [p{N}_table_extract]
+  │     │     └── get_multilayer_fitz / get_annotation_fitz [post_processing]
+  │     └── pdf_pdfplumber.close()  [НЕ ИЗМЕРЕНО — второй виновник]
+  └── Thread2: _extract_tags_for_document(doc, tag_dict)
+              └── pdfminer extract_pages (весь файл)       [elapsed_tags_sec]
+```
+
+**Важно:** `get_crop_table_dwg` используется для DWG-типов (WIR, LAY, DW, CAE и др.) — НЕ для BBB/MTO. `get_crop_table_OD_MTO` — для BOE/BOM/BOQ/MTO.
+
+---
+
+## 3. Результаты профилирования (27.03.2026, 11 файлов)
+
+### Сводная таблица
+
+| Файл | total Thread1 | find_tables | **inner_pdfminer** | pdfplumber.close? | Thread2 |
+|---|---|---|---|---|---|
+| WIR-0005 | **91.0s** | 8.4s | **45.4s ← #1** | **~37s ← #2** | 37.0s |
+| LAY-0002 | 29.8s | 4.3s | **11.9s** | ~14s | 13.2s |
+| DW-0006 | 25.5s | 9.6s | **7.2s** | ~9s | 8.3s |
+| CJ-0007 | 13.4s | 6.6s | 0s | ~0s | 6.4s |
+| BOE/BOM/MTO | 2–5s | 0.2–0.6s | 0s | ~0s | 0.7–2.2s |
+
+### WIR-0005 детальная разбивка (самый тяжёлый файл)
+
+```
+Thread1 TOTAL:                    91.0s (100%)
+  open pdfplumber+fitz:            0.001s
+  get_cur_page_1 (стр.1):         53.9s  (59%)
+    find_tables:                    8.4s   (9%)
+    inner_extract_pages (pdfminer): 45.4s  (50%)  *** ВИНОВНИК #1 ***
+    table_extract:                  0.084s
+  post_processing:                  0.000s
+  НЕ ИЗМЕРЕНО (pdfplumber.close):  37.1s  (41%)  *** ВИНОВНИК #2 ***
+Thread2 (pdfminer tags):          37.0s  (параллельно с Thread1)
+```
+
+### Паттерн по всем файлам
+
+- **`find_tables`** = 95–97% времени каждой страницы у **всех** файлов без inner_pdfminer.
+- **`inner_extract_pages`** = присутствует у DWG-типов (WIR, LAY, DW, CAE). Это pdfminer внутри Thread1, вызываемый из `get_crop_table_dwg`. Цель: найти границу рамки через `BiggestElement.find_big_element`.
+- **`table_extract`** и **`post_processing`** — пренебрежимо малы (<0.1s везде).
+
+---
+
+## 4. Roadmap оптимизации
+
+### Рычаг 1 — устранить `inner_extract_pages` (приоритет: ВЫСОКИЙ)
+
+**Потенциал:** WIR-0005 91s → ~45s (−50% Thread1). Все DWG-файлы аналогично.
+
+**Суть:** `get_crop_table_dwg` открывает pdfminer только для поиска `BiggestElement` (границы рамки чертежа). fitz уже открыт в том же потоке — можно использовать `fitz_page.get_drawings()` для поиска наибольшего прямоугольника вместо pdfminer.
+
+**Что нужно сделать:**
+1. Изучить `BiggestElement.find_big_element(page_elements, page_miner)` — что именно он ищет
+2. Написать аналог через fitz: `fitz_page.get_drawings()` → найти bbox самого большого rect
+3. Добавить параметр `fitz_page` в `get_crop_table_dwg` (fitz_doc уже есть в `_extract_page_attrs`)
+4. Убрать `extract_pages()` из `get_crop_table_dwg`
+
+**Файлы:** `find_functions.py` (замыкание `get_crop_table_dwg`), `pdf_parsing/find_function_MTO_BBB.py` (BiggestElement), `pdf_worker.py::_extract_page_attrs` (передать `fitz_page`)
+
+### Рычаг 2 — измерить и исправить `pdfplumber.close()` (приоритет: СРЕДНИЙ)
+
+**Потенциал:** WIR-0005 ~37s дополнительно (после Рычага 1 станет новым bottleneck).
+
+**Суть:** после page loop в `_extract_page_attrs` уходит ~37s в неизмеренное. Вероятно `pdf_pdfplumber.close()` освобождает огромный граф объектов страницы.
+
+**Что нужно сделать:**
+1. Добавить замер вокруг `pdf_pdfplumber.close()` в `_extract_page_attrs` (новый ключ `close_pdfplumber`)
+2. Если подтвердится — рассмотреть `page.flush_cache()` перед close или ограничение кэша pdfplumber
+
+### Рычаг 3 — `find_tables` (приоритет: НИЗКИЙ)
+
+**Потенциал:** незначителен без Рычагов 1–2, но для будущего.
+
+pdfplumber `find_tables` — O(N²) по числу линий на странице. На многостраничных файлах (CJ-0007: 21 стр × 0.3s = 6.6s) это заметно. Возможные подходы: более грубые `snap_tolerances`, кэш таблиц через fitz clippath.
+
+---
+
+## 5. Правила кодирования для PDF pipeline
+
+### Профилирование
+
+- `prof_dict=None` — опциональный параметр `get_cur_page_1`. Не удалять.
+- Ключи в `prof_dict` пишутся как `f'p{page.page_number}_<шаг>'`. При добавлении нового шага — использовать эту схему.
+- `profiling_enabled=False` по умолчанию. Overhead от замеров незначителен, но sub-timing засоряет timing log при большом числе страниц.
+- `_COPY_COLS` правило: нет, это не тот модуль. Здесь `_extract_page_attrs` возвращает `(pages, profiling_data)` — не сломай сигнатуру.
+
+### Архитектурные ограничения
+
+- `get_crop_table_dwg` — замыкание внутри `get_cur_page_1`, захватывает `document`, `dbg_main`, `prof_dict` из outer scope. При рефакторинге учитывать.
+- `fitz_doc` передаётся в `get_cur_page_1` из `_extract_page_attrs`. `fitz_page = fitz_doc[page_num-1]` доступен в `_extract_page_attrs`. Для Рычага 1: нужно передать `fitz_page` в замыкание (через параметр `do_table_iteration` или напрямую).
+- Thread1 и Thread2 работают независимо. Не добавлять shared state между ними без явного лока.
+
+---
+
+## 6. Как добавить замер нового шага
+
+```python
+# В find_functions.py::get_cur_page_1 (в любом замыкании):
+_t = time.perf_counter()
+# ... операция ...
+if prof_dict is not None:
+    prof_dict[f'p{page.page_number}_my_step'] = time.perf_counter() - _t
+
+# В pdf_worker.py::_extract_page_attrs (вне get_cur_page_1):
+if profiling_enabled:
+    profiling_data["new_file_level_metric"] = value
+```
+
+Новые ключи автоматически попадут в timing log — `_run_parallel` в `pdf_pipeline_main.py` итерирует все ключи из `prof["pages"]`.

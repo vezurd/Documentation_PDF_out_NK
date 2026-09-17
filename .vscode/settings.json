@@ -1,0 +1,9 @@
+{
+  "git.enabled": true,
+  "git.autoRepositoryDetection": true,
+  "git.repositoryScanMaxDepth": 1,
+  "git.detectSubmodules": false,
+  "git.autofetch": false,
+  "git.scanRepositories": [],
+  "git.path": "C:\\Program Files\\Git\\cmd\\git.exe"
+}

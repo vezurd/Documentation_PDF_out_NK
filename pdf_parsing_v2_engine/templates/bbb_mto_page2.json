@@ -1,0 +1,66 @@
+{
+  "schema_version": 2,
+  "name": "BOE/BOM/BOQ/MTO/OD/CJ стр.2+ (как get_cur_page_MTO_BBB: зоны pdfminer)",
+  "doc_types": [
+    "BOE",
+    "BOM",
+    "BOQ",
+    "MTO",
+    "OD",
+    "CJ"
+  ],
+  "page_selector": "rest",
+  "priority": 10,
+  "origin": "frame_bottom_right",
+  "padding_mm": 0.5,
+  "fields": [
+    {
+      "id": "1_DOC_TITLE",
+      "label": "Обозначение документа (шифр, верхняя полоса справа)",
+      "bbox_mm": [
+        120,
+        250,
+        0,
+        297
+      ],
+      "expected": "required",
+      "clean": "doc_title"
+    },
+    {
+      "id": "6_1_Sheet_number",
+      "label": "Номер листа (та же зона, что шифр в v1 BBB)",
+      "bbox_mm": [
+        120,
+        250,
+        0,
+        297
+      ],
+      "expected": "required",
+      "clean": "sheet_number_6_1"
+    },
+    {
+      "id": "6_2_Quantity_of_sheets",
+      "label": "Листов в документе",
+      "bbox_mm": [
+        120,
+        250,
+        0,
+        297
+      ],
+      "expected": "optional",
+      "clean": "sheet_number_6_2"
+    },
+    {
+      "id": "50_File_Name_Stamp",
+      "label": "Имя файла (полная ширина листа, MTO/BOE ветка)",
+      "bbox_mm": [
+        297,
+        -50,
+        0,
+        -1
+      ],
+      "expected": "required",
+      "clean": "file_name_stamp"
+    }
+  ]
+}

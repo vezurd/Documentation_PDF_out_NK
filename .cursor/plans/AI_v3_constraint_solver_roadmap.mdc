@@ -1,0 +1,156 @@
+---
+description: "Roadmap v3.0: constraint-based parametric wireframe model (kiwisolver/Cassowary). Долгосрочный план — переход если текущий sequential walk не достигнет 100% попадания."
+globs:
+  - "pdf_parsing_v2/grid_matcher.py"
+  - "pdf_parsing_v2/constraint_solver.py"
+alwaysApply: false
+---
+
+# v3.0 — Constraint-based Parametric Wireframe Model
+
+> **Статус:** черновик roadmap. Переход на v3 оправдан если sequential walk + progressive interp (текущий движок) не достигнет стабильного ~100% попадания на всех шаблонах, ИЛИ если потребуется интерактивное перетаскивание линий каркаса с real-time деформацией.
+
+## 1. Мотивация
+
+### Ограничения текущего алгоритма (v2, sequential walk)
+
+| Проблема | Суть | Почему walk не решает |
+|----------|------|----------------------|
+| Линии без detected-аналога | `find_tables` не видит тонкие/короткие линии → NO MATCH → interp | Interp работает, но при 3+ подряд пропущенных — drift |
+| Topology не используется | `start_line_id`/`end_line_id` → только визуализация wireframe | Walk не знает какие линии образуют ячейки → не может валидировать cell-constraints |
+| Ошибки каскада | Один ложный match → drift всех последующих (progressive interp адаптируется, но не мгновенно) | Walk идёт строго по порядку, нет «голосования» от соседних ячеек |
+| Нет интерактивности | Перетаскивание одной линии не двигает остальные | Walk — batch алгоритм, не incremental solver |
+
+### Когда переходить на v3
+
+- Текущий движок стабильно не достигает `< 2 no_match` на типовых шаблонах
+- Появляется требование интерактивного редактирования каркаса (drag одной линии → весь каркас следует)
+- Нужны нелинейные ограничения (aspect ratio ячеек, минимальный размер шрифта → min cell size)
+
+## 2. Математическая модель: Cassowary (kiwisolver)
+
+### Почему Cassowary
+
+- **Создан для UI layout** — Apple AutoLayout, CSS Flexbox используют тот же алгоритм
+- **kiwisolver** — C++ ядро + Python bindings, транзитивная зависимость matplotlib (уже установлен)
+- **Инкрементальный** — O(n) при изменении одной переменной → годится для interactive drag
+- **Приоритеты** — `required` / `strong` / `medium` / `weak` → «упругость» ячеек
+
+### Как штамп отображается на constraints
+
+```
+Переменные:
+  pos[line_id] = kiwisolver.Variable   для каждой grid line
+
+Ограничения:
+  REQUIRED   pos[h_bottom] == detected_bottom_pos        (boundary anchor)
+  REQUIRED   pos[h_top] == detected_top_pos              (boundary anchor)
+  REQUIRED   pos[h_A] < pos[h_B]   если A ниже B        (ordering из topology)
+  REQUIRED   pos[h_B] - pos[h_A] >= MIN_CELL_PTS         (min cell size)
+  STRONG     pos[h_X] == detected_X_pos                  (matched PDF line)
+  MEDIUM     pos[h_B] - pos[h_A] == template_delta * S    (proportional spring)
+  WEAK       pos[h_X] == interpolated_X_pos              (initial guess)
+```
+
+### Topology → constraints (автоматически из refs)
+
+```
+Nodes = { (L.id, L.start_line_id), (L.id, L.end_line_id) }   — пересечения
+Cells = прямоугольники между 4 линиями (из замкнутых циклов графа)
+Ordering = pos[top_line_of_cell] > pos[bottom_line_of_cell]
+```
+
+Для полных ref-связей (все `start_line_id`/`end_line_id` заполнены) → полная параметрическая модель. Для частичных → fallback на sequential walk для линий без refs.
+
+## 3. Интерактивное перетаскивание (editor)
+
+```
+User drags line h_30.02 →
+  StampConstraintModel.drag_line("h_30.02", new_pos)
+    → solver.suggestValue(var_h_30_02, new_pos)
+    → solver resolves all variables
+  → main_window updates ALL GridLineGraphicsItem positions
+  → user видит real-time деформацию каркаса
+```
+
+«Упругость» ячеек (constraint strength):
+- Маленькие ячейки (label, ~5mm) → `strong` (сопротивляются сжатию — шрифт не уменьшить)
+- Средние ячейки (data, ~15mm) → `medium`
+- Большие ячейки (area, ~50mm+) → `weak` (поглощают деформацию)
+
+Threshold-ы auto-computed из template cell dimensions.
+
+## 4. Архитектура кода
+
+### Новый модуль: `pdf_parsing_v2/constraint_solver.py`
+
+```python
+class StampConstraintModel:
+    """Parametric constraint model of stamp wireframe."""
+
+    def __init__(self, grid_lines: list[TemplateGridLine]):
+        # Build topology graph from refs
+        # Create kiwisolver.Variable per line
+        # Add ordering + min-size constraints
+        # Add proportional spring constraints
+
+    def fit_to_detected(
+        self,
+        boundary_positions: dict[str, float],
+        detected_positions: dict[str, float],
+    ) -> dict[str, float]:
+        # Boundary = required
+        # Detected matches = strong (suggestValue)
+        # Returns solved positions for ALL lines
+
+    def drag_line(self, line_id: str, new_pos_pts: float) -> dict[str, float]:
+        # Interactive: suggest new pos, resolve, return all positions
+
+    def get_cells(self) -> list[CellInfo]:
+        # Extracted rectangular cells with dimensions
+
+    def get_residuals(self) -> dict[str, float]:
+        # Per-constraint violation magnitude (for diagnostics)
+```
+
+### Интеграция
+
+- `grid_matcher.py`: новая функция `_align_grid_lines_constraint()` → используется когда topology полная (все refs заполнены). Config: `alignment_strategy: "auto" | "constraint" | "sequential_walk"`.
+- `main_window.py`: `self._constraint_model: StampConstraintModel | None`. При wireframe-drag → `drag_line()` → update all items.
+- `grid_line_items.py`: `itemChange()` → callback в main_window → re-solve → batch update.
+
+## 5. Фазы реализации
+
+| Фаза | Содержание | Зависимости |
+|------|-----------|-------------|
+| **A** | Topology extraction: граф пересечений из refs, поиск ячеек, ordering | models.py, grid_lines_utils.py |
+| **B** | `StampConstraintModel` с kiwisolver: переменные, constraints, `fit_to_detected()` | Phase A, kiwisolver |
+| **C** | `_align_grid_lines_constraint()` в grid_matcher, alignment_log, config flag | Phase B |
+| **D** | Interactive drag в editor: `drag_line()`, batch update GridLineGraphicsItem | Phase B, main_window.py |
+| **E** | Elasticity tuning: auto stiffness, min-size config, editor overlay | Phase D |
+| **F** | Fallback и hybrid: partial refs → sequential walk + constraint для connected subgraph | Phase C |
+
+## 6. Альтернативы (рассмотрены)
+
+| Подход | Плюсы | Минусы | Вердикт |
+|--------|-------|--------|---------|
+| **kiwisolver (Cassowary)** | Быстрый, инкрементальный, designed for layout | Только линейные constraints | **Основной** |
+| **scipy.optimize (SLSQP)** | Нелинейные constraints, уже в проекте | Batch (не инкрементальный), медленнее для interactive | Fallback для batch |
+| **ARAP mesh deformation** | Сохраняет rigidity | Overkill для rectilinear grid | Не нужно |
+| **Custom spring-mass** | Полный контроль | Reinventing the wheel, tuning damping | Нет |
+| **Z3 SMT** | Максимально выразительный | Слишком медленный для interactive | Нет |
+
+## 7. Критерии перехода
+
+- [ ] Текущий sequential walk протестирован на всех шаблонах (DWG, MTO, OD, BBB)
+- [ ] Если > 5% шаблонов дают `no_match > warn_threshold` → переход обоснован
+- [ ] Если пользователь запрашивает interactive drag → Phase D обязательна
+- [ ] Если partial refs (не все линии связаны) → Phase F hybrid обязателен
+
+## 8. Уроки текущей реализации (учесть в v3)
+
+1. **split-артефакты** — find_tables генерирует лишние линии. Constraint model не решает эту проблему — pre-filtering всё ещё нужен.
+2. **Короткие span-ы** — линии с span < 30% extent не видны find_tables. Constraint model может **вывести** их позицию из topology без detected match — это главное преимущество.
+3. **Progressive interp drift** — при 3+ пропущенных подряд линиях drift нарастает. Constraint solver решает глобально → нет drift.
+4. **CO_LOCATE groups** — линии с delta < 5.7pts объединяются в группу и делят один detected match. В constraint model каждая линия — отдельная variable с ordering constraint (pos_A <= pos_B + epsilon).
+5. **Boundary — anchor** — boundary lines как required constraints = самый надёжный приём, оставить.

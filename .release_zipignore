@@ -1,0 +1,45 @@
+# Исключения при сборке релизного ZIP для коллег.
+# Формат:
+# - папка:    folder_name/
+# - маска:    *.log
+# - путь:     RFQ/tags_rfp_compare/input/
+
+# IDE/VC metadata
+.cursor/
+.git/
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.pyo
+*.pyd
+
+# Runtime/cache artifacts (имя «cache» на любой глубине — см. utils/release_zip.py)
+cache/
+debug_output/
+grid_diagnostic_output/
+tmp/
+tmp_step4_compare/
+approval_mail_samples/
+tmp_step4_compare_v2/
+
+# Примеры PDF / регрессия v2 (тяжёлые), отладка адаптации сетки
+pdf_parsing_v2_engine/templates/test_pdf/
+pdf_parsing_v2_engine/templates/stamp_deform_bench/output/
+adapt_debug/
+
+# Generated outputs
+_release/
+release/
+RFQ/tags_rfp_compare/input/_результат_проверки_*/
+*.cache
+*.pkl
+*.log
+
+# Customer EDMS dump (large pickle, not part of the colleague ZIP)
+rd_catalog/База заказчика/
+rd_catalog/База заказчика/*.pkl

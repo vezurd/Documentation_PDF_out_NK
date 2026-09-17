@@ -1,0 +1,343 @@
+# AI GUI — справочник по работе с интерфейсом
+
+> **Правило**: при добавлении нового раздела или кнопки в GUI — обновлять
+> карту разделов (секция 3), help_descriptions.py и этот файл.
+
+---
+
+## 1. Архитектура
+
+- Библиотека: **customtkinter** (CTk)
+- Точка входа: `main.py`, блок `if __name__ in {"__main__"}`
+- Главное окно: `app = customtkinter.CTk()`, resizable, авто-размер по контенту
+- Единственный фрейм: `frame1 = customtkinter.CTkFrame(app)`, grid layout 3 колонки
+
+### Ключевые файлы
+
+| Файл | Назначение |
+|------|-----------|
+| `main.py` | Главное окно: разделы, кнопки, handler-функции, классы виджетов |
+| `help_descriptions.py` | Словарь `HELP_DESCRIPTIONS` — справка по каждой кнопке |
+| `GUI/gui_constants.py` | `GuiConst` — константы и словарь для MTO/Output/Boot кнопок |
+| `utils/folder_select.py` | `getDirectory()`, `getFile()` — диалоги выбора файлов/папок |
+| `utils/path.py` | `open_dir()`, `is_file_path()`, `get_path_from_file_path()` |
+
+---
+
+## 2. Классы виджетов (main.py)
+
+### ButtonWithHelp
+Кнопка + круглая иконка "i" (справка). Основной виджет для кнопок.
+```python
+ButtonWithHelp(
+    master=frame1,
+    text="Текст кнопки",
+    command=handler_function,
+    help_key="ключ_в_HELP_DESCRIPTIONS",
+    row=N, column=M
+)
+```
+- Параметры по умолчанию: `padx=20, pady=12, width=200`
+- При клике на "i" — открывается `show_help(help_key)` → окно CTkToplevel
+
+### SetLabel
+Текстовая метка секции (первая колонка).
+```python
+SetLabel(master=frame1, text="📦 НАЗВАНИЕ", row=N, column=0)
+```
+- `padx=10, pady=10`
+
+### SetButton (устаревший)
+Кнопка через `GuiConst.dict`. Используется редко, предпочтительнее `ButtonWithHelp`.
+
+### Разделитель между секциями
+```python
+customtkinter.CTkFrame(frame1, height=2, fg_color="gray").grid(
+    row=N, column=0, columnspan=3, sticky="ew", padx=10, pady=_SEP_PADY)
+```
+- `_SEP_PADY = 6` — компактный отступ
+
+---
+
+## 3. Карта разделов GUI (row layout)
+
+| Rows | # | Секция | Кнопки |
+|------|---|--------|--------|
+| 0 | 01 | ПРОВЕРКА PDF | Открыть папку с PDF |
+| 1 | — | разделитель | |
+| 2-5 | 02 | ПРОВЕРКА MTO | Папка DWG (MTO+BBB), ⚙, Файл MTO, CO.xlsx, RFQ, Output, Убрать зачеркивания (MTO), Убрать зачеркивания (BOE/BOM/BOQ), checkbox |
+| 6 | — | разделитель | |
+| 7 | 03 | КАБЕЛЬНЫЕ ЖУРНАЛЫ | КЖ: выбрать папку |
+| 8 | — | разделитель | |
+| 9 | 04 | СРАВНЕНИЕ MTO | MTO vs MTO (2 шт.), MTO vs MTO (мульти) |
+| 10 | 04 | (продолж.) | MTO: цепочка ревизий |
+| 11-12 | 05 | ПРОВЕРКА ДС | Объединить ДС из папки, Список ДС vs MTO (файл) |
+| 13 | 06 | MTO vs ДС | MTO vs Список DS |
+| 14 | — | разделитель | |
+| 15 | 07 | МТО с РКД и RFP | Проверка МТО с РКД и RFP, ⚙️ Настройки |
+| 16 | 08 | Проверка as-build | Проверка as-build, ⚙️ Настройки (отдельный конфиг) |
+| 17 | — | разделитель | |
+| 18 | 09 | БАЗЫ ДАННЫХ | Открыть NanoCAD.db |
+| 19 | 10 | ЭКСПОРТ ПРОЕКТА | Собрать ZIP для коллег |
+
+**При добавлении нового раздела**: вставить в нужное место, сдвинуть все
+последующие row-номера, обновить эту таблицу.
+
+---
+
+## 4. Паттерн: добавление нового раздела с кнопкой
+
+### 4.1 Handler-функция (main.py, верхняя часть)
+
+Типовой handler для выбора папки:
+```python
+def open_my_feature():
+    dir_path = folder_select.getDirectory()
+    if is_file_path(dir_path) is False:
+        return None
+    try:
+        result_dir = my_module.run(dir_path)
+        if result_dir:
+            open_dir(result_dir)
+    except Exception as e:
+        print(f"Ошибка: {e}")
+```
+
+Типовой handler для выбора файла:
+```python
+def open_my_feature_file():
+    file_path = folder_select.getFile()
+    if is_file_path(file_path) is False:
+        return None
+    dir_path = get_path_from_file_path(file_path)
+    my_module.run(file_path, dir_path)
+```
+
+### 4.2 Секция в GUI (main.py, блок `if __name__`)
+
+```python
+customtkinter.CTkFrame(frame1, height=2, fg_color="gray").grid(
+    row=N, column=0, columnspan=3, sticky="ew", padx=10, pady=_SEP_PADY)
+
+SetLabel(master=frame1, text="🔧 НАЗВАНИЕ РАЗДЕЛА", row=N+1, column=0)
+ButtonWithHelp(master=frame1, text="Текст кнопки",
+               command=open_my_feature,
+               help_key="my_feature_key", row=N+1, column=1)
+```
+
+### 4.3 Справка (help_descriptions.py)
+
+Добавить запись в `HELP_DESCRIPTIONS`:
+```python
+"my_feature_key": {
+    "title": "Название функции",
+    "description": """
+🔧 НАЗВАНИЕ
+
+Описание функции:
+
+Что проверяется:
+ - пункт 1
+ - пункт 2
+
+Что нужно:
+ - файл/папка
+
+Результат:
+ - выходной файл
+    """,
+    "icon": "🔧"
+},
+```
+
+---
+
+## 5. Паттерн: раздел с кнопкой настроек
+
+Эталон: секция MTO (локальная кнопка `⚙` рядом с DWG-кнопкой) и секция RFP (row 14).
+
+### 5.1 Три файла для настроек
+
+| Файл | Шаблон | Назначение |
+|------|--------|-----------|
+| `*_config.py` | `base/bbb_config.py` | `get_default_config()`, `load_config()`, `save_config()` |
+| `*_settings_gui.py` | `base/bbb_settings_gui.py` | `show_*_settings(parent)` — окно CTkToplevel |
+| `*_config.json` | авто | Создаётся при первом сохранении настроек |
+
+### 5.2 Конфиг (`*_config.py`)
+
+```python
+_CONFIG_FILENAME = "my_feature_config.json"
+
+def _get_config_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), _CONFIG_FILENAME)
+
+def get_default_config() -> Dict[str, Any]:
+    return {"section": {"flag1": True, "flag2": False}}
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = base.copy()
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+def load_config() -> Dict[str, Any]:
+    default = get_default_config()
+    path = _get_config_path()
+    if not os.path.exists(path):
+        return default
+    with open(path, "r", encoding="utf-8") as f:
+        return _deep_merge(default, json.load(f))
+
+def save_config(config: Dict[str, Any]) -> bool:
+    with open(_get_config_path(), "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    return True
+```
+
+### 5.3 GUI настроек (`*_settings_gui.py`)
+
+Ключевые хелперы внутри функции:
+```python
+def show_my_settings(parent=None):
+    config = load_config()
+    win = customtkinter.CTkToplevel(parent)
+    win.title("Настройки: ...")
+    win.geometry("560x620")
+
+    main_frame = customtkinter.CTkScrollableFrame(win)
+    main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+    vars_ = {}
+
+    def add_section(title, row):
+        customtkinter.CTkLabel(main_frame, text=title, font=("Arial", 14, "bold")
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(15,5))
+        return row + 1
+
+    def add_check(key, text, row, value, indent=20):
+        v = customtkinter.BooleanVar(value=value)
+        customtkinter.CTkCheckBox(main_frame, text=text, variable=v
+        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=(indent,0), pady=2)
+        vars_[key] = v
+        return row + 1
+
+    def add_entry(key, label, row, value, width=60):
+        customtkinter.CTkLabel(main_frame, text=label, anchor="w"
+        ).grid(row=row, column=0, sticky="w", padx=(20,5), pady=2)
+        v = customtkinter.StringVar(value=str(value))
+        customtkinter.CTkEntry(main_frame, textvariable=v, width=width
+        ).grid(row=row, column=1, sticky="ew", pady=2)
+        vars_[key] = v
+        return row + 1
+
+    # ... add_section / add_check / add_entry ...
+
+    def collect_config():
+        out = get_default_config()
+        # собрать значения из vars_ в out
+        return out
+
+    def do_save():
+        if save_config(collect_config()):
+            win.destroy()
+
+    btn_frame = customtkinter.CTkFrame(win, fg_color="transparent")
+    btn_frame.pack(fill="x", padx=20, pady=(0,20))
+    customtkinter.CTkButton(btn_frame, text="Сохранить", command=do_save, width=120).pack(side="left")
+    customtkinter.CTkButton(btn_frame, text="Отмена", command=win.destroy, width=100).pack(side="left", padx=10)
+
+    win.transient(parent)
+    win.grab_set()
+```
+
+### 5.4 Кнопка настроек в GUI (main.py)
+
+```python
+customtkinter.CTkButton(
+    frame1, text="⚙", width=36,
+    command=lambda: show_my_settings(parent=app)
+).grid(row=N, column=1, padx=(0, 5), pady=5, sticky="")
+```
+
+Вариант для отдельной кнопки в колонке раздела:
+```python
+customtkinter.CTkButton(
+    frame1, text="⚙️ Настройки", width=120,
+    command=lambda: show_my_settings(parent=app)
+).grid(row=N, column=2, padx=20, pady=12, sticky="w")
+```
+
+### 5.5 Использование конфига в коде
+
+```python
+from my_config import load_config
+
+config = load_config()
+cfg_section = config.get("section", {})
+if cfg_section.get("flag1", True):
+    do_check_1()
+```
+
+Для MTO-кнопок (`Открыть папку DWG с MTO`, `Открыть файл MTO`) используется общий конфиг
+`base/bbb_config.py`:
+- `mto_vs_code_base.enabled` — если `False`, MTO-кнопки не запускают проверку;
+- `mto_vs_code_base` — детальные флаги этапов/подэтапов MTO-проверки;
+- `mto_vs_code_base_correction` — отдельные флаги для блока `base_vs_base_correction`.
+- `bbb_vs_code_base.check_work_code_and_mtr_group` — включает проверку
+  `BBB_WORK_CODE` и `BBB_MTR_GROUP` по данным GoogleBase в `bbb_vs_code_base`
+  (должен иметь checkbox в `bbb_settings_gui.py` и `if cfg.get(...)` guard в `bbb_checks.py`);
+- `bbb_vs_mto.compare_title_marka_revision` — включает проверку
+  `TITLE` / `BBB_MARKA` / `BBB_REVISION` в `bbb_vs_mto_combined` по данным из имени файла MTO
+  (`doc_Title_4d` / `doc_Marka` / `doc_Revision` через `doc_ATTRIBUTES`);
+- `folder_rules.search_only_in_dwg` — ограничение для кнопки папки MTO+BBB:
+  если `True`, запуск разрешён только для папки с именем `DWG` (по умолчанию включено).
+
+---
+
+## 6. Утилиты выбора файлов/папок
+
+```python
+from utils import folder_select
+from utils.path import open_dir, get_path_from_file_path, is_file_path
+
+# Выбор папки (системный диалог)
+dir_path = folder_select.getDirectory()
+if is_file_path(dir_path) is False:
+    return None
+
+# Выбор файла
+file_path = folder_select.getFile()
+if is_file_path(file_path) is False:
+    return None
+
+# Путь к папке из пути к файлу
+dir_path = get_path_from_file_path(file_path)
+
+# Открыть папку в проводнике
+open_dir(result_dir)
+```
+
+`folder_select.set_main_window(app)` вызывается один раз при старте —
+делает диалоги дочерними окнами главного окна.
+
+---
+
+## 7. Существующие реализации (как эталоны)
+
+### Объединённая кнопка MTO+BBB: open_mto_dwg_with_optional_bbb
+Один выбор папки → один `result_dir` → запуск MTO и/или BBB по флагам → открытие общей папки результата.
+
+### Кнопка + настройки: MTO+BBB (локальная шестерёнка)
+- Config: `base/bbb_config.py`
+- Settings GUI: `base/bbb_settings_gui.py`
+- Анализ BBB: `base/bbb_analysis.py` — поддерживает `out_dir` для общей папки результата
+- Анализ MTO: `base/google_sheets.py` — поддерживает `out_dir` и опциональный `cfg`
+- MTO-кнопки (папка/файл) должны читать один и тот же конфиг и одинаковые флаги `mto_vs_code_base` + `mto_vs_code_base_correction`
+
+### Кнопка + настройки (сложный): RFP tags
+- Config: `RFQ/tags_rfp_compare/rfp_tags_utils.py` — `load_config()` / `save_config()`
+- Settings GUI: `RFQ/tags_rfp_compare/rfp_tags_settings_gui.py`
+- Запуск в отдельном процессе: `wire_agregate_tags_button` / `wire_agregate_tags_asbuild_button` в `main.py` → `gui_subprocess_job.run_subprocess_job_on_button` (`subprocess.Popen` + worker-thread + таймер/статус на `CTkButton`)

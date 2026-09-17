@@ -1,0 +1,911 @@
+---
+description: "DS vs MTO compare — grouped MVP, DS vs MTO vs RFQ (этап 2), DsMtoComparator, IN_CABINET, units, конфиг и отладка."
+globs:
+  - "RFQ/ds_compare/**"
+  - "RFQ/mto_compare.py"
+  - "ds_compare_center/**"
+alwaysApply: false
+---
+
+# DS vs MTO — сравнение закупочной спецификации с MTO
+
+> Отдельный контур от **RFP↔MTO step4** (`AI_rfq_context.mdc`). Финальный Excel **RFP · Запуск** (столбцы, цвета, УЛ): `AI_rfp_step4_excel.mdc`. Общие классы: `RowStd`, `CheckElement`, колонки `base/tables_columns.py`.
+
+## Когда читать это правило
+
+- правки `analyze_ds_specification`, **`analyze_grouped_ds_specification`**, `DsMtoComparator`, загрузки MTO для ДС, Excel `_xw`, `IN_CABINET`
+- grouped-режим (ключи группировки, пост-процесс MTO-only «Новая позиция»), Excel-колонки `ColumnDef`
+- отладка «пустой колонки шкафов», порядка расходования MTO-строк, кэша MTO
+- правки **`ds_compare_center/`** (GUI PySide6, вкладки, `gui_paths`, тема; `--tab` см. таблицу вкладок)
+- **УПД (файлы закачки 1С):** `upd_load.py`, вкладка «ДС · УПД», свод `upd_summary_*`
+- **RFP · ДС ↔ УЛ:** покрытие файлов RFP vs папок УЛ по фактическому номеру (`rfp_ds_id` / `ds_id` / `rfp_ul`)
+- **RFP · ДС ↔ МП:** файлы RFP vs фамилии в `Список ДС - Фамилии МП.xlsx` (`rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers`)
+- **ТСД / упаковочные листы:** `tsd_packing_load.py`, общий `RFQ/packing_list_provider.py`, `ds_packing_grouped_compare.py`, вкладка «Упаковочные листы», кэш `tsd_packing_*`, сравнение с ручным сводом Зиновьева (`tsd_zinoviev_compare.py`)
+- **RFQ TPK / этап 2:** `RFQTPK`, `load_rfq_tpk_data`, **`ds_rfq_grouped_compare.py`**, **`ds_units_normalize.py`**, RFQ-only строки, колонки RFQ в grouped Excel
+- **кэш grouped compare:** `grouped_compare_cache.py`, `cache_ds_mto_result`
+- **настройки колонок Excel:** вкладка «Столбцы Excel», `ds_vs_mto_output.columns` в JSON, `column_config_from_output_settings`
+- **Не это правило:** финальный xlsx **RFP · Запуск** (Step4 столбцы/цвета/УЛ) → `AI_rfp_step4_excel.mdc`
+
+## Точки входа
+
+| Символ | Файл | Вызов |
+|--------|------|--------|
+| **`analyze_ds_specification`** | `RFQ/ds_compare/ds_start_init.py` | Построчный оркестратор (legacy, по умолчанию) |
+| **`analyze_grouped_ds_specification`** | `RFQ/ds_compare/ds_grouped_compare.py` | Grouped MVP: свод по ключам → compare → Excel |
+| **`merge_ds_folder`** | `RFQ/ds_compare/ds_merge_folder.py` | Свод xlsx ДС из папки |
+| **`mto_ds_list_compare`** | `RFQ/ds_compare/mto_ds_compare.py` | MTO vs список ДС (обратное направление) |
+| **`load_and_merge_upd`** | `RFQ/ds_compare/upd_load.py` | Свод xlsx УПД (файлы закачки 1С) |
+| **GUI control center** | `ds_compare_center/` | `python -m ds_compare_center` — основной GUI (см. ниже) |
+| **`main.py`** | одна кнопка | `subprocess` → `python -m ds_compare_center` |
+| Legacy actions (Qt6) | `main_v2/legacy_actions.py` | `run_merge_ds_dir` / `run_ds_mto_file` / `run_grouped_ds_mto_file` / `run_mto_ds_file` / `run_upd_load` |
+| CTk настройки (legacy) | `ds_mto_path_settings_gui.py` | `main_v2/settings_launchers.py ds` — дублирует часть JSON; предпочтительно вкладки в control center |
+| `__main__` | `ds_start_init.py` | локальный тест по `ds_path` |
+
+**Назначение (с 09.2025):** сравнить закупочную спецификацию (ДС) с рабочей MTO по кодам/количествам; результат — Excel рядом с исходным ДС.
+
+**Grouped MVP (05.2026):** ДС агрегируется по ключам → compare → Excel. Без RFQ: `РОБОТ_СРАВНЕНИЕ_GROUPED_*_xw.xlsx` рядом с ДС.
+
+**Grouped DS vs MTO vs RFQ (05.2026, этап 2):** merge RFQ в `compared_rows`, колонки баланса и статусов, подсветка единиц измерения. Выход: **папка RFQ**, имя `<имя_RFQ>_ДС_МТО__<ГГГГ.ММ.ДД_ЧЧ.ММ>.xlsx`.
+
+## `ds_compare_center` — GUI (обновлено 2026-08-13)
+
+> Ориентир по UX/запуску — `AI_v2_monitor.mdc` (отдельный процесс PySide6, не смешивать с CTk `main.py`).
+
+**Пакет:** `ds_compare_center/`  
+**Запуск:** `python -m ds_compare_center [--tab run|mto_paths|settings|columns|packing|tsd|tsd_help|upd|upd_load|rfp|rfp_settings|rfp_parts|rfp_ds_id|rfp_ds_mp|misc|mto_run|bbb|mto_settings]` (без `--tab` открывается **Прочее · Запуск**)  
+**Из `main.py`:** кнопка «Центр управления ДС vs MTO» → `subprocess.Popen([sys.executable, "-m", "ds_compare_center"])`.  
+**VS Code:** `.vscode/launch.json` — конфигурации `Python: ds_compare_center (...)`.
+
+**Размер окна / сплиттер:** блок `gui_window` в `ds_compare_config.json` (`width`/`height`/`maximized` + `splitters.run|packing|upd|rfp_run|rfp_parts|rfp_ds_id|rfp_ds_mp|misc_run`). Пишется с debounce при resize/splitterMoved и при закрытии окна (`layout_persistence.DebouncedLayoutSaver`); восстанавливается при следующем открытии.
+
+| Файл | Роль |
+|------|------|
+| `__main__.py` | Entry point, тема при старте |
+| `center_window.py` | `CenterWindow` — вкладки ДС + RFP + прочее из `main.py`, job monitors, runners |
+| `mto_paths_panel.py` | Вкладка «Папки МТО»: `mto_paths`, `mto_path_selected_index` |
+| `settings_panel.py` | Вкладка «Настройки»: flat/cache/force, IN_CABINET debug, grouped, `show_internal_column_names` |
+| `columns_panel.py` | Вкладка «Столбцы Excel»: вывод/ширина/название/цвет заголовка → `ds_vs_mto_output.columns` |
+| `tsd_packing_panel.py` | Вкладка «Упаковочные листы»: обход ТСД, свод/кэш, сравнение с Зиновьевым, «Открыть папку свода» |
+| `tsd_packing_help_panel.py` | Вкладка «Формат ТСД»: шпаргалка столбцов STD / SO - PL (ручная сверка) |
+| `upd_panel.py` | Вкладка «ДС · УПД»: обход файлов закачки 1С, свод, статистика |
+| `rfp_run_panel.py` | **RFP · Запуск**: dynamic action text, aggregate/as-build, Step4, 15 live milestones. Итоговый xlsx Step4 — `AI_rfp_step4_excel.mdc` |
+| `rfp_progress_parser.py` | Chunk-safe parser `@@RFP_MILESTONE ` JSON |
+| `rfp_settings_panel.py` | **RFP · Настройки**: native PySide6, профили Main/As-build, все RFP settings, УЛ status/navigation |
+| `rfp_parts_panel.py` | **RFP · Сбор частей**: report-only `python -m RFQ.rfp_parts` из `RFP_Зиновьев` (сумма в свод, без decrease); штамп-папки `…\RFP сводный файл\YYYY.MM.DD_HH.MM\` (net + collisions) |
+| `rfp_ds_id_panel.py` | **RFP · ДС ↔ УЛ**: таблица покрытия файлов RFP vs папок УЛ (`check_ds_id_coverage`) |
+| `rfp_ds_mp_panel.py` | **RFP · ДС ↔ МП**: таблица файлов RFP vs фамилий МП (`run_ds_roster_compare_job`) |
+| `misc_run_panel.py` | **Прочее · Запуск**: оставшиеся кнопки `main.py` (PDF v2, MTO/BBB, КЖ, ревизии MTO, NanoCAD, ZIP) через `main_v2.legacy_actions` |
+| `bbb_settings_panel.py` | **MTO · Настройки**: native PySide6 клон CTk `bbb_settings_gui`; `bbb_analysis_config.json`, merge-on-save |
+| `split_layout.py` | Общий горизонтальный макет (лево + Job monitor) |
+| `theme.py` | `light_high_contrast` через `main_v2.appearance.apply_theme` |
+
+### Вкладки
+
+ДС, RFP и прочее визуально разделены disabled-вкладками `│ RFP` и `│ Прочее`. Заголовок окна: «Центр ДС, RFP и MTO».
+
+| Вкладка | `--tab` | Содержимое |
+|---------|---------|------------|
+| **ДС · Запуск** | `run` | Пути (ДС, RFQ TPK, merge-папка, пресет МТО); операции; `JobMonitorPanel` + `FunctionJobRunner` |
+| **ДС · Папки МТО** | `mto_paths` | Список пресетов, редактирование, пресет по умолчанию |
+| **ДС · Настройки** | `settings` | Остальной блок `ds_compare_config.json` (без пресетов МТО и без `columns`) |
+| **ДС · Столбцы Excel** | `columns` | Таблица всех `ColumnDef`: вывод, название, ширина, цвет заголовка |
+| **ДС · Упаковочные листы** | `packing` / `tsd` | Путь к папке ТСД; чтение/анализ; открыть `\\bcc\eng\...\УЛ сводный файл` |
+| **ДС · Формат ТСД** | `tsd_help` / `packing_help` | Шпаргалка столбцов xlsx (STD `Single*` \| SO - PL) для ручной проверки |
+| **ДС · УПД** | `upd` / `upd_load` | файлы закачки 1С («Реализация 2_0»); position_row; свод с именем файла и путём |
+| **RFP · Запуск** | `rfp` / `rfp_run` | Основной/as-build `ProcessJobRunner`, открыть Step4, открыть матрицу BCC, dynamic `↔ УЛ`, 15 live milestones |
+| **RFP · Настройки** | `rfp_settings` | Native редактор двух JSON-профилей; merge-on-save; источник RFP (`use_latest_net` / `rfp_path`); as-build fixed; статус УЛ |
+| **RFP · Сбор частей** | `rfp_parts` / `parts` | Report-only: папка `RFP_Зиновьев`, сумма в `rfp_parts_net.xlsx` (`AI_rfp_parts.mdc`); «Проверить части RFP и сформировать отчёт»; production Step1/`Сводная RFP.xlsx` не создаются |
+| **RFP · ДС ↔ УЛ** | `rfp_ds_id` / `ds_id` / `rfp_ul` | покрытие файлов RFP vs папок УЛ по фактическому номеру ДС; [ds_identity.py](RFQ/rfp_parts/ds_identity.py) |
+| **RFP · ДС ↔ МП** | `rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers` | файлы `RFP_Зиновьев` vs фамилии в `Список ДС - Фамилии МП.xlsx`; вердикт «ОК / надо дозаполнить / лишние / дубликаты»; на Лист2 справа столбцы Статус / Дубликат / Что делать (`Имя ДС` и `Фамилия` не меняет); [ds_manager_roster.py](RFQ/tags_rfp_compare/ds_manager_roster.py) |
+| **Прочее · Запуск** | `misc` / `mto_run` (default) | Кнопки `main.py`, которых нет во вкладках ДС/RFP: PDF v2 monitor, MTO DWG+BBB, открыть файлы, зачёркивания/1C, КЖ, MTO vs MTO, NanoCAD, ZIP. Лог справа, не на «ДС · Запуск». |
+| **MTO · Настройки** | `bbb` / `mto_settings` | Native чекбоксы 1:1 с CTk `show_bbb_settings`; тот же `bbb_analysis_config.json`; неизвестные JSON-ключи не затираются |
+
+Не дублировать на «Прочее»: merge ДС, ДС vs MTO, grouped/RFQ-only, MTO vs ДС, УЛ, УПД, RFP/as-build. `main.py` и CTk-окна настроек не удаляются.
+
+### RFP native settings и live progress (2026-07-29)
+
+Native-вкладка заменяет CTk как основной UI control center. CTk сохранён только для старых entry points и также обязан patch/merge сохранять неизвестные JSON-ключи. Полная RFP schema, зависимости и fixed as-build значения: `RFQ/tags_rfp_compare/SETTINGS_REFERENCE.md`; свежесть свода частей: `AI_rfp_parts.mdc`.
+
+RFP run button читает Main config: `step4.include_packing_lists=true` → текст содержит `↔ УЛ`, иначе нет. Пятнадцать строк:
+
+`prepare`, `ds_id_check`, `ds_mp_check`, `parts_preflight`, `ul_preflight`, `rfp_load`, `mto_google_load`, `vo_load`, `units_gate`, `step4_match`, `global_checks`, `packing_lists`, `save_excel`, `bcc_accum_matrix`, `complete`.
+
+Backend печатает канонический marker `@@RFP_MILESTONE ` + JSON с `milestone_id`, `state`, `detail`; состояния только `Waiting/Running/Done/Skipped/Error`. `RfpProgressParser` принимает произвольные chunks, включая разрез marker/JSON/UTF-8. При ненулевом exit runner переводит в Error только текущий active milestone.
+
+As-build process получает путь `rfp_tags_compare_config_asbuild.json`: CLI merge выполняется с as-build defaults, `rfp_parts.use_latest_net=false` форсируется. Ошибка чтения/JSON явно переданного config завершает subprocess ненулевым кодом.
+
+### Вкладка «Запуск» — операции
+
+Строка = **кнопка (левая половина)** + **краткое описание (правая половина)**. Тексты описаний — в `_build_operations_group` (`center_window.py`).
+
+| Кнопка | Backend (`legacy_actions`) |
+|--------|----------------------------|
+| Объединить ДС из папки | `run_merge_ds_dir` → `merge_ds_folder` |
+| Список ДС vs MTO | `run_ds_mto_file` → `analyze_ds_specification(..., summ_ds=True)` |
+| ДС vs MTO vs RFQ | `run_grouped_ds_mto_file(ds, rfq?)` → `analyze_grouped_ds_specification(..., rfq_path=...)` |
+| Только RFQ → Excel (кэш) | `run_grouped_ds_mto_rfq_only_file(ds, rfq)` → `analyze_grouped_ds_specification(..., rfq_only=True)` |
+| MTO vs Список ДС | `run_mto_ds_file` → `mto_ds_list_compare` (может быть временно скрыта в UI) |
+
+Пути **ДС / RFQ / merge-папка / ТСД** и выбор пресета МТО сохраняются в JSON (`gui_paths`, `mto_path_selected_index`). После успешного job — `open_dir` к результату.
+
+**RFQ на «Запуск»:** поле «Файл RFQ (TPK xlsx)» → `gui_paths.last_rfq_file`; передаётся в `run_grouped_ds_mto_file`. Пустое поле в UI → fallback на `last_rfq_file` из JSON.
+
+## ТСД / упаковочные листы (07.2026)
+
+> Загрузчик создаёт свод/кэш, общий provider проверяет его. УЛ используют два независимых потребителя: grouped «ДС vs MTO vs RFQ» и RFP Step4 в `agregate_tags`; построчный `analyze_ds_specification` УЛ не обогащается.
+>
+> Имена папок ТСД (`согл УЛ ДС24`) — идентификатор ДС для покрытия RFP↔УЛ (фактический номер): [ds_identity.py](RFQ/rfp_parts/ds_identity.py). Ключ посадки строк УЛ это не меняет.
+
+**Инвентаризация листов (Gate 0):** `tmp/tsd_sheets_inventory.py` → `tmp/tsd_sheets_inventory_report.txt`.  
+Ожидание изначально: ровно `Single 1` + `Master 1`. Факт на сетевом корне: много файлов с `Single 2+`; часть — `SO - PL` / прочие имена.
+
+**Загрузка:** `RFQ/ds_compare/tsd_packing_load.py` → `load_and_cache_tsd_packing`  
+**GUI action:** `run_tsd_packing_load` → вкладка «Упаковочные листы».
+
+| Правило листов | Поведение |
+|----------------|-----------|
+| `Master*` | Не читаем (служебный) |
+| Все остальные (`Single*`, `SO - PL`, …) | Сканируем на **`position_row`** (данные не теряем) |
+
+Отчёт вкладок при полном прогоне: `\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\УЛ сводный файл\tsd_packing_sheets_report.txt` — строки = имена вкладок; столбцы `files`, `position_rows`, `skipped_master`, `load_errors`; ниже детализация файл×вкладка.
+
+**Параллельность:** чтение файлов в `ThreadPoolExecutor` (I/O UNC/xlsx), по умолчанию `DEFAULT_TSD_LOAD_WORKERS=8`; параметр `workers=` у `load_and_cache_tsd_packing` (`1` = последовательно). Без ProcessPool — `RowStd` остаётся в процессе.
+
+**Оптимизация чтения (07.2026):** один `openpyxl.load_workbook` на файл; все data-sheets из того же handle через `load_rows_from_worksheet` + `list_raw_to_std` + `trim_empty_rows_from_end` (`_load_tsd_sheet_light`). **Не** вызываются `get_std_from_excel_file` / `add_cabinet_composition_info` / `add_section_type_info`. Прогон ~582 файлов по UNC: ~10.8 мин → ~40s wall.
+
+**Шпаргалка столбцов xlsx (ручная проверка при «0 позиций»):** вкладка GUI **«ДС · Формат ТСД»** (`--tab tsd_help`) или таблица ниже. Источник: `ColNames.TsdPacking` / `TsdPackingSoPl` в `base/tables_columns.py`.  
+Позиция (`position_row`): **обяз.** CODE + NAME + VALUES + UNITS; **опц.** TAGS, VENDOR. Остальные столбцы робот не читает.  
+STD (`Single*`): формат CODE не ограничен (BCC, ECBL, …); жёстко отсекаются только заголовки/баннер индексов (по началу ячейки / точным меткам — не substring «количество» внутри наименования). SO - PL: детект по имени вкладки `SO - PL` (`is_sopl_sheet`); шапка `Name of Zip` / `Name of document` → `other_row`.
+
+| STD — вкладки `Single*` | SO - PL — вкладка `SO - PL` |
+|-------------------------|-----------------------------|
+| **B** CODE — код РД (любой формат) — **обяз.** | **C** SPECIFICATION_NAME — Name of document → fallback title/system |
+| **C** SPECIFICATION_NAME — имя спеки → parse `DS_TITLE`/`DS_SYSTEM` (пробелы снимаются) | **F** VENDOR — поставщик — **опц.** |
+| **D** TAGS — теги — **опц.** | **G** CODE — PO item — **обяз.** |
+| **H** NAME;TYPE_MARK — наименование;хар-ки (split по первому `;`) — NAME **обяз.**, TYPE_MARK **опц.** | **J** TAGS — теги — **опц.** |
+| **I** VALUES — количество — **обяз.** | **M** NAME — Russian translation — **обяз.** (`TYPE_MARK` нет) |
+| **J** UNITS — ед. изм. — **обяз.** | **N** VALUES — Quantity — **обяз.** |
+| **M** VENDOR — поставщик — **опц.** (часто пуст) | **O** UNITS — ед. изм. — **обяз.** |
+| | **BE** DS_TITLE — Титул — **опц.** (если пуст — из SPEC) |
+| | **BF** DS_SYSTEM — Марка — **опц.** (если пуст — из SPEC) |
+
+Типы: `t_com_init_cls.TsdPacking` / `get_row_type_variants/TsdPacking.py`; `TsdPackingSoPl` / `TsdPackingSoPl.py`.
+
+**Артефакты** в `\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\УЛ сводный файл`  
+(`DEFAULT_TSD_PACKING_OUTPUT_DIR` / `tsd_packing_cache_dir()` в `tsd_packing_load.py`):
+
+| Файл | Назначение |
+|------|------------|
+| `tsd_packing_rows.cache` | pickle `list[RowStd]` + строгая quality-meta v5 |
+| `tsd_packing_summary_YYYY.MM.DD_HH.MM.SS.xlsx` | свод для просмотра (имя всегда с датой/временем через `tsd_packing_summary_xlsx_name`); `Строка в исходном УЛ` совпадает с `строка N` в audit/report |
+| `tsd_packing_load_report.txt` | статистика + список failures |
+| `tsd_packing_sheets_report.txt` | имена вкладок → число `position_row` (+ detail) |
+| `tsd_packing_critical.txt` | критичные замечания по входным файлам (сдвиг столбцов, 0 позиций, ошибки) |
+
+В GUI вкладки «Упаковочные листы» блок **«Критичные замечания»**: зелёный OK = можно не открывать txt; красный список = смотреть/править исходники. Источник: `get_last_tsd_critical_report()` / файл выше.
+
+Кнопка **«Открыть папку свода»** → `open_dir` той же сетевой папки «УЛ сводный файл».  
+Конфиг источника ТСД: `gui_paths.last_tsd_packing_folder` (это **вход**, не папка свода).
+
+### Сравнение свода робота с ручным сводом Зиновьева (07.2026)
+
+**Модуль:** `RFQ/ds_compare/tsd_zinoviev_compare.py` → `compare_robot_vs_zinoviev`  
+**GUI:** вкладка «ДС · Упаковочные листы» → **«Сравнить свод робота с Зиновьевым»**  
+**Action:** `run_tsd_zinoviev_compare` (`legacy_actions`)
+
+Ручной эталон (по умолчанию)::
+
+`\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\УЛ сводный файл\Сводный от Зиновьева\ТСД по всем ДС_общий.xlsx`
+
+Вкладка файла: `общая ` (~34k строк, конкатенация форм packing list). Значимые столбцы (0-based), после вставки имени УЛ в столбец B:
+
+| Col | Поле |
+|-----|------|
+| A 0 | № ДС (`ДС15` / `4905` / `ГФ 5`) |
+| B 1 | **имя УЛ** (`PL_2076…` / `Packing list №5` / `PLAN004466FR`) |
+| C 2 | CODE |
+| D 3 | SPECIFICATION_NAME → `parse_title_system_from_spec_name` → Титул/Марка |
+| E 4 | TAGS |
+| I 8 | NAME |
+| J 9 | VALUES (Quantity) |
+| K 10 | UNITS |
+| N 13 | VENDOR |
+
+**Фильтр мусора:** баннеры Shipper/Consignee/Total/«№ грузового места», повторяющиеся bilingual headers «Код РД / Code RD», строки индексов столбцов (15,16,…), пустой CODE, нечисловое Quantity, пустые NAME+UNITS.
+
+Сторона робота: `load_packing_dataset()` (кэш `tsd_packing_rows.cache`). Один проход чтения Зиновьева, затем **два** варианта агрегации/сравнения:
+
+1. **Без УЛ в ключе** — `ul_compare_key(title, system, code, "")` (как раньше: сумма qty/тегов по всем УЛ с одним титулом/маркой/кодом).
+2. **С УЛ в ключе** — `ul_compare_key(title, system, code, packing_list_name)`. Имя УЛ: у Зиновьева — **столбец B**; у робота — basename файла (`ANNOTATION`), токен `PL_…` / `PL-…` / `AN######` / голый id. Вкладка пока **не** в ключе.
+
+**Выход:** папка  
+`...\Сводный от Зиновьева\_результат_сравнения_ГГГГ_ММ_ДД_ЧЧ_ММ\`  
+
+| Файл | Режим |
+|------|--------|
+| `сравнение_титул_марка_код.xlsx` + `отчет_титул_марка_код.txt` | без УЛ |
+| `сравнение_титул_марка_код_УЛ.xlsx` + `отчет_титул_марка_код_УЛ.txt` | с УЛ |
+
+В каждом xlsx два листа:
+
+1. **«Робот vs Зиновьев»** (xlsxwriter, стиль как step4): autofilter, freeze A2, колонки **Титул**, **Марка**, **Титул-Марка**, код, **Упаковочный лист** / УЛ робот / УЛ Зиновьев, **Покрытие Зиновьева**, статус кол-ва, qty, ед.изм., наименование, **Теги робот**, **Теги Зиновьев**, **Разница тегов**, спека, № ДС, источники.
+2. **«УЛ имена»**: колонки **УЛ Зиновьев (столбец B)**, **УЛ робот (id)** (извлечённый номер без `_ред…` / `новая`), **Статус**, **УЛ робот (файл)** (полный basename), ключ нормализации, счётчики; autofilter. Статусы: `Совпадение`, `Совпадение (разное написание)`, `Только у Зиновьева`, `Только у робота`. Хвосты редакций в имени файла робота обрезаются при нормализации ключа.
+
+Теги нормализуются через `parse_tags`: list из кэша робота, `;`/переносы, обрезка `['…']` / кавычек (суффикс `(Ex)` сохраняется). Разница тегов пустая при совпадении множеств; иначе `только Зиновьев: … | только робот: …`.
+
+| Покрытие Зиновьева | Смысл |
+|--------------------|--------|
+| Покрыто | ключ есть, qty робота ≥ Зиновьева, все теги Зиновьева ⊆ робот |
+| Нет в роботе | ключ только у Зиновьева |
+| Недобор кол-ва | qty робота < Зиновьева |
+| Не хватает тегов | у робота нет части тегов Зиновьева |
+| Недобор кол-ва и тегов | оба дефекта |
+
+| Статус кол-ва | Цвет |
+|---------------|------|
+| Совпадение | зелёный |
+| Расхождение кол-ва | жёлтый |
+| Совпадение (ед. изм. различаются) | soft_yellow |
+| Только в роботе | soft_cyan |
+| Только у Зиновьева | match_added_mto |
+| Нет титула/марки | красный |
+
+### Общий provider и качество кэша УЛ (07.2026)
+
+**Модуль:** `RFQ/packing_list_provider.py` (не зависит от DS comparator/step4).
+
+- `load_packing_dataset()` всегда возвращает `PackingDataset`, а не тихий `None`.
+- Quality: `ok`, `partial`, `unavailable`; проблемы — структурированные `PackingIssue` с файлом, вкладкой и Excel-строкой.
+- Отсутствующий, битый, старый или несогласованный cache → `unavailable` с действием «повторите Прочитать и проанализировать».
+- Cache **v6** meta: `created_at`, source `root`, fingerprint, counters, `critical`, `loader_issues`, пути к summary/load/sheets/critical reports. Data = slim `RowStd` (`PACKING_CACHE_COLUMNS`: title/system/code/qty/units/tags/name/type/vendor/source/sheet/row_type) — тот же набор `position_row`, что свод xlsx; без ~135 пустых CE и UNC `TableComments`. Старый v5 → `unavailable` до перечитывания.
+- Pickle пишется атомарно через временный файл + `os.replace`.
+- `load_tsd_packing_pickle()` оставлен compatibility-wrapper; новые потребители используют provider.
+- Общие ключи grouped DS: `packing_match_key(title, system, code)` (3-tuple; **пока** без actual). Step4 RFP↔УЛ — отдельный `rfp_packing_match_key(actual, title, system, code)`. Нормализация без пробелов/case; источник строки: `ANNOTATION` (файл), `TITLE` (вкладка), `_packing_source_row`.
+- TSD loader сканирует лист полностью (`max_empty_rows=None`), чтобы не терять строки после длинных пустых участков.
+- TSD loader заранее пишет `packing_tags_exceed_quantity` в reports/cache issues, если число заполненных тегов больше количества; RFP matcher повторяет эту проверку и останавливает свой Excel, DS matcher продолжает работать по прежним правилам качества.
+- Если запись свода не удалась (`FileCreateError`), loader повторяет с уникальным штампом (µs) через тот же `save_tsd_packing_summary_xlsx`.
+
+Любая ошибка файла/вкладки, позиция без `(DS_TITLE, DS_SYSTEM, CODE)`, нечисловое количество или строка, похожая на позицию без обязательных полей, переводит quality в `partial`. Свод и cache всё равно создаются, но GUI показывает красное предупреждение.
+
+### Grouped DS/MTO/RFQ vs УЛ (07.2026)
+
+**Модуль:** `RFQ/ds_compare/ds_packing_grouped_compare.py`. Это прежний DS matcher; RFP использует отдельный `RFQ/tags_rfp_compare/step4/step4_packing_compare.py`. Точка вызова DS — после optional RFQ merge, вне `grouped_cmp_*.cache`; поэтому RFQ-only запуск также перечитывает актуальный cache УЛ.
+
+Ключ УЛ всегда `(DS_TITLE, DS_SYSTEM, code)`, коды проверяются в порядке `CODE`, `CODE_2`, `RFQ_CODE`. Все валидные строки УЛ по ключу суммируются как накопительные поставки.
+
+Формулы:
+
+- `ul_ordered_values = VALUES + RFQ_VALUES` (`RFQ_VALUES=0`, если RFQ нет);
+- `ul_values` = сумма валидных количеств УЛ;
+- `ul_remaining_values = ul_ordered_values - ul_values`.
+
+Если grouped-настройки дали несколько итоговых строк одного ключа, заказ суммируется по ним, а УЛ показывается только на первой строке; остальные получают `УЛ учтён выше`. Это запрещает повторно вычесть одну поставку.
+
+Статусы:
+
+| Статус | Условие / цвет |
+|---|---|
+| `Поставка комплектна` | остаток = 0, зелёный |
+| `Недопоставка` | остаток > 0, жёлтый |
+| `Перепоставка` | остаток < 0, голубой |
+| `Нет в УЛ` | ключ результата отсутствует в УЛ, жёлтый |
+| `Проблема данных УЛ` | invalid qty/key/units/подозрительный точный дубль, красный |
+| `УЛ недоступны` | cache missing/corrupt/old, красный |
+| `Только в УЛ` | валидный ключ УЛ отсутствует в DS/MTO/RFQ, cyan |
+
+Некорректные количества не превращаются в ноль: валидная часть суммы видна, но статус/quality красные. `NaN`, `Inf`, отрицательные и пустые количества недопустимы. UL-only и проблемные строки дописываются в конец; точные источники сохраняются в `ul_source_files` и comments.
+
+Отчёт `ul_compare_report_<timestamp>.txt` пишется рядом с итоговым Excel: cache meta, counters, все issues, source reports и sample miss keys. Ошибка чтения УЛ не блокирует Excel; ошибка записи audit-report также не скрывается в Job monitor. В «ДС · Запуск» отдельная UL-audit label зелёная только при quality `ok`, иначе красная.
+
+## УПД — файлы закачки 1С (09.2026)
+
+> Это **не** счёт-фактура / универсальный передаточный документ и **не** packing list. В папке лежат выгрузки 1С «файл закачки» отчёта остатков `Реализация работ 2_0` / `РеализацияТоваров2_0`.
+
+**Модуль:** `RFQ/ds_compare/upd_load.py` → `load_and_merge_upd`  
+**GUI:** вкладка **«ДС · УПД»** (`--tab upd` / `upd_load`) — [upd_panel.py](ds_compare_center/upd_panel.py)  
+**Action:** `run_upd_load` (`legacy_actions`)
+
+Источник по умолчанию (`DEFAULT_UPD_ROOT` / `gui_paths.last_upd_folder`):
+
+`\\bcc\root\CurProjects\di_manegers\Пятницкий_П\Амурский ГХК\Поставки\Файл закачки УПД по всем ДС`
+
+(орфография шары `di_manegers` — как на диске). Инвентаризация ~613 Excel: 609 `.xlsx` + 4 `.xls`. Две раскладки **одной** формы 1С; шапка обычно двустрочная (группа + деталь), баннер «Остатки…» / «форма отчета имеет нужный формат…» пропускается. Иногда шапка с строки 2–4; часть книг — только детальная строка (например ДС 81).
+
+| Раскладка | Типично | Отличие |
+|-----------|---------|---------|
+| **compact** | без уровней | A=`Нпп` (часто из групповой строки), B=`Позиция`; `Этап по Договору` наследуется из группы |
+| **wide** | `Уровень 1..5` перед `Позиция` | иногда ещё `БФирма`, `Id строки спецификации` |
+
+Детект шапки: в строке есть **Наименование** и (**Код 1С** или **Код производителя**), плюс `Позиция` или `Кол-во (остаток)`. Читаются **все** колонки: канонический набор + неизвестные заголовки как `extra:…`. Классификация `position_row` — не `RowStd`/`ColNames` (слишком много 1С-полей); строка позиция, если после шапки заполнено `Нпп` / позиция спецификации / наименование / код 1С / код производителя.
+
+**Правило вкладок (не удваивать):** если в книге есть primary (`Лист1`, `Лист_1`, `Лист_1 (2)`, `общая`, `общий`) — грузим только их; title-split копии (`6600`, `спец40`, …) пропускаются. Если primary нет — все вкладки с шапкой УПД. `Лист2` часто пустой/другой формат.
+
+**Не merge как УПД:** `.xls` (openpyxl не читает); настоящая счёт-фактура УПД (`Универсальный передаточный документ`); складские «вендор / код товара». Пишутся в отчёт, свод по валидным xlsx всё равно создаётся. `success=True`, если есть хотя бы одна `position_row`.
+
+**GUI:** кнопка «Прочитать и сформировать свод», лог справа (`JobMonitorPanel`, как ТСД), «Открыть свод», «Открыть папку свода», краткая статистика (файлы / compact·wide / position_row / замечания).
+
+**Артефакты** в `\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\УПД сводный файл`  
+(`DEFAULT_UPD_OUTPUT_DIR` / `upd_output_dir()`):
+
+| Файл | Назначение |
+|------|------------|
+| `upd_summary_YYYY.MM.DD_HH.MM.SS.xlsx` | свод `position_row`; сначала **Имя файла**, **Путь к файлу**, относительный путь, папка ДС, вкладка, строка, раскладка; затем все данные |
+| `upd_load_report.txt` | счётчики, папки, ошибки, доп. колонки |
+
+Параллельность: `ThreadPoolExecutor`, по умолчанию `DEFAULT_UPD_LOAD_WORKERS=8`; `workers=1` — последовательно. Полный UNC-прогон (~609 xlsx) в сессии разработки не гонялся; smoke — синтетические compact/wide + skip split + reject invoice (`tmp/test_upd_load_smoke.py`).
+
+## Пайплайн `analyze_ds_specification` (построчный)
+
+```
+1. load_ds_compare_config()          → ds_compare_config.json
+2. load_ds_data(ds_path, summ_ds)    → List[RowStd] (кэш DS)  [или ds_data_override]
+3. load_mto_data(ds, mto_path)       → mto_dict, spec_dict, load_audit
+4. load_replacement_table(...)       → Code_Replacement_Table.xlsx
+5. MtoCheck(mto_dict).check()
+6. validate_and_exit_if_errors()     → VALUES must be float; иначе sys.exit(1)
+7. [debug] CabinetInCabinetTrace     → ds_in_cabinet_trace.txt (+ ds_mto_compare_debug.log)
+8. DsMtoComparator.compare_specifications(ds_data, mto_dict, replacement_table)
+9. [if save_excel] save_ds_vs_mto_excel_xlsxwriter → РОБОТ_СРАВНЕНИЕ_*_xw.xlsx
+10. check_comparison_results()       → пост-проверка сумм
+11. [if return_data] return ds_data
+```
+
+**Выход:** папка исходного ДС (`utils.path.get_path_from_file_path(ds_path)`).
+
+### Параметры (важные)
+
+| Параметр | Источник по умолчанию |
+|----------|------------------------|
+| `mto_path` | `resolve_mto_path_from_config()` — пресеты в JSON + вкладка «Папки МТО» / combo на «Запуск» |
+| `flat_mto_structure` | `ds_compare_config.json` → `flat_mto_structure` |
+| `mto_use_cache` / `mto_force_update` | JSON или аргументы |
+| `compare_debug_log` | `None` → `in_cabinet_debug.enabled` в JSON; `True`/`False`/путь к log |
+| `ds_vs_mto_xw_columns` | `None` → `column_config_from_output_settings(ds_vs_mto_output)` из JSON; иначе явный `list[ColumnDef]` |
+| `ds_data_override` | `None` — загрузка DS; иначе готовые строки (grouped MVP) |
+| `save_excel` | `True` — legacy; grouped MVP передаёт `False` |
+| `return_data` | `False`; grouped MVP — `True` |
+| `output_prefix` | `"РОБОТ_СРАВНЕНИЕ_"` |
+| `show_internal_column_names` | `None` → `ds_vs_mto_output.show_internal_column_names` в JSON |
+
+## Grouped DS vs MTO vs RFQ (05.2026)
+
+**Модуль оркестратора:** `RFQ/ds_compare/ds_grouped_compare.py`  
+**Оркестратор:** `analyze_grouped_ds_specification`
+
+```
+1. load_ds_compare_config() + refresh_sources_before_grouped()
+   → stale merge-папка ДС пересобирается; УЛ fingerprint проверяется/обновляется
+2. load_ds_data(ds_path, summ_ds)     → DS rows (UNITS нормализуются в load_ds_data)
+3. group_ds_rows(ds_rows, group_keys) → агрегированные DS (sum VALUES)
+4. get_mto_list_from_ds(grouped_rows, mto_path) → spec_dict; stale MTO pickle обновляется
+5. [if cache_ds_mto_result] load_grouped_compare_cache(...) → compared_rows или None
+6. [if cache miss] analyze_ds_specification(..., ds_data_override=grouped_rows,
+                              save_excel=False, return_data=True)
+   (MTO UNITS нормализуются в load_mto.py после загрузки каждого файла)
+7. [if group_mto_new_positions] group_mto_only_new_positions(...)
+8. [if cache_ds_mto_result && fresh compare] save_grouped_compare_cache(...)
+9. [if rfq_path && файл существует]
+     load_rfq_tpk_data → compare_ds_mto_with_rfq (+ append RFQ-only «Новая»)
+10. load_packing_dataset → compare_grouped_rows_with_packing → UL-only/problems
+11. highlight_compared_units_columns (DS/MTO/RFQ/UL) + `ul_compare_report`
+12. save_ds_vs_mto_excel_xlsxwriter(..., source_manifest=...)
+    → листы `Источники ДС`, `Источники МТО`, `Источники УЛ`
+```
+
+Параметр **`rfq_path`:** явный аргумент или `gui_paths.last_rfq_file`.
+
+### Preflight источников (08.2026)
+
+`RFQ/ds_compare/ds_sources_preflight.py`: перед полным grouped-запуском сравнивает
+mtime исходных xlsx в `gui_paths.last_merge_ds_folder` со сводом; при изменениях
+вызывает `merge_ds_folder` и сохраняет новый `last_ds_file`. MTO pickle обновляется
+только для релевантных `spec_dict`, если mtime изменился. УЛ проверяются через
+`load_and_cache_tsd_packing(..., force=False)` по fingerprint; новый путь свода
+сохраняется как `gui_paths.last_tsd_summary_file`. RFQ-only не пересобирает ДС/MTO,
+но проверяет УЛ и добавляет те же три листа источников.
+
+### Выходной файл и папка
+
+| Режим | Папка | Имя файла |
+|-------|-------|-----------|
+| **С RFQ** (файл найден) | каталог RFQ xlsx | `<имя_RFQ_без_.xlsx>_ДС_МТО__<ГГГГ.ММ.ДД_ЧЧ.ММ>.xlsx` |
+| **Без RFQ** | каталог ДС | `РОБОТ_СРАВНЕНИЕ_GROUPED_<имя_ДС>_xw.xlsx` |
+
+Хелперы: `_build_grouped_rfq_output_file_name`, `_rfq_file_stem` в `ds_grouped_compare.py`.  
+В `save_ds_vs_mto_excel_xlsxwriter` — опциональный аргумент **`output_file_name`** (полное имя, без prefix/suffix).
+
+**Отключено:** тестовый Excel `РОБОТ_ПРОВЕРКА_RFQ_TPK_*` (ранее `_save_rfq_tpk_test_excel`) — **не сохраняется**.
+
+### Этап 2 — merge RFQ (`ds_rfq_grouped_compare.py`)
+
+**Модуль:** `RFQ/ds_compare/ds_rfq_grouped_compare.py`
+
+| Функция | Роль |
+|---------|------|
+| `group_rfq_rows` | Схлопнуть RFQ position_row по `title + system + code` (через `group_ds_rows`) |
+| `build_rfq_lookup` | Индекс `(DS_TITLE, DS_SYSTEM, CODE)` → grouped RFQ row |
+| `compare_ds_mto_with_rfq` | Обогатить `compared_rows`: баланс + статус + цвета; append RFQ-only |
+| `_append_unmatched_rfq_rows` | Добавить в конец grouped RFQ без пары в DS/MTO |
+
+**Точка вызова:** после шага 7 (и после чтения кэша), до Excel.
+
+**Сопоставление DS/MTO строки с RFQ** (не зависит от `group_keys` / `ds_name`):
+
+- **Титул** = `DS_TITLE`
+- **Марка** = `DS_SYSTEM`
+- **Код** — перебор **`CODE`**, затем **`CODE_2`** (если оба непусты и разные); для MTO-only «Новая позиция» часто только `CODE_2`
+- Ключ lookup: `(нормализованный title, нормализованный system, BCC-код)`
+
+**Колонки в `RowStd` / grouped Excel** (секция `rfq` в `ds_vs_mto_excel_columns.py`):
+
+| `col_name` | Заголовок | Смысл |
+|------------|-----------|--------|
+| `mto_ds_diff` | Спека − ДС | `VALUES_2 − VALUES` |
+| `rfq_values` | Кол-во RFQ | `VALUES` из RFQ после группировки |
+| `rfq_units` | Ед. изм. RFQ | `UNITS` из RFQ |
+| `mto_ds_rfq_diff` | Спека − ДС − RFQ | `mto_ds_diff − rfq_values` |
+| `rfq_compare_status` | Статус RFQ | человекочитаемый статус |
+| `rfq_name` | Наименование МТР | только RFQ-only строки (справа от статуса) |
+| `rfq_code` | Код РД / BCC | только RFQ-only строки |
+| `rfq_type_mark` | Техн. характеристики RFQ | только RFQ-only строки |
+
+**Статусы и цвета** (`MTO_DS_RFQ_DIFF` и `rfq_compare_status`):
+
+| Условие | Текст | Цвет |
+|---------|-------|------|
+| diff = 0 | Совпадение | зелёный (`Color.green`) |
+| diff < 0 | Увеличение | синий (`Color.match_added_mto`) |
+| diff > 0 | Недопоставка | жёлтый (`Color.yellow`) |
+| RFQ не найден | Нет в RFQ | без подсветки |
+| **RFQ-only** (нет в DS/MTO) | **Новая** | голубой (`Color.soft_cyan`) |
+
+### RFQ-only строки (нет пары в DS vs MTO)
+
+После `compare_ds_mto_with_rfq` несопоставленные grouped RFQ дописываются **в конец** `compared_rows` (аналог MTO «Новая позиция»):
+
+- **ДС (левая часть):** только **`DS_TITLE`**, **`DS_SYSTEM`** — без `CODE` / `NAME` / `TYPE_MARK`.
+- **RFQ-блок:** `rfq_values`, `rfq_units`, `mto_ds_diff=0`, `mto_ds_rfq_diff=−rfq_qty`, статус **`Новая`**.
+- **Детали позиции RFQ** — в колонках **`rfq_name`**, **`rfq_code`**, **`rfq_type_mark`** (сразу **правее** `rfq_compare_status`), не в блоке ДС.
+- Подсветка RFQ-only: `Color.soft_cyan` на заполненных ячейках; `highlight_compared_units_columns` **пропускает** строки со статусом «Новая» (не перезаписывает цвет).
+- Счётчик в консоли: `rfq_only=...` (`RfqCompareStats.rfq_only_added`).
+
+Если match по `CODE_2`, а не по `CODE` — comment на статусе: `RFQ matched by MTO code '...'`.
+
+При массовых промахах — sample ключей в консоль (первые 5 miss + 3 sample из lookup).
+
+### Нормализация и сравнение единиц измерения (`ds_units_normalize.py`)
+
+**Модуль:** `RFQ/ds_compare/ds_units_normalize.py`
+
+**`normalize_units_text`:** убрать пробелы и **точки в конце** (`шт.` → `шт`). Применяется:
+
+| Место | Когда |
+|-------|--------|
+| `load_mto.py` | После загрузки MTO position rows (cache и fresh) |
+| `load_ds_data` | После загрузки DS (включая чтение из кэша), **до** `group_ds_rows` |
+| `load_rfq_tpk_data` | После загрузки RFQ |
+
+**`highlight_compared_units_columns`** — пост-проход после `compare_ds_mto_with_rfq`:
+
+| Случай | Сравнение | Подсветка |
+|--------|-----------|-----------|
+| `rfq_units` заполнено | `units` = `units_2` = `rfq_units` | все три: зелёный / жёлтый |
+| `rfq_units` пусто («Нет в RFQ») | только `units` и `units_2` | только эти две; `rfq_units` без цвета |
+| статус RFQ **«Новая»** | — | подсветку единиц **не** менять (сохранить `soft_cyan`) |
+
+Совпали → **зелёный** на сравниваемых ячейках; иначе → **жёлтый**.
+
+## Grouped DS vs MTO (MVP, 05.2026)
+
+**Модуль:** `RFQ/ds_compare/ds_grouped_compare.py`  
+**Оркестратор:** `analyze_grouped_ds_specification`  
+(полный пайплайн с RFQ — см. раздел **Grouped DS vs MTO vs RFQ** выше.)
+
+```
+1. load_ds_compare_config() + group_keys_from_settings(grouped_compare)
+2. load_ds_data(ds_path, summ_ds)     → исходные DS rows
+3. group_ds_rows(ds_rows, group_keys) → агрегированные DS (sum VALUES)
+4. get_mto_list_from_ds(grouped_rows, mto_path) → spec_dict (для кэша)
+5. [if cache_ds_mto_result] load_grouped_compare_cache(...) → compared_rows или None
+6. [if cache miss] analyze_ds_specification(..., ds_data_override=grouped_rows,
+                              save_excel=False, return_data=True)
+7. [if group_mto_new_positions] group_mto_only_new_positions(...)
+8. [if cache_ds_mto_result && fresh compare] save_grouped_compare_cache(...)
+9. [optional RFQ — см. раздел DS vs MTO vs RFQ]
+10. save_ds_vs_mto_excel_xlsxwriter(...)
+```
+
+Параметр **`rfq_path`:** явный аргумент или `gui_paths.last_rfq_file`.
+
+### Ключи группировки
+
+Настройки в JSON / вкладка **«Настройки»** control center → блок **`grouped_compare`**:
+
+| JSON-ключ | id в коде | Колонка DS | Колонка MTO-only |
+|-----------|-----------|------------|------------------|
+| `group_by_code` | `code` | `CODE` | `CODE_2` |
+| `group_by_title` | `title` | `DS_TITLE` | `DS_TITLE` |
+| `group_by_system` | `system` | `DS_SYSTEM` | `DS_SYSTEM` |
+| `group_by_ds_name` | `ds_name` | `DS_NAME` | `DS_NAME` |
+| `group_mto_new_positions` | — | пост-процесс правой части | — |
+| `cache_ds_mto_result` | — | pickle результата шагов 6–7 | — |
+
+**Дефолт при всех выключенных галочках:** `title + system + code` (`DEFAULT_GROUP_KEYS`).
+
+### Кэш результата grouped compare (ДС vs MTO)
+
+**Модуль:** `RFQ/ds_compare/grouped_compare_cache.py`  
+**Pickle:** `RFQ/ds_compare/cache/grouped_cmp_*.cache` (отдельно от MTO pickle).
+
+**Когда читается:** `grouped_compare.cache_ds_mto_result=true` и **не** `mto_force_update`.
+
+**Инвалидация** (все условия в meta внутри pickle):
+
+- `mtime` файла ДС;
+- `mtime` `Code_Replacement_Table.xlsx`;
+- fingerprint MTO: для каждого ключа из `spec_dict` — путь xlsx + `mtime` (как после `get_mto_list_from_ds`);
+- extra_key имени файла: версия + `group_keys` + `flat_mto_structure` + `group_mto_new_positions` + `mto_path` + путь таблицы замен.
+
+**Не кэшируется:** загрузка/экспорт RFQ, UL-enrichment и units highlight; grouped Excel `_xw` пересобирается каждый раз.
+
+**При cache hit:** `load_ds_data(..., force_update=False)` (DS pickle, если mtime совпал), `DsMtoComparator` и `check_comparison_results` **не** вызываются.
+
+**Версия кэша:** `GROUPED_COMPARE_CACHE_VERSION` в `grouped_compare_cache.py` (сейчас `v1`). После правок **`ds_classes.py`** / **`ds_in_cabinet_alloc.py`** / логики grouped compare — **обязательно bump** версии, иначе старый pickle останется валидным по mtime.
+
+**RFQ-only (ускорение):** `analyze_grouped_ds_specification(..., rfq_only=True)` / кнопка «Только RFQ → Excel» в `ds_compare_center` — требует валидный `grouped_cmp_*.cache`, файл RFQ и `cache_ds_mto_result=true`; при miss — `GroupedDsMtoRfqOnlyError`.
+
+### `group_ds_rows` — агрегация левой части (ДС)
+
+- Только `RowType.position_row`.
+- **Суммирует** `VALUES`.
+- **Объединяет** `DS_NAME` (если не в ключе), `DS_NUMBER`, **`UNITS`** через `/` при расхождении.
+- Комментарии: свод по исходным ДС/строкам (`_format_source_summary`); при разных значениях representative-колонок — comment на ячейке.
+- Representative (comment-only при расхождении): `DS_SPECIFICATION`, `DS_RFQ`, `NAME`, `TYPE_MARK`.
+
+### `group_mto_only_new_positions` — пост-процесс правой части
+
+- Только grouped-режим; включается `group_mto_new_positions` (по умолчанию `true`).
+- Строки: `ANNOTATION_2 == "Новая позиция"`, пустой `CODE`, непустой `CODE_2`.
+- Группировка по тем же ключам; для кода — **`CODE_2`**.
+- **Суммирует** `VALUES_2`; **мерджит** `TAGS_2`, `NUMBERS_2`, `ANNOTATION_MTO`, `IN_CABINET`, **`UNITS_2`** (разделитель `/` для `IN_CABINET` и `UNITS_2`).
+- Сохраняет цвет/comment первой строки группы (`_copy_cell_formatting_from`).
+
+**Совпавшие с ДС MTO-строки** группируются автоматически за счёт предварительной группировки DS; пост-процесс закрывает только MTO-only хвост.
+
+### Ловушка grouped: `DS_TITLE` / `DS_SYSTEM`
+
+`get_mto_list_from_ds` и `DsMtoComparator` ищут MTO по **титулу/маркe** из строки ДС. Если снять `group_by_title` и слить строки с разными `DS_TITLE` в одну — compare возьмёт MTO только по титулу **первой** строки группы → рост расхождений в `check_comparison_results`. Для корректного MVP **`group_by_title` и `group_by_system` фактически обязательны**.
+
+### RFQ TPK — загрузка xlsx (этап 2, 05.2026)
+
+Отдельный тип документа **не путать** с `DsSpecification` / `ListDsSpecification`.
+
+| Звено | Файл |
+|-------|------|
+| `ColNames.RFQTSpecification.column_dict` | `base/tables_columns.py` |
+| класс `RFQTPK`, `tabel_type = "RFQTSpecification"` | `base/t_comm_initial_classes.py` |
+| `RowType.get_row_type` → `rfq_tpk.get_row_type` | `base/base_classes.py` |
+| классификация строк | `base/get_row_type_variants/rfq_tpk.py` |
+| **`load_rfq_tpk_data(rfq_path)`** | `RFQ/ds_compare/support_finctions.py` |
+| merge RFQ + units highlight | `RFQ/ds_compare/ds_rfq_grouped_compare.py`, `ds_units_normalize.py` |
+| оркестрация grouped + RFQ | `RFQ/ds_compare/ds_grouped_compare.py` |
+
+**Цепочка:** `TableComments(..., tabel_class=RFQTPK)` → `get_std_from_excel_file` → `load_from_xlsx_file` + `list_raw_to_std` + `add_cabinet_composition_info` + `add_section_type_info`.
+
+**Маппинг колонок Excel** (`RFQTSpecification.column_dict`, **0-based** индекс столбца в xlsx; строка шапки формы ТКП ~row 23):
+
+| Индекс | Поле | Заголовок в форме ТКП |
+|--------|------|------------------------|
+| 0 | — | служебный № (не читаем) |
+| 1 | `NUMBERS` | № п/п |
+| 2 | `DS_TITLE` | Титул |
+| 3 | `DS_SYSTEM` | Раздел / марка |
+| 4 | `DS_SPECIFICATION` | Спецификация |
+| 5 | `TAGS` | Линия, Tag-номер |
+| 6 | `DS_CODE_1C` | Код 1С СОУ |
+| 7 | **`CODE`** | **Код РД / BCC** |
+| 8 | `NAME` | Наименование МТР |
+| 9 | `TYPE_MARK` | Технические характеристики |
+| 10 | `VALUES` | Кол-во |
+| 11 | `UNITS` | Ед. изм. |
+
+При правке раскладки формы ТКП — обновлять **и** `column_dict`, **и** `rfq_tpk.get_row_type`.
+
+**Ловушка RFQ column_dict (05.2026):** если перепутать 7↔8 (`NAME` ↔ `CODE`), в lookup попадают **наименования** вместо BCC → все строки «Нет в RFQ». BCC всегда в колонке «Код РД» (индекс **7**).
+
+**Ловушка экспорта RFQ:** **не** использовать `excel_template_ds_spec` / `STDTable.to_excel` с `show_row_type=True` — шаблон под `DsSpecification`, колонки не совпадают.
+
+## Модули пакета `RFQ/ds_compare/`
+
+| Файл | Роль |
+|------|------|
+| `ds_start_init.py` | **`analyze_ds_specification`** |
+| **`ds_grouped_compare.py`** | **`analyze_grouped_ds_specification`**, `group_ds_rows`, `group_mto_only_new_positions` |
+| **`ds_rfq_grouped_compare.py`** | **`compare_ds_mto_with_rfq`**, `group_rfq_rows`, `build_rfq_lookup` |
+| **`ds_packing_grouped_compare.py`** | grouped UL match, формулы/статусы, UL-only, `PackingCompareAudit` |
+| **`upd_load.py`** | свод файлов закачки 1С (УПД): compact/wide, `position_row`, имя файла + путь |
+| **`tsd_zinoviev_compare.py`** | сверка кэша робота с ручным сводом Зиновьева; два Excel/отчёта (с УЛ и без) в `_результат_сравнения_*` |
+| **`RFQ/packing_list_provider.py`** | общий строгий provider cache УЛ для DS и RFP Step4 |
+| **`ds_units_normalize.py`** | **`normalize_units_text`**, highlight DS/MTO/RFQ/UL units |
+| **`grouped_compare_cache.py`** | pickle результата compare ДС vs MTO (до RFQ) |
+| `ds_classes.py` | **`DsMtoComparator`** — сопоставление и распределение qty |
+| `ds_in_cabinet_alloc.py` | Расход MTO с приоритетом `IN_CABINET`, merge `Шкаф1/Шкаф2`, комментарии |
+| `ds_in_cabinet_trace.py` | UTF-8 trace, фильтры watch, cache vs fresh |
+| `support_finctions.py` | `load_ds_data`, **`load_rfq_tpk_data`**, `load_mto_data`, `check_comparison_results`, валидация VALUES |
+| `load_mto.py` | Pickle MTO, ключ **`ds_mto_get_mto_std_v2`**, audit; импорт `TableComments`, `RowStd`, `t_com_init_cls` |
+| `get_mto_list_from_ds.py` | Сопоставление строк ДС → пути xlsx MTO |
+| `ds_compare_config.py` | JSON; `grouped_compare`, `ds_vs_mto_output`, `gui_paths`, `InCabinetWatchFilters` |
+| `ds_mto_path_settings_gui.py` | Legacy CTk ⚙️ (main_v2 launcher); дублирует часть control center |
+| `ds_vs_mto_excel_columns.py` | **`ColumnDef`**, defaults, **`merge_column_settings`**, **`column_config_from_output_settings`** |
+| `ds_vs_mto_excel_xlsxwriter.py` | Быстрый экспорт `_xw` (без xlsx-шаблона) |
+| `mto_check.py` | Предварительная проверка MTO |
+| `ds_merge_folder.py` | Пакетная обработка папки ДС (см. отдельно при batch) |
+
+## Конфиг `ds_compare_config.json` (дополнение MVP)
+
+```json
+"gui_paths": {
+  "last_ds_file": "",
+  "last_rfq_file": "",
+  "last_merge_ds_folder": "\\\\bcc\\eng\\...",
+  "last_upd_folder": "\\\\bcc\\root\\CurProjects\\di_manegers\\Пятницкий_П\\Амурский ГХК\\Поставки\\Файл закачки УПД по всем ДС",
+  "last_upd_summary_file": ""
+},
+"gui_window": {
+  "width": 1410,
+  "height": 980,
+  "maximized": false,
+  "splitters": {
+    "run": [520, 770],
+    "packing": [520, 770],
+    "upd": [520, 770],
+    "rfp_run": [520, 770],
+    "rfp_parts": [520, 770],
+    "rfp_ds_id": [520, 770],
+    "rfp_ds_mp": [520, 770],
+    "misc_run": [520, 770]
+  }
+},
+"grouped_compare": {
+  "group_by_code": true,
+  "group_by_title": true,
+  "group_by_system": true,
+  "group_by_ds_name": false,
+  "group_mto_new_positions": true,
+  "cache_ds_mto_result": false
+},
+"ds_vs_mto_output": {
+  "show_internal_column_names": false,
+  "columns": [
+    {
+      "col_name": "DS_TITLE",
+      "output": true,
+      "width": 9,
+      "header_label": "Титул",
+      "header_color": "#dbbcdb",
+      "section": "ds"
+    }
+  ]
+}
+```
+
+**`ds_vs_mto_output.columns`:** массив по одной записи на каждый `col_name` из `DS_VS_MTO_OUTPUT_COLUMNS_CONFIG`. Если ключа нет в JSON — берутся defaults из кода (`merge_column_settings`). Редактирование: вкладка **«Столбцы Excel»** или правка JSON. При сохранении **«Настройки»** / legacy CTk блок **`columns` сохраняется** (не затирать).
+
+**`gui_paths`:** последние пути из вкладки «Запуск» (`normalize_gui_paths` в `ds_compare_config.py`). `last_rfq_file` — xlsx формы ТКП (RFQ TPK). `last_upd_folder` — корень файлов закачки 1С; `last_upd_summary_file` — последний свод `upd_summary_*`.
+
+**`cache_ds_mto_result`:** вкладка «Настройки» → grouped; по умолчанию `false`.
+
+`show_internal_column_names: true` → заголовок вида `Кол.\n(VALUES_2)` (отладка; вкладка «Настройки» control center).
+
+## Загрузка MTO (общий путь с main RFQ)
+
+Тот же разбор, что `open_file_att(MTO)` → `google_sheets.start`: **`get_mto_std_from_file`** + **`add_cabinet_composition_info()`** (`base/base_mto.py` → `cabinet_composition_info.py`).
+
+DS compare дополнительно кэширует pickle в `RFQ/ds_compare/cache/` (`load_mto.py`).
+
+## `DsMtoComparator` — логика сравнения
+
+**Группировка DS (внутри comparator):** `spec_name` (ключ `8529-SOS` из `DS_SPECIFICATION`) → `CODE` → список строк.  
+*Не путать* с **pre-group** в `ds_grouped_compare.py` — тот схлопывает строки **до** вызова comparator.
+
+**На каждую спецификацию (`_process_specification`):**
+
+1. **Предварительный проход** `_process_exact_code_matches` → `_distribute_exact_matches` (точное совпадение CODE; пометки `[PRELIMINARY_PROCESSED]` / `[PRELIMINARY_PARTIAL]`).
+2. **Основной проход** по кодам: MTO по CODE + строки из **таблицы замен** → `_distribute_amounts_sequentially`.
+3. **Пост-проходы:** `_process_matching_new_positions`, `_add_new_positions` (новые строки MTO).
+
+**Распределение количества (ключевое):**
+
+- DS часто split: много строк по **VALUES=1** на один CODE.
+- MTO может быть **несколько строк** с одним CODE (разный `NUMBERS`, разный **`IN_CABINET`**).
+- Не-last DS строки: **`_allocate_ds_row`** → `allocate_mto_slices` (**сначала строки со шкафом**, затем без; внутри — меньший остаток VALUES).
+- Несколько MTO-источников на одну DS: агрегация NUMBERS/TAGS/ANNOTATION; **`IN_CABINET`** merge через `/`; при смеси шкаф+без шкафа — **comment** на ячейке `IN_CABINET`.
+- **Последняя DS строка** по коду: особый случай «весь остаток MTO» → `_create_aggregated_mto_row_for_remaining` (известный edge: `VALUES_2` может ≠ `VALUES`).
+
+**Перенос в DS (правые колонки):** `_transfer_mto_to_ds` — `CODE_2`, `VALUES_2`, `TAGS_2`, **`IN_CABINET`**, и т.д.
+
+## IN_CABINET — история бага и fix (05.2026)
+
+**Симптом:** при MTO `1.1.5` (2 шт., шкаф) + `2.1` (35 шт., без шкафа) все DS строки получали пустой `IN_CABINET`.
+
+**Причина:** старый `_find_mto_row_for_amount` выбирал одну «толстую» MTO (`2.1`) и игнорировал строку со шкафом; агрегация не переносила `IN_CABINET`.
+
+**Fix:** `ds_in_cabinet_alloc.py` + правки в `DsMtoComparator` (05.2026). Проверено trace: DS#170–171 → `8529-SS-01-S-SK-1301`, остальные — пусто.
+
+## Отладка IN_CABINET
+
+**Конфиг:** `RFQ/ds_compare/ds_compare_config.json` → блок `in_cabinet_debug`:
+
+```json
+"in_cabinet_debug": {
+  "enabled": true,
+  "watch_title": "8529",
+  "watch_mark": "SOS",
+  "watch_code": "BCC0000664",
+  "watch_cabinet": ""
+}
+```
+
+Пустое поле фильтра = **все** по этой оси. Марка: `TYPE_MARK`, `DS_SYSTEM`, ключ спецификации.
+
+**Файлы** (рядом с Excel ДС):
+
+- `ds_in_cabinet_trace.txt` — MTO load, cache vs fresh, allocation before/after
+- `ds_mto_compare_debug.log` — подробный лог `DsMtoComparator` (если debug включён)
+
+При `from_cache: True` trace может вызвать **cache vs fresh** для watched spec.
+
+## Колонки Excel (сводка)
+
+**Defaults в коде:** `ds_vs_mto_excel_columns.py` → `DS_VS_MTO_OUTPUT_COLUMNS_CONFIG`.  
+**Runtime (экспорт):** `column_config_from_output_settings(normalize_ds_vs_mto_output(...))` — merge JSON поверх defaults.  
+**GUI:** `ds_compare_center` → **«Столбцы Excel»** (`columns_panel.py`).
+
+**Поля `ColumnDef`:** `col_name`, `header_label`, `section`, `output`, `width`, `group_level`, `group_collapsed`, **`header_color`** (перекрывает цвет секции в xlsxwriter).
+
+**Шаблон `templates/ds_vs_mto_template.xlsx` больше не используется** — заголовки, ширины и цвета из конфига (как `step4_6_save_match_result_to_excel.py`).
+
+Левая часть — ДС; правая — MTO после match; затем блоки **rfq** и **ul**:
+
+- `VALUES` / `VALUES_2`, `CODE` / `CODE_2`, `TAGS` / `TAGS_2`
+- **`IN_CABINET`** — оборудование по шкафам (из MTO)
+- `ANNOTATION_2` — статус compare ДС↔MTO
+- **`mto_ds_diff`**, **`rfq_values`**, **`rfq_units`**, **`mto_ds_rfq_diff`**, **`rfq_compare_status`**
+- **`rfq_name`**, **`rfq_code`**, **`rfq_type_mark`** — детали RFQ-only строк (см. выше)
+- **`ul_ordered_values`**, **`ul_values`**, **`ul_units`**, **`ul_remaining_values`**
+- **`ul_compare_status`**, **`ul_data_status`**, **`ul_code`**, **`ul_source_files`**
+- `ul_name`, `ul_type_mark`, `ul_vendor`, `ul_tags` — доступны в GUI колонок, по умолчанию скрыты
+
+Экспорт: `save_ds_vs_mto_excel_xlsxwriter(..., column_config=..., show_internal_column_names=...)` — колонки по **`col_name`** из `RowStd.el`; секции header: `ds`, `prices`, `meta`, `mto`, `rfq`, **`ul`** (`#c9daf8`). UL quantities экспортируются числами. Заголовок окна GUI: `_WINDOW_TITLE` в `center_window.py`.
+
+## Ловушки
+
+- **UNC-пути MTO/ДС:** у агента в песочнице может не быть SMB; для проверок — файлы под корнем repo или `tmp/`.
+- **Merge ДС — строгая раскладка:** альтернативные/сдвинутые колонки автоматически не адаптировать. Если `position_row` содержит нечисловой `VALUES` (например `шт` из колонки единиц), `merge_ds_folder` пишет `Ошибка формата` с файлом/строками в `DS_merge_load_report.txt`, не создаёт свод и останавливает preflight.
+- **Кэш MTO:** смена `IN_CABINET` в xlsx без `mto_force_update: true` → старый pickle; ключ v2: `ds_mto_get_mto_std_v2`.
+- **Не путать с step4:** там свой `_merge_in_cabinet` в `step4_2_match_rfp_with_mto.py`; DS compare использует `ds_in_cabinet_alloc.merge_in_cabinet` (та же семантика `/`).
+- **Последняя DS строка:** логика «забрать весь остаток» — отдельный риск для `VALUES_2`.
+- **Таблица замен:** `Code_Replacement_Table.xlsx`, лист `Коды_замен`; влияет на выбор MTO и подсветку замен.
+- **Grouped без DS_TITLE:** см. раздел «Ловушка grouped» — неверный подбор MTO.
+- **ColumnDef `output=False`:** колонка не попадает в Excel; порядок/имена — только через `col_name`, не «номер столбца в шаблоне».
+- **Сохранение JSON:** вкладки «Настройки» и legacy CTk при записи `ds_vs_mto_output` **должны сохранять** `columns` — иначе сброс пользовательских заголовков/ширин.
+- **`load_mto.py`:** нужны импорты `TableComments`, `RowStd`, `t_com_init_cls` — без них `NameError` при загрузке MTO.
+- **RFQ match keys:** для RFQ **не** использовать `group_keys` с `ds_name` — только `(DS_TITLE, DS_SYSTEM, code)`; перебирать `CODE` и `CODE_2`.
+- **RFQ column_dict 7↔8:** см. раздел RFQ TPK — перепутанные `NAME`/`CODE` дают «Нет в RFQ» на всех строках.
+- **Ед. изм. MTO `шт.` vs `шт`:** нормализация в `ds_units_normalize`; без `mto_force_update` старый pickle всё равно нормализуется при чтении в `load_mto.py`.
+- **Units highlight без RFQ:** при пустом `rfq_units` сравниваются только `units` и `units_2`.
+- **RFQ TPK vs DsSpecification template:** разные раскладки колонок; не использовать ds_spec Excel template для RFQ.
+- **Кэш grouped compare:** не кэширует RFQ-enrichment и units highlight; Excel пересобирается каждый раз.
+- **Кэш УЛ v5:** старый v4 намеренно `unavailable`; после обновления кода один раз выполнить «ДС · Упаковочные листы → Прочитать и проанализировать».
+- **УПД ≠ packing list и ≠ счёт-фактура:** шапка `Наименование` + `Код 1С`; при наличии `Лист1`/`Лист_1`/`общая` не грузить title-split вкладки (иначе удвоение). `.xls` в отчёт, не в свод. Не добавлять десятки 1С-полей в `ColNames.column_list`.
+- **RFQ-only + УЛ:** код RFQ-only находится в `RFQ_CODE`, поэтому UL matcher обязан проверять `CODE`, `CODE_2`, затем `RFQ_CODE`.
+- **Дубли grouped ключа:** одна поставка УЛ вычитается один раз; primary row содержит сумму заказа по всем target rows, остальные — `УЛ учтён выше`.
+- **Количества УЛ:** пусто/текст/NaN/Inf/negative — ошибка, не ноль. Источник виден как файл · вкладка · Excel-строка.
+- **Partial УЛ:** не останавливает Excel, но `ul_data_status` и GUI audit красные; подробности в `ul_compare_report_*`.
+- **`delivery_overall_status`:** заполняется в `compare_ds_mto_with_rfq`; новая колонка должна быть в `ColNames.column_list` (`base/tables_columns.py`). Построчный «Список ДС vs MTO» без RFQ → колонка пустая (не `KeyError`). Смысл статуса — только «ДС vs MTO vs RFQ».
+- **Legacy + RFQ-колонки в Excel:** при `output: true` для `mto_ds_diff` / `rfq_*` / `delivery_overall_status` без RFQ ячейки пустые; для построчного отчёта можно выключить секцию `rfq` во вкладке «Столбцы Excel».
+- **`check_color_out` + `show_row_type`:** мутирует переданный `column_dict` (добавляет `[99]=ROW_TYPE`); для RFQTPK передавать **копию** dict, если используете legacy export.
+
+## Verification после правок
+
+```bash
+python -c "from RFQ.ds_compare.ds_classes import DsMtoComparator; from RFQ.ds_compare.ds_in_cabinet_alloc import allocate_mto_slices"
+python -c "from RFQ.ds_compare.ds_grouped_compare import analyze_grouped_ds_specification, group_ds_rows, group_mto_only_new_positions"
+python -c "from RFQ.ds_compare.ds_rfq_grouped_compare import compare_ds_mto_with_rfq, group_rfq_rows"
+python -c "from RFQ.ds_compare.ds_units_normalize import normalize_units_text, highlight_compared_units_columns"
+python -c "from RFQ.ds_compare.tsd_zinoviev_compare import compare_robot_vs_zinoviev, load_zinoviev_positions"
+python -c "from RFQ.ds_compare.upd_load import load_and_merge_upd; from ds_compare_center.upd_panel import UpdPanel; from main_v2.legacy_actions import run_upd_load; print('upd OK')"
+python tmp/test_upd_load_smoke.py
+python tmp/test_upd_panel_smoke.py
+python -c "from RFQ.packing_list_provider import load_packing_dataset, packing_match_key"
+python -c "from RFQ.ds_compare.ds_packing_grouped_compare import compare_grouped_rows_with_packing, save_packing_compare_report"
+python -c "from RFQ.ds_compare.support_finctions import load_rfq_tpk_data"
+python -c "from RFQ.ds_compare.grouped_compare_cache import load_grouped_compare_cache, save_grouped_compare_cache"
+python -c "from RFQ.ds_compare.ds_vs_mto_excel_columns import column_config_from_output_settings, merge_column_settings"
+python -c "from ds_compare_center.columns_panel import ColumnsPanel; from ds_compare_center.center_window import CenterWindow; from ds_compare_center.misc_run_panel import MiscRunPanel; from ds_compare_center.bbb_settings_panel import BbbSettingsPanel; print('ds_compare_center OK')"
+python tmp/test_rfp_checklist_updater_smoke.py
+python tmp/test_rfp_progress_markers_smoke.py
+python tmp/test_rfp_native_settings_smoke.py
+python tmp/test_bbb_native_settings_smoke.py
+python tmp/test_rfp_packing_compare_smoke.py
+python tmp/test_ds_packing_compare_smoke.py
+python tmp/test_ds_identity_smoke.py
+python tmp/test_rfp_ds_id_panel_smoke.py
+python tmp/test_rfp_ds_mp_panel_smoke.py
+python tmp/test_rfp_run_progress_table_smoke.py
+python -c "from RFQ.rfp_parts.ds_id_coverage import check_ds_id_coverage; from ds_compare_center.rfp_ds_id_panel import RfpDsIdPanel; print('ds_id OK')"
+python -c "from RFQ.tags_rfp_compare.ds_manager_roster import run_ds_roster_compare_job; from ds_compare_center.rfp_ds_mp_panel import RfpDsMpPanel; print('ds_mp OK')"
+python -m py_compile RFQ/packing_list_provider.py RFQ/ds_compare/tsd_packing_load.py RFQ/ds_compare/upd_load.py RFQ/ds_compare/ds_packing_grouped_compare.py RFQ/ds_compare/ds_vs_mto_excel_columns.py ds_compare_center/columns_panel.py ds_compare_center/upd_panel.py ds_compare_center/misc_run_panel.py ds_compare_center/bbb_settings_panel.py ds_compare_center/center_window.py ds_compare_center/rfp_ds_id_panel.py ds_compare_center/rfp_ds_mp_panel.py RFQ/rfp_parts/ds_identity.py RFQ/rfp_parts/ds_id_coverage.py RFQ/tags_rfp_compare/ds_manager_roster.py RFQ/ds_compare/ds_grouped_compare.py RFQ/ds_compare/ds_rfq_grouped_compare.py RFQ/ds_compare/ds_units_normalize.py RFQ/ds_compare/grouped_compare_cache.py RFQ/ds_compare/ds_start_init.py RFQ/ds_compare/ds_compare_config.py RFQ/ds_compare/load_mto.py base/get_row_type_variants/rfq_tpk.py base/tables_columns.py
+```
+
+Grouped smoke **с RFQ:** `python -m ds_compare_center` → «ДС vs MTO vs RFQ» → в папке RFQ файл `<RFQ>_ДС_МТО__<дата>.xlsx`; в консоли — счётчики RFQ match и units match/mismatch.
+
+## Связанные правила
+
+- `AI_rfq_context.mdc` — RFP/MTO/VO step4, `_COPY_COLS`, производительность
+- `AI_rfp_step4_excel.mdc` — финальный Excel RFP · Запуск (столбцы, цвета, УЛ)
+- `AI_rfp_parts.mdc` — сбор свода из `RFP_Зиновьев` (сумма); checklist preflight Step1 по-прежнему increase/decrease; production parts-loader не реализован
+- `AI_memory.mdc` §16 — UNC, кодировки, пути
+- `AI_v2_monitor.mdc` — паттерн standalone control center (subprocess, PySide6, job monitor)
+- `AI_project_standards.mdc` — маркировка планов [C2]/[PREMIUM]
+
+## История изменений
+
+- **14.09.2026 (ДС · УПД):** вкладка чтения файлов закачки 1С (`Реализация 2_0`): [upd_load.py](RFQ/ds_compare/upd_load.py), [upd_panel.py](ds_compare_center/upd_panel.py), `run_upd_load`; compact/wide, primary-вкладки без удвоения title-split; свод с именем файла и полным путём в `УПД сводный файл` (`--tab upd` / `upd_load`).
+- **03.09.2026 (RFP · ДС ↔ МП):** вкладка сверки файлов `RFP_Зиновьев` с фамилиями в `Список ДС - Фамилии МП.xlsx` ([ds_manager_roster.py](RFQ/tags_rfp_compare/ds_manager_roster.py), [rfp_ds_mp_panel.py](ds_compare_center/rfp_ds_mp_panel.py)); ручной запуск переписывает лист «Фактический и порядковый», Лист2 не трогает (`--tab rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers`).
+- **02.09.2026 (ключ посадки Step4):** `(actual, title, system, code)` (`rfp_packing_match_key`); столбец **Фактический ДС** (`DS_ACTUAL`); `DS_NAME` → «Порядковый ДС». Grouped matcher **пока** 3-tuple `packing_match_key`.
+- **02.09.2026 (RFP · ДС ↔ УЛ):** парсер порядковый/фактический ([ds_identity.py](RFQ/rfp_parts/ds_identity.py)), покрытие vs папки УЛ ([ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py)), вкладка **RFP · ДС ↔ УЛ**, milestone `ds_id_check` (non-fatal, после `prepare`).
+- **13.08.2026 (прочее из main.py в control center):**
+  - `misc_run_panel.py` — вкладка «Прочее · Запуск»: PDF v2, MTO/BBB, файлы, Excel prep, КЖ, ревизии MTO, NanoCAD, ZIP; backend `main_v2.legacy_actions`; лог на своей панели
+  - `bbb_settings_panel.py` — native MTO/BBB settings (`bbb_analysis_config.json`, merge-on-save); CTk `bbb_settings_gui` не удаляется
+  - `main.py` без правок; DS/RFP-кнопки не дублируются
+- **31.07.2026 (робот vs Зиновьев, `_`↔`.` в id УЛ):** в ключе нормализации подчёркивания заменяются на точки (`2076961.2_2451.01` ↔ `2076961.2.2451_01`).
+- **31.07.2026 (робот vs Зиновьев, выравнивание имён УЛ):** обрезка `_ред…`/`новая`/`_1` при нормализации; на листе «УЛ имена» колонка id робота рядом с полным файлом; покрытие с УЛ ~94%.
+- **31.07.2026 (робот vs Зиновьев, столбец B = УЛ):** раскладка файла сдвинута (+1): B=имя УЛ, C=CODE, D=SPEC, …; ключ с УЛ берёт имя из B; лист «УЛ имена» в обоих xlsx.
+- **30.07.2026 (робот vs Зиновьев, два отчёта):** один запуск пишет оба режима — без УЛ (`сравнение_титул_марка_код.*`) и с УЛ (`…_УЛ.*`); покрытие без УЛ обычно выше (~95%), с УЛ ниже из‑за пустых/нестандартных имён УЛ.
+- **30.07.2026 (робот vs Зиновьев):**
+  - `tsd_zinoviev_compare.py` — разбор ручного `ТСД по всем ДС_общий.xlsx`, агрегация по `(титул, марка, код)`, Excel со статусами
+  - GUI кнопка на «ДС · Упаковочные листы»; выход в `_результат_сравнения_ГГГГ_ММ_ДД_ЧЧ_ММ`
+- **29.07.2026 (RFP native settings/run):**
+  - `rfp_settings_panel.py` — native PySide6 Main/As-build editor, merge-on-save, fixed as-build differences, UL status/navigation
+  - `rfp_progress_parser.py` + `rfp_run_panel.py` — canonical chunk-safe milestones, ten live rows, dynamic UL wording
+  - `rfp_parts_panel.py` — явная report-only формулировка; checklist preflight выполняет основной RFP pipeline, не эта кнопка
+- **07.2026 (grouped DS/RFQ vs УЛ):**
+  - `RFQ/packing_list_provider.py` — cache v5, quality `ok/partial/unavailable`, structured issues
+  - `ds_packing_grouped_compare.py` — cumulative UL match, `ДС + RFQ − УЛ`, UL-only/errors/report
+  - Excel section `ul`, numeric quantities, statuses/colors/comments; GUI UL audit
+  - cache write atomic; loader records file/sheet/row problems and scans full worksheets
+- **07.2026 (УЛ свод — выходная папка):** артефакты ТСД (`tsd_packing_summary_*.xlsx`, отчёты, pickle) пишутся в `\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\УЛ сводный файл` (`DEFAULT_TSD_PACKING_OUTPUT_DIR`), а не в локальный `RFQ/ds_compare/cache/tsd_packing/`.
+- **05.2026 (начало):** создано правило; fix `IN_CABINET` / `ds_in_cabinet_alloc.py`, trace и конфиг debug.
+- **05.2026 (grouped MVP):**
+  - `ds_grouped_compare.py` — оркестратор, `group_ds_rows`, `group_mto_only_new_positions`
+  - рефакторинг `analyze_ds_specification`: `ds_data_override`, `save_excel`, `return_data`, `output_prefix`, `show_internal_column_names`
+  - конфиг `grouped_compare` + `ds_vs_mto_output`
+  - grouped в `main_v2`; Excel writer только `ColumnDef`
+  - merge `UNITS` / `UNITS_2` через `/` при группировке
+  - RFQ-столбец — **этап 2**, после валидации grouped-отчёта
+- **05.2026 (`ds_compare_center`):**
+  - пакет `ds_compare_center/` — PySide6: «Запуск», «Папки МТО», «Настройки»
+  - `main.py`: одна кнопка launch; старые кнопки ДС / merge / combo МТО убраны
+  - конфиг `gui_paths`; тема `light_high_contrast`; `.vscode/launch.json`
+  - операции через `FunctionJobRunner` / `legacy_actions`
+  - «Запуск»: кнопка + описание в строке 50/50; поле RFQ — заготовка этапа 2
+- **05.2026 (RFQ TPK + кэш grouped):**
+  - тип `RFQTPK` / `RFQTSpecification`, `rfq_tpk.py`, `load_rfq_tpk_data`
+  - `analyze_grouped_ds_specification(..., rfq_path=...)`; GUI → `run_grouped_ds_mto_file(ds, rfq)`
+  - `grouped_compare_cache.py`, `cache_ds_mto_result` в JSON и settings panel
+- **05.2026 (этап 2 — DS vs MTO vs RFQ, реализовано):**
+  - `ds_rfq_grouped_compare.py` — merge RFQ: `mto_ds_diff`, `rfq_values`, `mto_ds_rfq_diff`, статусы/цвета
+  - fix `RFQTSpecification.column_dict`: **7=CODE**, **8=NAME** (было наоборот)
+  - match по `(DS_TITLE, DS_SYSTEM, code)`; коды `CODE` + `CODE_2`
+  - `ds_units_normalize.py` — нормализация `шт.`→`шт`; highlight `units`/`units_2`/`rfq_units`
+  - без RFQ в строке — сравнение только `units` vs `units_2`
+  - выход с RFQ: **папка RFQ**, имя `<RFQ>_ДС_МТО__<ГГГГ.ММ.ДД_ЧЧ.ММ>.xlsx`
+  - `save_ds_vs_mto_excel_xlsxwriter(..., output_file_name=...)`
+  - тестовый Excel `РОБОТ_ПРОВЕРКА_RFQ_TPK_*` — **отключён**
+- **05.2026 (RFQ-only + колонки Excel GUI):**
+  - `compare_ds_mto_with_rfq` — append grouped RFQ без пары; статус **«Новая»**, `soft_cyan`
+  - RFQ-only: в ДС только титул/раздел; детали в `rfq_name` / `rfq_code` / `rfq_type_mark` (правее статуса)
+  - `ds_compare_center/columns_panel.py` — вкладка **«Столбцы Excel»** (`--tab columns`)
+  - `ds_vs_mto_output.columns` в JSON; `ColumnDef.header_color`; merge через `merge_column_settings` / `column_config_from_output_settings`
+  - экспорт grouped и legacy читают column config из JSON; fix импортов `load_mto.py` (`TableComments`)

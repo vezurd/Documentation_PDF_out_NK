@@ -1,0 +1,16 @@
+{
+  "name": "AGCC.287 (заготовка)",
+  "projects": [
+    "AGCC",
+    "287",
+    "AGCC.287"
+  ],
+  "field_catalog": "pdf_parsing_v2_engine/templates/catalogs/fields_agcc.json",
+  "template_files": [
+    "dwg_page1.json",
+    "dwg_page2.json",
+    "bbb_mto_page1.json",
+    "bbb_mto_page2.json",
+    "od_page1.json"
+  ]
+}

@@ -1,0 +1,78 @@
+---
+description: Загрузка Google code base (СПО_1) — история проблемы, старый способ, текущая реализация и переменные окружения.
+alwaysApply: false
+---
+
+# AI — синхронизация Google code base (`base/base_google.py`)
+
+> Контекст для чатов, которые трогают `load_base()`, кэш `base_check/code_base_data.json`, MTO/BBB и сеть к Google.
+
+---
+
+## 1. В чём была проблема
+
+1. **Зависание на MTO-проверке** после строки «Запуск MTO-проверки…»: цепочка `load_base()` → **`pygsheets`** → **Drive API `get_update_time`** часто **не отвечала** (корпоративная сеть, прокси, отличие маршрута от браузера). `authorize` проходил быстро, дальше — тишина до системного TCP-таймаута.
+
+2. **«В Chrome таблица открывается, в приложении нет»**: браузер использует **сессию Google (cookies)** и **системный прокси**; `urllib` / старый OAuth ходят **без cookies** и по умолчанию **без WinINET-прокси** — анонимный export может вернуть **HTML входа** вместо CSV.
+
+3. **Вторая загрузка в одном запуске**: `load_base()` вызывается и при **MTO**, и при **BBB** (`Загрузка code_base…`). Два **полных GET** большого CSV подряд на `\\bcc\...` давали **второе «подвисание»** или очень долгий ответ.
+
+4. **Долгое ожидание без гарантии**: нужен **предсказуемый предел** времени ожидания и **откат на локальный кэш**.
+
+---
+
+## 2. Как было реализовано раньше (до export CSV)
+
+- Библиотека **`pygsheets`**: `authorize(service_file=...)` → **Drive API** `get_update_time(spreadsheet_id)` для сравнения с `base_check/code_base_meta.json` → при изменении — **`open_by_url` + `get_values`** листа «СПО_1» → запись **`base_check/code_base_data.json`** (матрица как `list[list]`).
+- Инкремент: если `modifiedTime` совпал с кэшем — **сеть для листа не вызывалась**, читался только локальный json.
+- Проблемный узел: именно **Drive `get_update_time`** и иногда весь **Sheets API через pygsheets** на том же контуре, где **docs.google.com в браузере** уже работал.
+
+Промежуточный эксперимент (откатили): отключение только `get_update_time` с **всегда полной** выгрузкой через pygsheets — **не сняло** зависания, если они были уже на **`open_by_url` / `get_values`**.
+
+---
+
+## 3. Что сделали сейчас и почему
+
+| Изменение | Зачем |
+|-----------|--------|
+| **Основной путь — публичный HTTPS export CSV** (`…/spreadsheets/d/{id}/export?format=csv&sheet=…`), **`urllib.request`** + **`ProxyHandler(getproxies())`** | Обход **pygsheets/Drive** на горячем пути `load_base`; тот же тип ответа, что ожидает `code_base_formating` (матрица из CSV). Прокси как у CLI — через **`HTTPS_PROXY` / `HTTP_PROXY`**. |
+| Заголовки как у **Chrome** (`User-Agent`, `Accept`, `Accept-Language`) | Снижает риск ответа «не CSV» для скриптовых UA. |
+| Проверка тела: **HTML входа / ошибка** вместо CSV → понятное сообщение в консоль | Отличие **«вошли в Google в браузере»** vs **анонимный запрос**; подсказка про доступ **«все по ссылке — читатель»**. |
+| Опционально **HEAD** + сравнение **`Last-Modified`** с полем **`export_last_modified`** в meta | Лёгкая проверка «менялось ли» **без полного GET**, если Google отдаёт заголовок (часто **нет** — тогда всегда GET в пределах таймаута). |
+| **`CODE_BASE_SYNC_COOLDOWN_SEC`** (по умолчанию **300** с): после **успешной** выгрузки не дергать Google повторно в том же процессе | MTO и BBB в одном запуске **не делают два тяжёлых export подряд**. `0` — отключить кулдаун. |
+| **`CODE_BASE_EXPORT_TIMEOUT_SEC`** (по умолчанию **6** с): лимит **одного** GET/HEAD + ``CODE_BASE_EXPORT_RETRIES`` повторов только при ``TimeoutError`` | Повторы не увеличивают лимит одной попытки; ``CODE_BASE_EXPORT_RETRY_DELAY_SEC`` — пауза между ними. |
+| Кэш по-прежнему: **`code_base_data.json`** + **`code_base_meta.json`** (добавлены `export_last_modified`, `source`) | Совместимость с остальным кодом, возможность вернуться к более умной инкрементальной логике позже. |
+
+**`load_base()`** (см. код): по умолчанию **только** public export CSV. Этап Sheets API — при **`CODE_BASE_SYNC_API_FIRST=1`** (Drive `modifiedTime`, при необходимости `get_values`, иначе fallback на export). Раньше в этом файле «только export» описывало прод до введения API-этапа.
+
+**`pygsheets`** по-прежнему в **`google_get_data` / `google_get_worksheet`** (другие сценарии).
+
+---
+
+## 4. Переменные окружения (кратко)
+
+| Переменная | Назначение |
+|------------|------------|
+| `CODE_BASE_SYNC_API_FIRST` | `1` / `true` / `on` — сначала Sheets API, иначе только export. По умолчанию (env не задан) — **только export**. |
+| `CODE_BASE_API_TIMEOUT_SEC` | Таймаут цепочки API (сек), по умолчанию **6**. |
+| `CODE_BASE_EXPORT_TIMEOUT_SEC` | Таймаут **одного** GET/HEAD export (сек), по умолчанию **6**. |
+| `CODE_BASE_EXPORT_RETRIES` | Доп. попытки export при только `TimeoutError` (0 = без повторов). |
+| `CODE_BASE_EXPORT_RETRY_DELAY_SEC` | Пауза между повторами (сек), по умолчанию **0.35**. |
+| `CODE_BASE_SYNC_COOLDOWN_SEC` | Пауза между успешными export в одном процессе (сек), по умолчанию **300**; **0** — всегда пытаться синхронизировать. |
+| `CODE_BASE_SHEET_NAME` | Имя листа для export (по умолчанию **СПО_1**). |
+| `CODE_BASE_EXPORT_DEBUG` | `1` / `true` — печать `getproxies()` при запросе. |
+
+---
+
+## 5. Файлы
+
+- Реализация: [base/base_google.py](c:\Users\ydruzev\PycharmProjects\Documentation_PDF_out_NK\base\base_google.py)
+- Кэш: `base_check/code_base_data.json`, `base_check/code_base_meta.json`
+- Вызовы `load_base()`: в т.ч. [base/google_sheets.py](c:\Users\ydruzev\PycharmProjects\Documentation_PDF_out_NK\base\google_sheets.py), [base/bbb_analysis.py](c:\Users\ydruzev\PycharmProjects\Documentation_PDF_out_NK\base\bbb_analysis.py) и др.
+
+---
+
+## 6. Напоминание для будущих правок
+
+- Не возвращать на горячий путь **`get_update_time`** без **отдельного таймаута** или без согласования с сетью BCC.
+- Если нужна **точная дата изменения файла на Drive** без полного листа — это уже **отдельный** вызов API с **явным HTTP timeout** или внешний скрипт; публичный export **не гарантирует** `Last-Modified`.

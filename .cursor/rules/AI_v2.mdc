@@ -1,0 +1,55 @@
+---
+description: "PDF v2 — короткий роутер по правилам и общим инвариантам."
+globs:
+  - "pdf_parsing_v2/**"
+  - "pdf_parsing_v2_engine/**"
+  - "pdf_parsing_v2_od/**"
+  - "pdf_template_editor/**"
+  - "pdf_v2_monitor/**"
+alwaysApply: false
+---
+
+# PDF v2 — INDEX
+
+Короткий указатель. Детали должны жить в специализированных правилах, а не здесь.
+
+## Как использовать в чатах
+
+- Для любой задачи по v2: сначала это правило.
+- Затем добавляй профильное:
+  - движок / pipeline / fitz / JSON / extraction -> `AI_v2_engine.mdc`
+  - редактор шаблонов -> `AI_v2_editor.mdc`
+  - grid alignment / `adapt_debug` / `grid_matcher` -> `AI_v2_grid.mdc`
+  - формат `adapt_debug_*.txt` / `alignment_log` -> `AI_v2_grid_log.mdc`
+  - control center / `pdf_v2_monitor` -> `AI_v2_monitor.mdc`
+  - ОД (ведомость) / `pdf_parsing_v2_od` -> `AI_v2_od.mdc`
+  - анализ тегов / MTO diff / `TagClass` / `tag_analysis` -> `AI_v2_tag_analysis.mdc`
+  - параллель extraction -> `AI_v2_parallel.mdc`
+  - фазы развития -> `AI_v2_dev_phases.mdc`
+
+## Общие инварианты
+
+- Каталог v1 `pdf_parsing/` удалён; весь PDF — только пакеты v2 ниже.
+- Пакеты v2 разделены так:
+  - оркестратор -> `pdf_parsing_v2/`
+  - движок -> `pdf_parsing_v2_engine/`
+  - редактор -> `pdf_template_editor/`
+  - control center -> `pdf_v2_monitor/`
+  - ОД (таблица ведомости) -> `pdf_parsing_v2_od/`
+- Основной GUI entrypoint для v2 -> `python -m pdf_v2_monitor`.
+- Редактор шаблонов запускается отдельно -> `python -m pdf_template_editor`.
+- Rotation помнить всегда:
+  - `get_drawings()` -> unrotated
+  - `find_tables()` -> displayed
+  - перед `get_textbox` rect переводится через `fitz_displayed_to_unrotated(...)`
+- Публичные API и побочные эффекты смотреть в `pdf_parsing_v2/INTERFACES.md`.
+
+## Что важно на сейчас
+
+- ОД: строки ведомости через pdfplumber с **`page.crop`** по manifest clip (рамка минус штамп), когда **`od_table_parsing_f`** вызывается с **`cfg` + templates**; один проход геометрии используется и для **`engine_findtables_debug`**; предупреждения **`od_table["warnings"]`** (формат **`3001:`** и др.) после **`rules_check`** попадают в **`normcontrol["all_rows"]`** — см. **`AI_v2_od.mdc`**.
+- **Анализ тегов:** **`summary["tag_analysis"]`**, вкладка **«Анализ тегов»** — **`AI_v2_tag_analysis.mdc`** (и **`AI_v2_monitor.mdc`** для GUI).
+- Production path использует `proposed_bbox` prealign + adaptive scale threshold; детали в `AI_v2_engine.mdc`.
+- Для `od_page1` A4-кейса подтверждён рабочий результат: `virtual_left` берётся от full-height boundary (`PDF:v_3`), `proposed/effective_bbox.x0 = 56.7`, итоговый `VERDICT = OK`; детали в `AI_v2_grid.mdc`.
+- Кнопка `Дамп отладки адаптации` остаётся single-run в редакторе и пишет `json + txt + png`; детали в `AI_v2_grid.mdc` и `AI_v2_grid_log.mdc`.
+- Визуальный разбор тех же данных на canvas редактора — панель **«Границы»** (prealign + слои рабочего поля, открепляемое окно); канон **`layer_id`** / **«Слой (полное имя)»** и сопровождение — **`AI_v2_editor.mdc`**.
+- Запись **openpyxl**-отчётов (НК xlsx, `v2_timing_log.xlsx`): вложенный конфиг **`excel.sanitize_illegal_chars`** и санитизация строк (`utils/excel.py`); детали в `AI_v2_engine.mdc`, GUI — `AI_v2_monitor.mdc`.

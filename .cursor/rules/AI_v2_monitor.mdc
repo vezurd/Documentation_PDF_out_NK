@@ -1,0 +1,184 @@
+---
+description: "PDF v2 — control center / GUI мониторинг pipeline (`pdf_v2_monitor/`). Обновлено 23.04.2026."
+globs:
+  - "pdf_v2_monitor/**"
+alwaysApply: false
+---
+
+# PDF v2 — Control Center / GUI мониторинг (`pdf_v2_monitor/`)
+
+> Единственный источник правил по пакету `pdf_v2_monitor/`.
+> Параллельная обработка (фаза 4) — `AI_v2_parallel.mdc`.
+> Доменные модели / pipeline — `AI_v2_engine.mdc`.
+> Разбор ведомости ОД — `AI_v2_od.mdc`.
+> Редактор шаблонов (`pdf_template_editor`) — отдельное приложение; см. **`AI_v2_editor.mdc`**.
+> Анализ тегов (MTO / payload / `TagClass`) — **`AI_v2_tag_analysis.mdc`**.
+
+**Статус:** реализовано и расширено до **control center** (10.04.2026). База = фаза 5 дорожной карты (`AI_v2_dev_phases.mdc`). **04.2026:** вкладка **«ОД»**, **`summary["od_table"]`**, быстрый разбор ОД из контекстного меню Run. **23.04.2026:** вкладка **«Анализ тегов»**, **`summary["tag_analysis"]`** — детали и контракт payload в **`AI_v2_tag_analysis.mdc`**.
+
+---
+
+## Когда читать это правило
+
+- правки в `pdf_v2_monitor/**`
+- запуск pipeline из GUI
+- настройки `pdf_v2_config.json`
+- UX вкладок Run / Нормоконтроль / **ОД** / **Анализ тегов** / Reports
+
+Для engine-логики дополнительно читать `AI_v2_engine.mdc`. Для ОД (парсер ведомости, API) — `AI_v2_od.mdc`. Для анализа тегов (код + payload + стадия `tag_analyze`) — **`AI_v2_tag_analysis.mdc`**.
+
+---
+
+## Запуск
+
+- **Standalone:** `python -m pdf_v2_monitor ["C:\path\to\PDF"] [--project AGCC_287] [--tab run|settings|monitor|reports|normcontrol|nk|od|tags|tag_analysis]`
+  - **`normcontrol` / `nk`** — «Результат Нормоконтроля» (`_TAB_INDEX_NORMCONTROL` = 1)
+  - **`od`** — вкладка **«ОД»** (`_TAB_INDEX_OD` = 2)
+  - **`tags` / `tag_analysis`** — вкладка **«Анализ тегов»** (`_TAB_INDEX_TAG_ANALYSIS` = 3)
+  - **`reports`** — `_TAB_INDEX_REPORTS` = 4
+- **Индексы верхних вкладок:** `Run=0`, `НК=1`, `ОД=2`, `Анализ тегов=3`, `Reports=4` (`monitor_window.py`: `_TAB_INDEX_*`).
+- **Из `main.py`:** одна кнопка «Центр управления PDF v2» → `subprocess.Popen([sys.executable, "-m", "pdf_v2_monitor"])`.
+- Если `pdf_path` не передан, окно **открывается пустым**; папка выбирается внутри control center. Авто-`QFileDialog` при старте **убран** (10.04.2026).
+
+---
+
+## Назначение
+
+Top-level PySide6 приложение для управления PDF v2:
+
+- запуск pipeline;
+- редактирование `pdf_v2_config.json`;
+- live-monitoring стадий pipeline;
+- открытие артефактов результатов;
+- разбор замечаний НК и сохранение review-state;
+- **просмотр ведомости ОД** (таблица из postprocess или точечный разбор);
+- запуск `pdf_template_editor`;
+- работа с конкретным PDF из таблицы результатов.
+
+Это уже **не только монитор**, а основной **V2 Control Center**.
+
+---
+
+## Архитектура
+
+### Пакет `pdf_v2_monitor/`
+
+| Файл | Назначение |
+|------|------------|
+| `__init__.py` | Реэкспорт `MonitorWindow` |
+| `__main__.py` | Entry point для `python -m`, argparse (`--tab`: `od`, `tags` / `tag_analysis`, …), создание `QApplication` |
+| `monitor_callback.py` | `MonitorCallback(QObject)` — bridge для extraction, per-file `tag_parse` и pipeline-wide stage callbacks |
+| `pipeline_thread.py` | `PipelineThread(QThread)` — запускает `run_v2_pipeline` в фоновом потоке |
+| `monitor_window.py` | `MonitorWindow(QDialog)` — Run, **Результат Нормоконтроля**, **ОД**, **Анализ тегов**, Reports, настройки в отдельном диалоге, live-monitor на Run |
+
+### Потоки и сигналы
+
+```text
+Main thread (GUI)           Background QThread
+─────────────────           ─────────────────
+MonitorWindow               PipelineThread.run()
+  ├─ Run tab                  ├─ run_v2_pipeline(
+  ├─ Normcontrol tab          │    extraction_callback=MonitorCallback)
+  ├─ ОД tab                   │
+  ├─ Анализ тегов tab         │
+  ├─ Reports tab              │
+  ├─ file table          ◄── MonitorCallback.sig_file_start/done/error
+  │                       ◄── MonitorCallback.sig_tag_file_start/done/error
+  ├─ stage table         ◄── MonitorCallback.sig_stage_start/done/error
+  ├─ phase label         ◄── MonitorCallback.sig_phase_changed
+  └─ report widgets      ◄── MonitorCallback.sig_pipeline_finished
+```
+
+`MonitorCallback` вызывается из **основного процесса** (не из worker-процессов). Qt signals emit-ятся безопасно.
+
+---
+
+## GUI: вкладки и layout
+
+- **Tab `Run`:** выбор папки PDF, запуск pipeline, сохранение / reload настроек, кнопка «Открыть редактор шаблонов», summary effective config.
+- **Настройки:** не отдельная вкладка; **Главная → Настройки** — диалог с полями `pdf_v2_config.json`. Отдельная группа **«Excel (openpyxl)»**: чекбокс **`excel.sanitize_illegal_chars`** (удаление символов, запрещённых в xlsx, при записи НК и timing log). В сводке effective config на Run отображается **`Excel sanitize: on/off`**. Группа **«Префильтр ячеек сетки (острова)»**: **`grid_detected_prefilter_enabled`**, **`grid_detected_prefilter_adjacency_tol_floor_pt`** (остальные ключи `grid_detected_prefilter_*` сохраняются из JSON при «Сохранить» через дефолты `v2_config`). Подсказка у пола pt: порядок **~2.834 pt/mm** (`coord_transform.SCALE`).
+- **Tab `Run` (нижняя часть):** progress bar, фаза, время, **таблица файлов**, таблица **stage events**.
+- **Tab `Результат Нормоконтроля`:** верхнеуровневая вкладка после Run; таблица НК, фильтры, review-state, xlsx. После **успешного завершения pipeline** UI переключается на эту вкладку (`_TAB_INDEX_NORMCONTROL`).
+- **Tab `ОД` (04.2026):** заголовок вкладки — **«ОД»**. Текст статуса: **`ok`** / **`no_od_file`** / **`no_rows`** (файл прочитан, строк нет) / **`error`**; при **`warnings`** в payload — маркированный список под текстом (**`• 3001: …`** и т.д., см. **`AI_v2_od.mdc`**). Таблица с колонками как у консольной ведомости (`summary["od_table"]`). Многострочные ячейки, read-only delegate для копирования (double-click). Стиль выделения/hover: **`_TABLE_SELECTION_HOVER_STYLE`**. Компактная высота строк: **`_OD_TABLE_DEFAULT_ROW_HEIGHT`**. Сброс при новом запуске pipeline (`_clear_od_table_tab`).
+- **Tab `Анализ тегов` (23.04.2026):** данные из **`summary["tag_analysis"]`**; сброс **`_clear_tag_analysis_tab`**, заполнение **`_populate_tag_analysis_from_summary`**. Список проверок, таблицы, фильтры **`extra_in_sheets`** / порог **`high_frequency`**, навигация по PDF и диалог **`TagClass(..., strict=False)`** — см. **`AI_v2_tag_analysis.mdc`** (вкладка + payload) и реализацию в **`monitor_window.py`**.
+- **Tab `Reports`:** summary + вложенные вкладки Extraction / Tags / OD / Rules; кнопки папка результатов, timing xlsx, debug xlsx.
+
+Отдельная вкладка `Monitor` убрана; объединена с `Run` (10.04.2026).
+
+---
+
+## ОД: быстрый разбор без pipeline (04.2026)
+
+- В **контекстном меню** таблицы файлов на Run (ПКМ по строке): если **`getDocTypeFromFile`** для имени файла даёт **OD**, добавляется пункт **«ОД чтение ведомости»**.
+- Обработчик **`_run_od_read_manifest`**: загружает шаблоны как при pipeline (**`resolve_templates_dir`** + **`load_project_templates`** / **`load_all_templates`**), затем **`od_table_parsing_f`** с **`cfg`**, **`templates`**, **`manifest_geometry_out`**, **`debug_print_out_list=0`**; затем **`collect_od_manifest_findtables_debug(..., geometry_rows=...)`** для **`engine_findtables_debug`**; **`build_od_table_payload`**, **`_populate_od_table_from_summary`**, вкладка **`_TAB_INDEX_OD`**. Курсор ожидания на время вызова. Контракт совпадает с **`run_v2_postprocess`**, без **`curr_proj`** (нет кэша extraction). Вкладка **НК** при этом **не** пересобирается из ОД (нет вызова **`rules_check_start_v2`**).
+
+---
+
+## Интеграция с pipeline
+
+### Callback
+
+`run_v2_pipeline` принимает `extraction_callback`. Пробрасывается в extraction / parallel extraction. Дополнительно: `on_phase_changed`, `on_stage_*`, `on_pipeline_finished`.
+
+Итоговый **`summary`** содержит **`normcontrol`**, **`od_table`** и **`tag_analysis`**. UI наполняет вкладки НК, ОД и Анализ тегов из Python payload (`_populate_reports` / **`_populate_tag_analysis_from_summary`**). Структура **`tag_analysis`** и стабильные **`checks[].id`** — **`AI_v2_tag_analysis.mdc`**. После полного pipeline в **`normcontrol["all_rows"]`** могут быть строки из разбора ОД (коды **3001**, **3002**, **3099**), сформированные в **`rules_check_start_v2`** из **`od_table["warnings"]`** наряду с правилами и extraction (**21xx**); см. **`AI_v2_od.mdc`**.
+
+### Стадии, видимые в UI
+
+`find_files`, `load_templates`, `run_extraction`, `parse_tags`, `tag_analyze`, **`od_table_parsing`**, `rules_check`, `debug_report`, `debug_visual`, `timing_export`.
+
+При **`on_stage_error`** — переключение на Run, подсветка строки stage, `QMessageBox` (см. историческую логику в `monitor_window.py`).
+
+После **`load_templates`**: если у PDF тип документа не входит ни в один загруженный шаблон, этап помечается **`warning`**, колонка ошибки файла — жёлтое «Нет шаблона для типа …», и **`QMessageBox.warning`**. Тип **NI** входит в DWG-шаблоны (`LIST_OF_DWG_DOC_TYPES`). Пайплайн при этом **не останавливается**.
+
+### Per-file progress
+
+Progress bar считает тяжёлые задачи **`extract + tag_parse`**; 100% до конца postprocess — нормально.
+
+---
+
+## UX: НК и таблицы (сжатое напоминание)
+
+- НК: данные из payload, не перечитывать xlsx для primary UI; не **`ResizeToContents` + массовый `resizeRowsToContents`** на НК; фиксированная высота строк НК; горизонтальный скролл — `_NormcontrolTableWidget`.
+- **Таблица файлов на Run (04.2026):** для снятия «синего» Fusion-выделения применён тот же **`_TABLE_SELECTION_HOVER_STYLE`**, что и для НК/ОД.
+- ПКМ по строке PDF: «Открыть PDF», «Открыть в редакторе шаблонов», и для OD — «ОД чтение ведомости».
+- Двойной клик по строке файловой таблицы — открыть PDF.
+
+Per-page PPE: настройки в `cfg["per_page"]`; monitor отображает на уровне строки PDF.
+
+---
+
+## Оформление (темы интерфейса)
+
+- Ключ в `pdf_v2_config.json`: **`monitor_ui_theme`**; нормализация — **`normalize_monitor_ui_theme`** в `pdf_parsing_v2/v2_config.py`.
+- Выбор в **Главная → Настройки → Оформление интерфейса → Тема** (`monitor_window.py`, `_combo_monitor_theme`).
+- Встроенные id и подписи (**`MONITOR_UI_THEME_CHOICES`** / **`MONITOR_UI_THEME_LABELS`**):
+  - `system` — как в системе (Qt **`ColorScheme.Unknown`**)
+  - `light` — светлая
+  - `light_high_contrast` — **светлая контрастная** (Fusion + палитра/QSS из **`main_v2/appearance.py`**, как в hub **`main_v2`**)
+  - `dark` — тёмная
+  - `dark_high_contrast` — **тёмная контрастная** (тот же механизм Fusion, жёлтое выделение)
+- Простые `system` / `dark` / `light` — только **`QApplication.styleHints().setColorScheme`**; перед переключением с контрастных тем сбрасывается app QSS через **`apply_theme(..., "system")`**.
+- Контрастные темы переиспользуют **`main_v2.appearance.apply_theme`** — не дублировать палитры в `pdf_v2_monitor/`.
+- В сводке effective config на Run отображается **`Тема: …`** (из **`MONITOR_UI_THEME_LABELS`**).
+- Стили выделения таблиц (**`_TABLE_SELECTION_HOVER_STYLE`**) зависят от текущего **`ColorScheme`**; для контрастных тем выставляется Light/Dark явно.
+
+---
+
+## Ловушки
+
+- **`main.py`** и **`pdf_v2_monitor`** — разные GUI; только **subprocess**.
+- **`PipelineThread`**: копия **`cfg`**.
+- **`MonitorCallback`** не из PPE workers.
+- Не вкладывать НК обратно внутрь Reports без явной задачи.
+- Константы вкладок: **`_TAB_INDEX_RUN`**, **`_TAB_INDEX_NORMCONTROL`**, **`_TAB_INDEX_OD`**, **`_TAB_INDEX_TAG_ANALYSIS`**, **`_TAB_INDEX_REPORTS`**.
+
+---
+
+## См. также
+
+- `AI_v2.mdc`
+- `AI_v2_editor.mdc` (отдельный GUI; команда «Открыть в редакторе шаблонов» из Run)
+- `AI_v2_od.mdc`
+- `AI_v2_tag_analysis.mdc`
+- `AI_v2_engine.mdc`
+- `AI_v2_parallel.mdc`

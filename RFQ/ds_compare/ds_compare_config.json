@@ -1,0 +1,526 @@
+{
+  "flat_mto_structure": true,
+  "mto_use_cache": true,
+  "mto_force_update": false,
+  "mto_paths": [
+    {
+      "label": "Готовые для робота",
+      "path": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_ГОТОВЫЕ_ДЛЯ_РОБОТА"
+    },
+    {
+      "label": "ДУП",
+      "path": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\Для ДУП"
+    }
+  ],
+  "mto_path_selected_index": 0,
+  "in_cabinet_debug": {
+    "enabled": false,
+    "watch_title": "8950",
+    "watch_mark": "SOT5",
+    "watch_code": "BCC0003552, BCC0001991",
+    "watch_cabinet": ""
+  },
+  "grouped_compare": {
+    "group_by_code": true,
+    "group_by_title": true,
+    "group_by_system": true,
+    "group_by_ds_name": false,
+    "group_mto_new_positions": true,
+    "cache_ds_mto_result": true
+  },
+  "ds_vs_mto_output": {
+    "show_internal_column_names": false,
+    "expand_aggregated_replacement_codes": true,
+    "excel_export_mode": "both",
+    "columns": [
+      {
+        "col_name": "DS_NAME",
+        "output": true,
+        "width": 7,
+        "header_label": "Имя ДС",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "DS_NUMBER",
+        "output": true,
+        "width": 7,
+        "header_label": "№ п/п",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "DS_TITLE",
+        "output": true,
+        "width": 9,
+        "header_label": "Титул",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "DS_SYSTEM",
+        "output": true,
+        "width": 9,
+        "header_label": "Раздел",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "DS_SPECIFICATION",
+        "output": false,
+        "width": 20,
+        "header_label": "Линия/ TAG-Номер/ Спецификация",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "DS_RFQ",
+        "output": false,
+        "width": 10,
+        "header_label": "RFQ",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "name",
+        "output": true,
+        "width": 28,
+        "header_label": "Наименование Позиций Товара по РД",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "DS_CODE_1C",
+        "output": false,
+        "width": 12,
+        "header_label": "Код 1С СОУ",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "code",
+        "output": true,
+        "width": 14,
+        "header_label": "Код РД",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "DS_NAME_BY_RFQ",
+        "output": false,
+        "width": 28,
+        "header_label": "Наименование Позиций Товара Поставщика",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "type_mark",
+        "output": true,
+        "width": 22,
+        "header_label": "Технические требования (ГОСТ/ ТУ и др.)",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "units",
+        "output": true,
+        "width": 8,
+        "header_label": "Ед. изм.",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "values",
+        "output": true,
+        "width": 7,
+        "header_label": "Кол-во",
+        "header_color": "#dbbcdb",
+        "section": "ds"
+      },
+      {
+        "col_name": "DS_UNIT_PRICE_EXCL_VAT",
+        "output": true,
+        "width": 18,
+        "header_label": "Цена за Позицию Товара (RUB) без НДС (ЕР по Прил. 1.1. к Договору)",
+        "header_color": "#c6e0b4",
+        "section": "prices"
+      },
+      {
+        "col_name": "DS_PACKAGING_PRICE_EXCL_VAT",
+        "output": false,
+        "width": 12,
+        "header_label": "Цена (RUB) за упаковку без НДС",
+        "header_color": "#c6e0b4",
+        "section": "prices"
+      },
+      {
+        "col_name": "DS_SHIPPING_PRICE_EXCL_VAT",
+        "output": false,
+        "width": 12,
+        "header_label": "Цена (RUB) за транспортировку без НДС",
+        "header_color": "#c6e0b4",
+        "section": "prices"
+      },
+      {
+        "col_name": "DS_UNIT_PRICE_WITH_EXTRAS_EXCL_VAT",
+        "output": false,
+        "width": 20,
+        "header_label": "Цена за Позицию Товара с учетом упаковки и транспортировки (RUB) без НДС",
+        "header_color": "#c6e0b4",
+        "section": "prices"
+      },
+      {
+        "col_name": "DS_TOTAL_PRICE_EXCL_VAT",
+        "output": false,
+        "width": 20,
+        "header_label": "Цена за Позиции Товара с учетом упаковки и транспортировки (RUB) без НДС",
+        "header_color": "#c6e0b4",
+        "section": "prices"
+      },
+      {
+        "col_name": "DS_VAT_AMOUNT",
+        "output": false,
+        "width": 12,
+        "header_label": "(RUB) НДС - 20%",
+        "header_color": "#c6e0b4",
+        "section": "prices"
+      },
+      {
+        "col_name": "DS_TOTAL_PRICE_INCL_VAT",
+        "output": false,
+        "width": 18,
+        "header_label": "Цена Позиций Товара (RUB) с НДС 20%",
+        "header_color": "#c6e0b4",
+        "section": "prices"
+      },
+      {
+        "col_name": "DS_DELIVERY_TIME",
+        "output": false,
+        "width": 12,
+        "header_label": "Срок поставки",
+        "header_color": "#c6e0b4",
+        "section": "prices"
+      },
+      {
+        "col_name": "vendor",
+        "output": false,
+        "width": 10,
+        "header_label": "Прим.",
+        "header_color": "#ffcc00",
+        "section": "meta"
+      },
+      {
+        "col_name": "annotation_2",
+        "output": true,
+        "width": 23,
+        "header_label": "комментарий",
+        "header_color": "#ffcc00",
+        "section": "meta"
+      },
+      {
+        "col_name": "annotation_3",
+        "output": true,
+        "width": 16,
+        "header_label": "замена кода",
+        "header_color": "#ffcc00",
+        "section": "meta"
+      },
+      {
+        "col_name": "IN_CABINET",
+        "output": true,
+        "width": 30,
+        "header_label": "Оборудование относящиеся к шкафам (по тегу шкафа)",
+        "header_color": "#ffcc00",
+        "section": "meta"
+      },
+      {
+        "col_name": "tags_2",
+        "output": true,
+        "width": 20,
+        "header_label": "TAG №",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "numbers_2",
+        "output": true,
+        "width": 20,
+        "header_label": "п.п.№ спецификации МТО",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "annotation_mto",
+        "output": true,
+        "width": 24,
+        "header_label": "ANNOTATION (МТО)",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "name_2",
+        "output": true,
+        "width": 30,
+        "header_label": "Наименование и техническая характеристика",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "type_mark_2",
+        "output": true,
+        "width": 18,
+        "header_label": "Тип, марка, обозначение документа, опросного листа",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "code_2",
+        "output": true,
+        "width": 12,
+        "header_label": "Код продукции",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "vendor_2",
+        "output": true,
+        "width": 16,
+        "header_label": "Поставщик",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "units_2",
+        "output": true,
+        "width": 8,
+        "header_label": "Ед. измерения",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "values_2",
+        "output": true,
+        "width": 8,
+        "header_label": "Кол.",
+        "header_color": "#cd7f32",
+        "section": "mto"
+      },
+      {
+        "col_name": "mto_ds_diff",
+        "output": true,
+        "width": 10,
+        "header_label": "Спека − ДС",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "rfq_values",
+        "output": true,
+        "width": 10,
+        "header_label": "Кол-во RFQ",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "rfq_units",
+        "output": true,
+        "width": 10,
+        "header_label": "Ед. изм. RFQ",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "mto_ds_rfq_diff",
+        "output": true,
+        "width": 12,
+        "header_label": "Спека − ДС − RFQ",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "rfq_compare_status",
+        "output": true,
+        "width": 16,
+        "header_label": "Статус RFQ",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "delivery_overall_status",
+        "output": true,
+        "width": 18,
+        "header_label": "Общий статус поставки",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "rfq_name",
+        "output": true,
+        "width": 28,
+        "header_label": "Наименование МТР",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "rfq_code",
+        "output": true,
+        "width": 14,
+        "header_label": "Код РД / BCC",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "rfq_type_mark",
+        "output": true,
+        "width": 22,
+        "header_label": "Техн. характеристики RFQ",
+        "header_color": "#b7dee8",
+        "section": "rfq"
+      },
+      {
+        "col_name": "ul_ordered_values",
+        "output": true,
+        "width": 13,
+        "header_label": "Заказано (ДС + RFQ)",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_values",
+        "output": true,
+        "width": 11,
+        "header_label": "Кол-во по УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_units",
+        "output": true,
+        "width": 10,
+        "header_label": "Ед. изм. УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_remaining_values",
+        "output": true,
+        "width": 13,
+        "header_label": "Остаток поставки",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_compare_status",
+        "output": true,
+        "width": 20,
+        "header_label": "Статус УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_data_status",
+        "output": true,
+        "width": 22,
+        "header_label": "Качество данных УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_code",
+        "output": true,
+        "width": 14,
+        "header_label": "Код УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_source_files",
+        "output": true,
+        "width": 45,
+        "header_label": "Исходники УЛ (файл · вкладка · строка)",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_name",
+        "output": false,
+        "width": 28,
+        "header_label": "Наименование УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_type_mark",
+        "output": false,
+        "width": 22,
+        "header_label": "Техн. характеристики УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_vendor",
+        "output": false,
+        "width": 18,
+        "header_label": "Поставщик УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      },
+      {
+        "col_name": "ul_tags",
+        "output": false,
+        "width": 24,
+        "header_label": "Теги УЛ",
+        "header_color": "#c9daf8",
+        "section": "ul"
+      }
+    ]
+  },
+  "gui_paths": {
+    "last_ds_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\Спецификации к ДС в Excel\\__результат_проверки_2026.08.12_13H-39M\\DS_summary_ДС1_ДС99_86.xlsx",
+    "last_rfq_file": "//bcc/eng/PrDoc/377_НИПИГАЗ/АГХК/КСБ/RFP_MTO_VO/_RFQ/ТКП № 8001 от 09.07.2026/ТКП № 8001 от 09.07.2026.xlsx",
+    "last_merge_ds_folder": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\Спецификации к ДС в Excel",
+    "last_tsd_packing_folder": "\\\\bcc\\root\\CurProjects\\di_manegers\\Пятницкий_П\\Амурский ГХК\\Поставки\\ТСД по всем ДС",
+    "last_tsd_summary_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\УЛ сводный файл\\tsd_packing_summary_2026.08.12_10.30.20.xlsx",
+    "last_upd_folder": "\\\\bcc\\root\\CurProjects\\di_manegers\\Пятницкий_П\\Амурский ГХК\\Поставки\\Файл закачки УПД по всем ДС",
+    "last_upd_summary_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\УПД сводный файл\\upd_summary_2026.09.14_16.43.10.xlsx"
+  },
+  "gui_window": {
+    "width": 2420,
+    "height": 1253,
+    "maximized": true,
+    "splitters": {
+      "run": [
+        240,
+        420
+      ],
+      "packing": [
+        240,
+        420
+      ],
+      "rfp_run": [
+        917,
+        1605
+      ],
+      "rfp_parts": [
+        520,
+        770
+      ],
+      "rfp_ds_id": [
+        240,
+        420
+      ],
+      "rfp_ds_mp": [
+        240,
+        420
+      ],
+      "misc_run": [
+        918,
+        1604
+      ],
+      "upd": [
+        240,
+        420
+      ]
+    }
+  }
+}

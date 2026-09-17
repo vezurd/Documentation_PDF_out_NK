@@ -1,0 +1,504 @@
+---
+description: "rd_catalog: SQLite as source of truth, pipeline status, kit card API, GUI is a monitor."
+globs: ["rd_catalog/**", "tmp/test_rd_catalog_*.py"]
+alwaysApply: false
+---
+
+# RD Catalog — database, pipeline, kit card
+
+Chat manual for catalog features. Overlay / scan / MTO compare stay in `AI_rd_catalog.mdc`. This file is the contract for **derived kit state** and **GUI as a monitor**.
+
+## 1. Architecture: GUI is a monitor
+
+- Qt (`rd_catalog/window.py`) **does not** parse Google CSV, classify F stages, match TRM, or decide pipeline status.
+- After a scan and after a Google load the domain writes derived rows into SQLite. Tabs call `list_*` / `get_kit_card` only.
+- GUI startup is a read-only monitor: [`StartupHydrateThread`](rd_catalog/startup_hydrate.py) reads `list_*` and prefers SQLite Google snapshots over JSON cache. First Комплекты paint applies the snapshot on the GUI thread. It does not `ingest_google_snapshot`+`rebuild_pipeline` unless derived tables are empty **or** stored `kit_pipeline.algorithm_version` is older than `PIPELINE_STATUS_ALGORITHM_VERSION` (v3 rows would keep overlay as official and show «Прошел ТДО · 01-AN02» for 2000-KSB). Rebuild still after scan / Google load (plus that hatch on the hydrate thread).
+- JSON caches (`google_kits_data.json`, `google_issuance_data.json`) remain the **network fallback**. After a successful load they are ingested into SQLite; the GUI prefers DB snapshots.
+- Never write Google sheets or RD/SQ UNC from pipeline/card code. Exceptions — both call `execute_journal_writes` via `GoogleFWriteThread`: the tab **«Письма о согласовании»** writes КСБ ИД F (and D/E when the new line is the last dated event) via [`rd_catalog/google_f_write.py`](rd_catalog/google_f_write.py) from **«Записать в Google»** (no extra confirm dialog); Комплекты **«D/E из журнала F…»** writes D/E from the existing last F line (`list_sheet_de_sync_rows` in [`rd_catalog/sheet_de_sync.py`](rd_catalog/sheet_de_sync.py); F is not rewritten). `execute_journal_writes` is one HTTP `values:batchUpdate` per kit. Then `fetch_google_kits(..., include_issuance=False)` → `ingest_google_snapshot` (keep existing issuance sends if the issuance cache is empty) → `rebuild_pipeline(kit_keys=…)` → Комплекты only (`official_detected_current_ids` + `build_kit_matrix`). Do not full `refresh()`. Do not create kit rows. Do not write «Выдача РД ПД». `google_update_cell` is not used.
+- SQLite connections use WAL (`PRAGMA journal_mode=WAL`) so the GUI can read while the deferred MTO worker writes `mto_comparison`. Cache validity is `CatalogDatabase.mto_pair_cache_valid`; do not duplicate that check in Qt.
+- Do not duplicate: `kit_identity_key`, `AgccFilenamePatterns`, F-stage classifier, `issued_package_dir`, overlay `detected_current`.
+
+### Function names
+
+| Prefix | Role | Typical home |
+|--------|------|----------------|
+| `parse_*` | Raw sheet/path → dataclasses | `kits.py`, `parse.py` |
+| `match_*` | Correlate sends ↔ F ↔ packages | `pipeline.py` |
+| `derive_*` | Pipeline / liquidity / working rev | `pipeline.py` |
+| `replace_*` / `rebuild_*` | Persist snapshots into SQLite | `db.py` + `pipeline.py` |
+| `rematch_*` | Re-attach `issuance_review` to the current snapshot | [`rd_catalog/issuance_review.py`](rd_catalog/issuance_review.py) |
+| `effective_*` | Include-contour sends / latest-wins kits | [`rd_catalog/issuance_review.py`](rd_catalog/issuance_review.py) |
+| `list_*` / `get_*` | Read for any tab | `db.py`, `pipeline.py`, `issuance_review.py` |
+| `build_*_monitor` / `load_catalog_monitor` | Cell join (text/fill/tooltip) for **Qt and WEB** | [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py) — see [AI_rd_catalog_web.mdc](.cursor/rules/AI_rd_catalog_web.mdc) |
+| `list_issuance_journal` | Journal rows (sheet + reviews + orphans) | [`rd_catalog/issuance_review.py`](rd_catalog/issuance_review.py) |
+| `apply_journal_decision` | Persist a journal decision (not `issuance_send`) | [`rd_catalog/issuance_review.py`](rd_catalog/issuance_review.py) |
+| `match_an_to_kit` / `parse_an_mto_file` | AN dump parse + kit match | [`rd_catalog/an_index.py`](rd_catalog/an_index.py) |
+| `replace_an_snapshot` / `list_an_mto_files` / `list_an_files_by_kit` | AN dump snapshot only | `db.py` |
+| `_refresh_*` / `_paint_*` | Qt **bind** only (setText / QColor from DTO) | `window.py`, `*_tab.py` |
+
+New **display** column or cell string: add it in `monitor_views` first, then bind Qt and WEB. Do not compose Auto MTO / ` AB` / robot-origin / AN tooltip in `window.py` or JS. New feature on another tab still calls `get_*` / `list_*` for facts; the painted row comes from `monitor_views`. Issuance-journal writes go through `apply_journal_decision` (validates, then `upsert_issuance_review`). Do not copy regex from `kits.py` into the widget. Never write issuance decisions onto `issuance_send` or Google «Выдача РД ПД».
+
+### Algorithm versions
+
+- Overlay: `OVERLAY_ALGORITHM_VERSION`
+- MTO compare: `MTO_COMPARE_ALGORITHM_VERSION`
+- Presence matrix flags/summary: `KIT_MATRIX_ALGORITHM_VERSION` — **do not bump** for working/official split or the issuance journal.
+- Pipeline status: `PIPELINE_STATUS_ALGORITHM_VERSION` in [`rd_catalog/pipeline.py`](rd_catalog/pipeline.py) is **10**. Store it on `kit_pipeline.algorithm_version`. v5 treats a manual working mark as one issued **folder**, not the whole filename revision. v6 does not treat a shared NN as working: `10_SQ-…` with `01-AN01` stays official when `10_рев.…_as built` is the working as-build. v7 auto-working is overlay-current (newest NN) strictly above last send/F, not the globally highest filename on disk (leftover `01` in an earlier folder must not beat current `0-AN01`). v8 persists `working_as_build` so Комплекты «Рабочая рев. РД» can paint ` AB` (startup rebuild fills it). v9 skips **annulled** folders (`kit_annulled_flag`) from official / auto-working / transfer contests / heatmap collision join (overlay `detected_current` stays objective). v10 re-derives F letters after Unicode dash normalize (`02–AN02` → `02-AN02`) so a stored `google_event` from the old parser does not keep a stale bare `02`.
+- Per-revision MTO heatmap: `REVISION_MATRIX_ALGORITHM_VERSION` in `rd_catalog/pipeline.py` (start at `1`). Store it on `kit_revision_cell.algorithm_version`. **Do not bump** for working/official split or folder-annulled. New fill key `annulled` / letter `Ан` is written on the next pipeline rebuild (v9 hatch).
+
+## 2. Schema version 12
+
+`SCHEMA_VERSION` is **12**. Keep `_migrate_2_to_3` and `_migrate_3_to_4`. `_migrate_4_to_5` in `rd_catalog/db.py` is ALTER `kit_pipeline` only. `_migrate_5_to_6` adds `mto_pair_comparison`. `_migrate_6_to_7` creates `issuance_review`. `_migrate_7_to_8` creates `an_mto_file`. `_migrate_8_to_9` creates `kit_working_flag`. `_migrate_9_to_10` rekeys `kit_working_flag` to the issued **folder** (`transfer_name` UNIQUE, plus `sequence`) and adds `kit_pipeline.working_transfer_names_json` / `working_sequences_json`. `_migrate_10_to_11` creates `file_mtime_override`. `_migrate_11_to_12` creates `kit_annulled_flag` (same folder identity as working). Do not rebuild `file_entry`. Worklist / `FolderTreeHint` MTO fields are a read view over `kit_revision_cell` — **no extra schema bump**. User liquidity, issuance-journal decisions, manual working flags, **manual annulled flags**, and MTO catalog-date overrides live in SQLite and **must survive** `replace_google_snapshot`, `replace_kit_derived`, `rebuild_pipeline`, scan upserts, and revision-matrix rebuild (never `DELETE FROM kit_liquidity_review`, `issuance_review`, `kit_working_flag`, `kit_annulled_flag`, or `file_mtime_override` during rebuild). `an_mto_file` must survive those same rebuilds (never `DELETE FROM an_mto_file` during them). `replace_an_snapshot` is the only full replace of that table.
+
+Fresh `_migrate_0_to_1` may still create schema-1 tables; later migrates bring the file to **12**. New `_migrate_2_to_3` output plus `_migrate_3_to_4` plus `_migrate_4_to_5` plus `_migrate_5_to_6` plus `_migrate_6_to_7` plus `_migrate_7_to_8` plus `_migrate_8_to_9` plus `_migrate_9_to_10` plus `_migrate_10_to_11` plus `_migrate_11_to_12` is the supported shape. `annulled_transfer_names_json` / `annulled_sequences_json` on `kit_pipeline` are added by `_ensure_kit_pipeline_columns` on every `initialize` (do not bump schema for those columns alone).
+
+Tables (names are normative):
+
+### `google_kit`
+
+One KSB ИД row per `(title, mark)` (case-insensitive identity). Columns D/E are **reference only**: `sheet_revision` / `sheet_appendix` / `sheet_revision_text`, `status_sheet`. `comment_raw` is column F unparsed.
+
+### `google_event`
+
+Parsed F lines for that kit: `kit_id`, `seq` (0-based order in the cell), `raw`, `event_date` (`DD.MM.YYYY` or NULL), `stage`, `stage_label`, `revision`, `appendix`, `transmittals_json` (JSON list of strings), `parsed`.
+
+### `issuance_send`
+
+**Every** parsed «Выдача РД ПД» row (not latest-wins). Same fields as `IssuanceKit`. Ingest uses `parse_issuance_sends` (all rows). `parse_issuance_matrix` remains latest-wins over the **raw** sheet for old tests. Комплекты «Выдача · …» paints `latest_effective_issuance_kits`.
+
+### `kit_package`
+
+One row per issued folder (or grey issuance-only stub):
+
+- `source`: `rd` / `sq` / `robot` / `issuance_grey`
+- `sequence`: folder `NN` or NULL
+- `transfer_name`, `package_path` (folder, **never** the PDF path)
+- `revision_text`: highest **filename** rev in that folder (OD wins ties), empty if unknown
+- `max_mtime_ns`, `pdf_count`, `editable_count`
+- `mto_revision_text`: filename rev of `mto_xlsx` in that folder, `''` if absent (delta overlay may keep MTO on an older NN)
+- `overlay_current_count`: present files in this folder that are overlay-current
+- `is_grey`: issuance send with this revision and **no** RD package
+- `is_current`: latest **official** RD package for the kit (highest sequence among non-grey RD that are not working)
+- `is_as_build`: 0/1 — any file in the package has canonical `is_as_build` (schema 4). Grey stubs are 0.
+
+Robot rows: `package_path` = parent of the MTO file (`…\_ГОТОВЫЕ_ДЛЯ_РОБОТА\title\MARK`), `sequence` NULL.
+
+### `kit_cycle`
+
+One official send cycle: FK `send_id`, optional `package_id`, optional F event ids (`tdo_event_id`, `code_event_id`), `revision_text`, `match_reason` (`trm` | `revision` | `date`).
+
+### `kit_pipeline`
+
+PK `(title, mark)`: derived state for the **last official cycle of the official revision** (`_last_official_cycle`). Must **not** fall back to a send of another rev when overlay is working.
+
+- `status` — **review only**: `not_uploaded` | `sent_tdo` | `tdo_review` | `agreed` (never `code_a`/`code_b`/`code_c`). Last official cycle of **official** rev.
+- `code` — last letter `A`/`B`/`C` or NULL (F «согласовано» without a letter stores `A`). Same official cycle.
+- `code_origin` — `customer`/`pi`/`unknown` or NULL; still about the last letter; tooltip only
+- `code_stale` INTEGER NOT NULL DEFAULT 0
+- `code_revision_text` TEXT NOT NULL DEFAULT ''
+- `code_date` TEXT NOT NULL DEFAULT ''
+- `tdo_date` TEXT NOT NULL DEFAULT '' — pass date of the last official cycle when `status` is `tdo_review` (F `tdo_passed`, else `incoming_passed`, else issuance incoming/send). Shown in `pipeline_review_label` as `Прошел ТДО (DD.MM.YYYY)` and in the tooltip (`pipeline_tdo_passed_date_text`). Empty column is filled on the next Google/`rebuild_pipeline`; the join layer can also take the date from F/issuance if the stored value is still empty. Added by initialize ALTER (do not bump schema for this column alone).
+- `review_as_build` INTEGER NOT NULL DEFAULT 0
+- `working_as_build` INTEGER NOT NULL DEFAULT 0 — as-build of a **working** folder whose filename rev is `working_revision_text` (Комплекты «Рабочая рев. РД» ` AB`). Not the kits as-build filter (`review_as_build` / official `row.rd.as_build`). Added by initialize ALTER (do not bump schema for this column alone).
+- `working_revision_text` — working (informational / heatmap `W`); not kits current. May equal `official_revision_text` when another NN still has that filename rev.
+- `working_transfer_names` / `working_sequences` — issued **folders** treated as working (manual flag and auto head). Комплекты / export / compare exclude **these folders**, not every package with the same filename rev and not every package that shares the same NN. `working_sequences` stores unique NN only; a duplicated `10_` is identified by folder name.
+- `annulled_transfer_names` / `annulled_sequences` — issued **folders** marked «Аннулирована» (`kit_annulled_flag`). Same skip as working for official / export / compare, **plus** they lose the auto-working contest and drop out of transfer-order / closeness / heatmap collision join. Empty when none.
+- `official_revision_text` — last issued rev that still exists on a non-working **and non-annulled** package; kits «РД · рев.», export, compare
+- `suspicious`, `algorithm_version`
+
+Historical `_migrate_2_to_3` CREATE of `kit_pipeline` stays as-is; v5 columns come from ALTER in `_migrate_4_to_5`. `tdo_date`, `working_as_build`, working-folder JSON, and annulled-folder JSON columns are added by `_ensure_kit_pipeline_columns` on every `initialize`.
+
+### `kit_liquidity_review`
+
+User decision, **not** truncated by scan/Google rebuild:
+
+- Identity: `(title, mark, transfer_name, revision_text)` UNIQUE
+- `sequence` nullable
+- `decision`: `confirmed_ok` | `confirmed_illiquid`
+- `comment` optional
+- `evidence_mtime_ns`: package `max_mtime_ns` at decision time
+- `decided_at` ISO UTC
+
+If later files make `max_mtime_ns` **greater** than `evidence_mtime_ns` after `confirmed_ok`, derive pending suspicion again. `confirmed_illiquid` stays until the user changes it. Do not feed this table into overlay `detected_current`.
+
+### `kit_working_flag`
+
+Manual working-**folder** mark, **same survive-rebuild rule** as `kit_liquidity_review`. `_migrate_8_to_9` creates the table; `_migrate_9_to_10` rekeys identity to the issued folder. Never feed this table into overlay `detected_current`.
+
+- Identity: `(title, mark, transfer_name)` UNIQUE NOCASE
+- `revision_text` — filename rev of that folder (display / «Рабочая рев. РД»)
+- `sequence` — folder `NN` (survives a rename of `10_рев.AN-01` → `10_рев.AN-03`)
+- `decided_at` ISO UTC
+- APIs: `upsert_working_flag` / `delete_working_flag` / `list_working_flags`
+
+Working on disk (filename rev strictly higher than last effective send/F) does **not** need a row here. Unmark in «Все документы» deletes only this table. Two NN folders with the same filename revision can coexist: only the marked folder is working; the sibling stays official for Комплекты.
+
+`upsert_working_flag` **deletes** `kit_annulled_flag` for the same `(title, mark, transfer_name)` (mutual exclusion). Overlay still ignores this table.
+
+### `kit_annulled_flag`
+
+Manual **annulled-folder** mark. Same survive-rebuild rule and same identity as `kit_working_flag`. `_migrate_11_to_12` creates the table. Never feed this table into overlay `detected_current`.
+
+- Identity: `(title, mark, transfer_name)` UNIQUE NOCASE
+- `revision_text` — filename rev of that folder (display)
+- `sequence` — folder `NN`
+- `decided_at` ISO UTC
+- APIs: `upsert_annulled_flag` / `delete_annulled_flag` / `list_annulled_flags`
+- **Only manual.** There is no auto-annulled. Unmark always deletes this row.
+
+This is **not** `issuance_review.decision = "annulled"` (a send/orphan row in «Выдача · Журнал» that drops that send from the effective issuance contour). Folder-annulled hides one NN package; journal-annulled hides one issuance event.
+
+`upsert_annulled_flag` **deletes** `kit_working_flag` for the same folder. Annulled wins if both rows somehow exist: the folder is not working.
+
+Meaning: the package stays in «Все документы» (open/copy/rescan still work) but is **dead for contests**:
+
+- not official («РД · рев.», export, RD↔robot, Auto MTO target, kits open-folder)
+- not auto-working (even if it is overlay-current / newest NN)
+- not «спорная» / closeness / сверка in «Проверить передачи»
+- overlay `TRANSFER_*` / `DUP_SAME_REVISION` collisions that include a file from this folder are **dropped** when joining heatmap `problem_kinds` (scan overlay itself is unchanged)
+- heatmap cell `annulled` / `Ан` when **all** RD packages of that filename rev are annulled; `list_mto_worklist` / `iter_mto_files_for_cells` skip that status like `working`
+
+### `file_mtime_override`
+
+User catalog date for one **MTO xlsx**. Same survive-rebuild rule as `kit_working_flag`. Scan still writes disk `file_entry.mtime_ns`. `list_files` substitutes `override_mtime_ns` into `FileRecord.data['mtime_ns']` only when the fingerprint still matches.
+
+- Identity: `path_key` UNIQUE NOCASE
+- Fingerprint: SHA-256 of `path_key|size|disk_mtime_ns` (scan identity). Unchanged file after rescan keeps the override. Size or disk mtime change → stale (disk date is used; row kept until the user resets)
+- `override_date` TEXT `DD.MM.YYYY` (last F letter A, B, or C for that filename rev)
+- `override_mtime_ns` local noon of that date (tree / «Проверить передачи» / history)
+- `disk_mtime_ns` original scan mtime — tooltip / «на диске» only
+- `reason` `code_a` | `code_b` | `code_c`
+- APIs: `upsert_file_mtime_override` / `delete_file_mtime_override` / `get_file_mtime_override` / `list_file_mtime_overrides`
+- GUI: Комплекты and history **«Заменить дату на дату последнего кода A/B/C»** / **«Сбросить дату каталога»**. Agreed-cycle scoring still uses last **code A** only. MTO compare cache uses `disk_mtime_ns` (`mto_file_stat_signature`)
+
+### `issuance_review`
+
+User issuance-journal decision, **same survive-rebuild rule** as `kit_liquidity_review`. `_migrate_6_to_7` creates the table. UNIQUE `(kind, identity_fingerprint)`. Never write decisions onto `issuance_send`.
+
+| Field | Tokens / meaning |
+|-------|------------------|
+| `kind` | `send` \| `orphan` \| `manual` |
+| `source` | `issuance` \| `google_f` \| `rd` \| `robot` \| `auto_mto` \| `manual` |
+| `decision` | `''` \| `active` \| `legalized` \| `annulled` \| `erroneous` \| `duplicate` |
+| `match_state` | `''` \| `matched` \| `unmatched` \| `ambiguous` |
+| revision / send dates / TRMs / `sheet_status` / `note` / `comment` | copied from the sheet or typed |
+| `identity_fingerprint` | SHA-256; **not** `issuance_send.id` / `row_index` |
+| `evidence_fingerprint` | identity + sheet status + incoming + confirm TRM + note |
+| `source_path` / `path_key` | display / robot·Auto MTO identity |
+| `decided_at` | ISO UTC |
+
+Identity (kind=`send`): SHA-256 of canon parts joined by `|`: `title`, `mark`, `revision_text`, `send_date_sortable`, `send_transmittal`. Evidence adds sheet status, incoming, confirm TRM, note.
+
+`rematch_issuance_reviews` runs at the end of `ingest_google_snapshot` (after replace, before GUI `rebuild_pipeline`). Ladder: exact identity; else unique (rev+date); else unique (rev+TRM) if both TRMs set; 0 → `unmatched`; >1 → `ambiguous`. Decision/comment kept.
+
+Effective contour — [`effective_issuance_sends`](rd_catalog/issuance_review.py) / [`latest_effective_issuance_kits`](rd_catalog/issuance_review.py): INCLUDE `active`, `legalized`; EXCLUDE `annulled`, `erroneous`, `duplicate`, empty. Sheet send with no review = implicit `active`. Legalized orphan/manual: `send_id` None, `match_reason=legalized`, empty date loses latest-wins. Legalize requires `revision_text`. Exclude statuses require comment (`validate_issuance_decision`). Other issuance columns are optional.
+
+Consumers of effective sends: `rebuild_pipeline`, grey packages, `rebuild_revision_matrix`, `list_mto_worklist` (`in_issuance`), `get_kit_card` issuance latest, startup hydrate, kits `_rebuild_kit_rows`. Raw snapshot stays complete. `REV_MISMATCH` uses the issuance object passed into `build_kit_matrix` (effective latest). Auto MTO content compare / overlay / ban / MTO pins unchanged. Heatmap GUI still requires canonical RD files for a kit **row**; legalize adds a **cell** when RD exists.
+
+### `an_mto_file`
+
+Dump index only. Not overlay. Not `SourceKind` (no `SourceKind.AN`). Not `file_entry`.
+
+Columns: `path` UNIQUE, `path_key`, `title`, `mark`, `revision_text`, `core_stem`, `discipline_block`, `name`, `parent_dir`, `mtime_ns`, `size`, `scanned_at`.
+
+Index `(title COLLATE NOCASE, mark COLLATE NOCASE)`.
+
+`replace_an_snapshot` deletes+inserts that table only; does not touch `file_entry` / overlay / `issuance_review` / `kit_liquidity_review` / `kit_working_flag` / `kit_annulled_flag`.
+
+Cancelled walk / disabled `an_root` must not call replace.
+
+Read APIs: `list_an_mto_files`, `list_an_files_by_kit`.
+
+### `kit_revision_cell` (schema 4)
+
+Derived heatmap snapshot. PK `(title, mark, revision_text)` case-insensitive. Replaced by `rebuild_revision_matrix` (full catalog, or only `kit_keys` after a folder-scoped rescan). Does not delete `kit_liquidity_review`, `issuance_review`, `an_mto_file`, `kit_working_flag`, or `kit_annulled_flag`.
+
+| Column | Meaning |
+|--------|---------|
+| `revision_text` | Filename revision (`01`, `01-AN02`, `0`, `V`/`S`) |
+| `pipeline_status` | Fill key: `no_mto` / `not_uploaded` / `sent_tdo` / `tdo_review` / `code_a` / `code_b` / `code_c` / `working` / `annulled`. Do **not** persist `empty` — missing row = empty GUI cell. |
+| `letters` | Display tokens joined with `·`, e.g. `A·AB`, `T`, `W`, `–`, `AB` |
+| `is_as_build` | File/path as-build **or** F `us_build` on this revision |
+| `is_current` | Official-current RD MTO exists at this filename rev (when overlay is working, this is the official rev, not `W`) |
+| `is_current_ifc` | This rev is the highest filename rev among **present RD files with `is_as_build=0`** (OD wins ties). Independent of overlay. |
+| `has_mto` | Present RD `mto_xlsx` with this filename rev |
+| `problem_kinds_json` | JSON list of collision kinds and/or `liquidity` |
+| `package_ids_json` | JSON list of `kit_package.id` for this kit+rev (RD first) |
+| `algorithm_version` | `REVISION_MATRIX_ALGORITHM_VERSION` |
+
+One cell per `(title, mark, filename rev)`. Several NN folders with the same filename rev share the cell (tooltip lists packages).
+
+## 2b. Canonical as-build (`is_as_build`)
+
+Helper `path_is_as_build(path: str) -> bool` in `rd_catalog/parse.py` (lexical, UNC-safe, no disk IO): any **directory** segment (not the filename) matches existing `_AS_BUILD_RE`. Transfer-folder parse still sets `TransferMetadata.is_as_build` from the NN name.
+
+On persist, `file_entry.transfer_is_as_build` stores the **canonical OR**: transfer-folder flag **or** `path_is_as_build(path)`. Column name is historical; readers treat it as file-level `is_as_build`. Do not add a second `file_entry` column.
+
+`kit_package.is_as_build` = any file in that package group has canonical as-build.
+
+Overlay **must not** drop as-build files. Dual current: overlay `detected_current` (objective newest, may be working) vs `is_current_ifc` (max IFC filename rev). Kits / export / compare use official ids, not the working head.
+
+## 3. F-stage classifier (`kits.py`)
+
+Keep `_STAGE_PATTERNS` as the only classifier. Add (order matters: `code_c` **before** `code_b` so «код C/С» is not eaten):
+
+| `stage` | Label | Intent |
+|---------|--------|--------|
+| `code_c` | код C | Latin C or Cyrillic С after `код` |
+| `sr_upload` | загрузка в СР | «загрузк…СР», «отпр…на загрузку» |
+| `us_build` | US-BUILD | `us-build` / `us build` / `as-build` / `as-built` in F text; **journal + matrix `AB` only** |
+| existing | код А, код B, ТДО, входной контроль, ДУП, корректировка, согласовано | unchanged |
+
+`code_b` pattern must not match C/С. Place `us_build` **before** the implicit `other` fallback (after `agreed` is fine). `us_build` must **not** be in `_CODE_STAGES` / `_PASSED_STAGES` / `_SENT_STAGES` and must **not** drive `KitPipelineStatus`. «корр. в раб. пор», NanoCAD, «выпустить до» stay `other`.
+
+Column F is the event source of truth. D/E stay stored and shown as secondary.
+
+## 4. Package path
+
+`issued_package_dir(path: str) -> str` in `rd_catalog/parse.py` (lexical, no disk IO):
+
+1. Split UNC-safe segments (keep `\\server\share`).
+2. Drop the filename.
+3. Drop a trailing media segment: `PDF` / `DWG` / `BBB` / `ПДФ` (any case).
+4. If the last remaining segment is an issued transfer (`is_transfer_folder_name` with `under_gate` from ancestors), return that folder path.
+5. Else return the parent after step 3 (robot / SQ / mark folder).
+
+Example file → package:
+
+`\\bcc\eng\...\РД\9110\06_KSB_21\Для передачи\05_рев.0-AN02_AGCC.287-9110-KSB1\PDF\AGCC.287-9110-KSB1.OD-0001_0-AN02_RU.pdf`
+
+→ `\\bcc\eng\...\РД\9110\06_KSB_21\Для передачи\05_рев.0-AN02_AGCC.287-9110-KSB1`
+
+NN is the **folder sequence**, not the document revision. One filename revision may occupy several NN folders (PI B/C resent without bumping AN).
+
+## 5. Pipeline status (current kit)
+
+Two independent fields on the **last official cycle of `official_revision_text`** (last send of that rev; if no RD, latest **effective** issuance rev of that official rev). `_last_official_cycle` must **not** fall back to a send of another rev when overlay is working.
+
+Kit-level review **text** is `pipeline_review_label`: `{статус}[(pass date)] · РД {official_revision_text}[ · отпр. {send_date}][ (AB)]` (e.g. `Согласован · РД 01-AN01 · отпр. 18.11.2025`, `Прошел ТДО (05.08.2026) · РД 02`). `РД` is the official package in the RD folder (same as column «РД · рев.»), not working and not Google D/E. Pass date is in parentheses after `Прошел ТДО` when known. Folder-tree `review_full` stays `pipeline_status_label` only (no РД, no dates). Full cell/Подсказки contract: [AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc).
+
+### Статус рассмотрения (`kit_pipeline.status`)
+
+Progress of the **last** cycle. B/C never go here.
+
+| Value | Label |
+|-------|--------|
+| `not_uploaded` | Не загружен в СР |
+| `sent_tdo` | Отправлен на ТДО |
+| `tdo_review` | Прошел ТДО |
+| `agreed` | Согласован |
+
+Meaning:
+
+- no issuance and no F `sr_upload` / `tdo_sent` / `incoming_sent` for this official revision → `not_uploaded`
+- uploaded, incoming/TDO not passed → `sent_tdo`
+- incoming/TDO passed on **this cycle**, and this cycle has neither code A nor F `agreed` → `tdo_review` (**even if an actual B/C hangs on the kit**)
+- this cycle has code A **or** F `agreed` → `agreed`
+
+F «согласовано» without letter A: review `agreed`; approval column writes `A · {official rev} · {agreed date}` (current).
+
+If the official-cycle package `is_as_build`: append ` (AB)` to the review **text**. Color unchanged. As-build is an ordinary later issuance, not a special status. After a new as-build cycle, a previous A is **stale** (grey), not green “IFC still alive”. Issued as-build that **matches** last send stays official with `(AB)` (5500-style), not working.
+
+### Статус согласования (`kit_pipeline.code`)
+
+Last kit letter in F order (`A`/`B`/`C`), else `—` with no fill.
+
+Code is **current** if it belongs to the current review cycle:
+
+- strong: send TRM equals a transmittal on the code event
+- else same filename rev **and** the last official cycle did **not** start after the code (no later send/TDO of this official rev with a different TRM / later date than the code)
+- do **not** treat a code as current only because filename rev matches when the send TRM differs and the code date is earlier than this cycle’s send/TDO (9000-KSB)
+
+Code is **stale** (`code_stale=1`, grey) when a letter exists but it is not this cycle: other TRM, lower rev, or same rev with a later TDO/send (9000-KSB). Current text is `A · 01-AN01 · 04.12.2025` (`pipeline_approval_label`: letter · code rev · DD.MM.YYYY; omit missing parts). Stale vs current is still **color** (`approval_stale` vs `code_a`/`b`/`c`); stale **text** also appends `новее диска` / `прошлый цикл` / `без рев. в F` / `не этого цикла` (`pipeline_approval_relation`). Tooltip outline: [AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc) (`pipeline_review_tooltip` / `pipeline_approval_tooltip` in [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py)).
+
+**Colors (cells only, never the whole row):**
+
+- review: existing `not_uploaded` / `sent_tdo` / `tdo_review`; `agreed` uses `#137333` (F-palette key `agreed`)
+- current approval: `code_a` green, `code_b` orange, `code_c` red
+- stale approval: palette key `approval_stale` (~`#80868b`)
+- empty approval: unpainted
+
+Expected 9000-KSB: review **Прошел ТДО (… ) · РД …**, approval grey `B · … · 20.08.2026 · прошлый цикл`.
+
+**Heatmap keeps `working` / `W` and `annulled` / `Ан`:** `kit_revision_cell.pipeline_status` still uses per-filename-rev `_last_code_on_revision` then TDO/sent (`code_a|b|c` / `tdo_review` / …), then working — **except** a fully-annulled filename rev is `annulled` first (no F letter on that cell). A cell on rev `0` may still show letter B when a non-annulled package remains. Do not recolor READY/WARNING. Documents-tree badge is the folder **review** status (not the approval letter; `review_full` has no kit-level rev). Kit-level review labels include official rev via `pipeline_review_label`.
+
+### Codes A/B/C origin
+
+- **A** → always `customer` (Заказчик).
+- **B/C** → if a **later official** send or later RD package has a **higher** filename revision → `customer`; if the next official send keeps the **same** revision → `pi`. Otherwise `unknown`.
+- Approval column always shows `letter · rev · date` (or `—`); stale appends the relation suffix; origin is tooltip only.
+
+### Working revision (not an error)
+
+**Рабочая ревизия** = overlay-current filename rev **strictly higher** than last effective send/F, **or** a user-marked **issued folder** in «Все документы» (`kit_working_flag`). Expected (local work before the next issuance). Leftover files in an **earlier** NN whose filename ranks higher (`01` vs later `0-AN01`) are not auto-working. **Annulled folders are not candidates** (`kit_annulled_flag`): overlay-current among remaining non-annulled packages is the auto-working head. The working mark excludes that NN from Комплекты official / export / compare; a sibling folder with the same filename rev stays official. Column **«Рабочая рев. РД»** shows the working folder’s filename rev **only when it strictly outranks** official «РД · рев.» (`working_revision_for_display` / `format_working_rd_rev_label`); equal or lower → «—». Appends ` AB` when `working_as_build` (working folder as-build).
+
+It is **not** liquidity and must not be painted as a pipeline error. It is also **not** kits current («РД · рев.» / review-approval of that rev use **official**), **not** robot export / spec pick, **not** RD↔robot MTO compare, **not** Auto MTO target (unless pin / heatmap export selection), **not** «MTO · Перечень» rows. GUI column **«Рабочая рев. РД»** is informational (issuance lag). Overlay `detected_current` stays objective newest. Helpers: `official_detected_current_ids`, `official_rd_mto_overlay`. Unmark only **manual** flags; auto (disk > last send) cannot be unmarked.
+
+When overlay is working: official = last issued rev that still exists on a non-working **and non-annulled** package (may be the same filename rev as the working folder). Do not grey a code merely because `working_revision_text` is higher. `REV_MISMATCH` vs Google D remains a highlight of sheet vs **official** RD (kits matrix uses official ids). The issuance object passed into `build_kit_matrix` is the **effective** latest (`latest_effective_issuance_kits`), not a raw snapshot row.
+
+Example 2000-KSB: review **Согласован · РД 01-AN01**, approval **A · 01-AN01 · 21.11.2025**, «РД · рев.» **01-AN01**, «Рабочая рев. РД» **01-AN02 AB**, heatmap 01-AN02 still `W·AB`.
+
+### Annulled folder (not a journal decision)
+
+**Аннулирована** = user-marked issued NN folder (`kit_annulled_flag`). Only from «Все документы» revision-node context **«Пометить папку как аннулированную»**. There is no auto-annulled.
+
+**Not** `issuance_review.decision=annulled` (журнал выдачи). Journal-annulled drops a **send**. Folder-annulled drops a **package** from contests while files stay in the tree.
+
+| Contest / consumer | Working folder | Annulled folder |
+|---|---|---|
+| Overlay `detected_current` | unchanged (may still be «Текущая») | unchanged (may still be «Текущая») |
+| Official / «РД · рев.» / export / RD↔robot / Auto MTO target / kits open-folder | skip this NN | skip this NN |
+| Auto-working contest (newest NN > last send/F) | this folder **can win** | this folder **cannot win**; next non-annulled overlay-current competes |
+| Heatmap fill | `working` / `W` when **all** packages of that filename rev are working | `annulled` / `Ан` when **all** packages of that filename rev are annulled (wins over F codes on that rev) |
+| `list_mto_worklist` / `iter_mto_files_for_cells` | skip `working` | skip `annulled` |
+| «Проверить передачи» inversion / closeness / сверка | shown as роль «рабочая»; not «спорная»; not current | shown as роль «аннулирована»; not «спорная»; not current; not closeness winner |
+| Heatmap `problem_kinds` from overlay `TRANSFER_*` / `DUP_SAME_REVISION` | still joined (working does **not** hide overlay collisions) | **drop** the collision when any `path_key` sits in an annulled folder |
+| Kit card package row | роль «рабочая» | роль «аннулирована» |
+| Tree word / fill | always «рабочая», palette `working` | always «аннулирована», palette `annulled` |
+| Unmark | manual flag only; auto remains | always (flag is only manual) |
+
+Mutual exclusion: marking working deletes the annulled row for that folder and vice versa. Annulled wins if both exist. Sibling NN of the same filename rev stays in play.
+
+3860-SOT example: leftover `08_рев.01_…` marked working still keeps overlay `transfer_order_conflict` on the heatmap cell. Annul that NN → official/working contests ignore it, heatmap problems from that folder vanish, later `0-AN01` can be official without competing against `01`.
+
+### Liquidity suspicion (late edits of the **same** issued revision)
+
+Anchor date for a revision: F `tdo_passed` date, else issuance `incoming_control_date`, else send date.
+
+Look at RD `kit_package` rows whose `revision_text` equals that official revision. If `max_mtime_ns` local **calendar month** is **strictly after** the anchor’s calendar month → pending suspicious (example: TDO 01.09, September mtimes OK, December mtime not). Same-month working-order edits are OK.
+
+Do **not** flag «revision on disk higher than last send» as suspicious.
+
+Paint the package row. User actions: confirm OK / confirm illiquid. Persist in `kit_liquidity_review`. Overlay unchanged.
+
+Grey issuance-only rows (`is_grey`) are not liquidity-checked (no folder).
+
+## 6. Matching sends to F to packages (`match_*`)
+
+For each `issuance_send`, find F events and an RD package:
+
+1. **TRM** — `send_transmittal` equals an event transmittal (strongest).
+2. Else **revision** — `revision_text` equals event/package filename rev.
+3. Else **date** — event date within ±2 days of send or incoming-control date.
+
+Unmatched F events still appear in the card journal for that kit. Unmatched issuance with no RD package → grey `kit_package`.
+
+`kit_cycle.code_event_id` must **not** attach a revision-only A/B/C when the send TRM differs and the code date is earlier than this cycle’s send/TDO (9000-KSB). Heatmap still sees that letter on the filename rev via `_last_code_on_revision`.
+
+## 7. Read API (Qt-free)
+
+`rd_catalog/pipeline.py`:
+
+- `rebuild_pipeline(database: CatalogDatabase, *, records, detected_current_ids, kit_keys=None) -> None`  
+  Rebuilds `kit_package`, `kit_cycle`, `kit_pipeline`, then `kit_revision_cell`. Uses `effective_issuance_sends` (grey packages and cycles follow the include contour). Does not delete `kit_liquidity_review`, `issuance_review`, `an_mto_file`, `kit_working_flag`, `kit_annulled_flag`, or `file_mtime_override`. F events load once via `list_google_events_by_kit` (no per-kit SQL). `kit_keys` set → delete+insert only those identities; other kits stay. Empty `kit_keys` = full rebuild.
+- `official_detected_current_ids(records, detected_current_ids, pipelines) -> set[int]`  
+  Overlay-current ids with working **and annulled** kits removed. Promotion is the issued **package** whose highest filename rev is `official_revision_text`; if that exact filename is missing (send/F ``01-AN01``, disk still ``01``), the newest **non-working and non-annulled** package is used so open-folder and disk «РД · рев.» stay on that NN. The kits cell then appends ``01-AN01 Нет в РД`` (grey). Working/annulled packages are skipped by **folder name** (`working_transfer_names` / `annulled_transfer_names`); `*_sequences` is a unique-NN fallback only. Two folders with the same NN (``10_SQ-…`` IFC and ``10_рев.…_as built``) are different packages — the as-build must not hide the IFC sibling. Leftover files in the working folder that still carry the official name do not win. Never feeds `kit_working_flag` / `kit_annulled_flag` into overlay `detected_current`. Kits with **only** annulled folders (no working head) still go through this promotion so overlay-current on an annulled newest NN is not official.
+- `records_in_contour(records, rd_root, *, previous_records=None, previous_contour=None) -> Sequence[FileRecord]`  
+  SQ/ROBOT plus RD on a canonical issued path. GUI `refresh` runs this once and then passes `rd_root=None` into pipeline / worklist / kit matrix. Optional previous snapshot reuses membership when `id`/path/source did not change.
+- `official_rd_mto_overlay(database, *, records=None) -> OverlayResult`  
+  RD MTO overlay for robot compare: working **and annulled** packages out; official-package MTO in when overlay was working or the newest NN is annulled. Pass already-loaded `records` from the GUI so enqueue after scan does not `list_files` again.
+- `pipeline_algorithm_needs_rebuild(pipelines) -> bool`  
+  True when any stored `kit_pipeline.algorithm_version` is older than `PIPELINE_STATUS_ALGORITHM_VERSION`. Empty list is False (the empty-derived hatch covers that). Startup hydrate and `CatalogWindow._should_rebuild_empty_derived` use it so v3 rows are not painted as official overlay.
+- `kit_keys_under_folders(records, folders) -> set[tuple[str, str]]`  
+  Identities whose `file_entry.path` sits under a scoped rescan prefix (including `present=0`).
+- `rebuild_revision_matrix(database, *, records, detected_current_ids, kit_keys=None) -> None`  
+  Called from `rebuild_pipeline` after `replace_kit_derived` so `package_ids_json` uses real SQLite ids. Joins collisions via `path_keys` → `file_entry` → title/mark/filename-rev. Same `kit_keys` contract. Issuance side is `effective_issuance_sends` (legalize can add a **cell** when RD exists; heatmap GUI still needs canonical RD files for a kit **row**).
+- `get_kit_card(database, title, mark) -> KitCard | None`  
+  Issuance latest is the last effective send for that kit, not a raw `issuance_send` row.
+- `list_kit_pipelines(database) -> tuple[KitPipelineRow, ...]` for the комплекты table (**«Статус рассмотрения»** via `pipeline_review_label` + **«Статус согласования»** columns).
+- `list_folder_tree_hints(database) -> dict[tuple[str, str, str], FolderTreeHint]` for «Все документы» revision labels. Key is `(title.casefold(), mark.casefold(), transfer_or_folder.casefold())`. `review_status` is empty when no cycle matched that folder. `review_full` stays without kit-level rev (`pipeline_status_label`, not `pipeline_review_label`). As-build on the tree is `folder_has_as_build` from `file_entry` / scan records (canonical path+transfer flag), not F parse. `is_working` / `working_origin` as today. `is_annulled` is true when the package folder is in `kit_pipeline.annulled_transfer_names` (manual flag). MTO fields (`mto_status`, `mto_letters`, `mto_revision_text`, `has_mto_file`, `is_current_mto`, `is_current_ifc`, `problem_kinds`) come from the `kit_revision_cell` snapshot. Cell resolved by `_package_mto_revision`: `package.mto_revision_text` when non-empty, else `package.revision_text` (a delta can carry PDFs on rev `02` and the MTO on rev `01`). `has_mto_file` = an MTO xlsx physically in that package folder; it is **not** `kit_revision_cell.has_mto` (kit+revision scope). `mto_status` is empty when no cell matched. Cells are loaded once per `list_folder_tree_hints` call, not per package.
+- `list_revision_matrix(database) -> tuple[KitRevisionRow, ...]` grouped/sorted for the heatmap. GUI may also call `list_revision_columns(cells)` as the union of `revision_text` sorted by `revision_rank`.
+- `iter_mto_files_for_cells(database, *, records, predicate) -> tuple[FileRecord, ...]`  
+  Present RD `mto_xlsx` whose `(title, mark, revision_text)` matches selected cells. **Excludes** `pipeline_status == "working"` and `pipeline_status == "annulled"`. Predicates: `code_a`, `tdo_passed` (`tdo_review` or any `code_*` on **kit_revision_cell**), `current` (`is_current` — official when overlay is working), `current_ifc` (`is_current_ifc`), `exclude_as_build`. Unknown predicate → `ValueError`. Resolves paths from `records` / `file_entry`, never from table text. Overlay flags come from the last `rebuild_revision_matrix` snapshot (`detected_current_ids` is not a query argument). Shares private index `_mto_records_by_kit_revision` (present RD `mto_xlsx` by kit identity and filename revision) with `list_mto_worklist`. Keeps `revision_texts_equivalent` matching because `_revision_dedupe_key` is not equivalent for letter revisions (`V`/`S`). No UNC copy.
+- `list_mto_worklist(database, *, records) -> tuple[MtoWorklistRow, ...]`  
+  One row per `kit_revision_cell`, in `list_revision_matrix` order, **except** `pipeline_status == "working"` and `pipeline_status == "annulled"` skipped **after** recording `cell_keys` (kit is not synthesized as `no_rd`). Frozen dataclass: `title`, `mark`, `revision_text`, `status`, `letters`, `is_as_build`, `is_current`, `is_current_ifc`, `has_mto`, `mto_path`, `mto_mtime_ns`, `package_path`, `package_label`, `package_count`, `problem_kinds`, `gap_kind`. `gap_kind`: `no_package` when no non-grey RD package is linked, else `no_mto_file` when no present RD `mto_xlsx` matched, else empty. `in_issuance` is true when an **effective** send exists for that kit+rev. Paths from `records` / `file_entry`, never GUI text. Exported from `rd_catalog/__init__.py` with `MtoWorklistRow`. Read view over `kit_revision_cell` — **no extra schema bump**.
+- [`rd_catalog/issuance_review.py`](rd_catalog/issuance_review.py) (Qt-free): `rematch_issuance_reviews`, `effective_issuance_sends`, `latest_effective_issuance_kits`, `list_issuance_journal`, `apply_journal_decision`, `validate_issuance_decision`. Persist via `CatalogDatabase.upsert_issuance_review` / `list_issuance_reviews` / `get_issuance_review`.
+
+### Per-revision pipeline (heatmap fill)
+
+Reuse `_last_code_on_revision` then `_review_status` **scoped to that filename revision** (cycles + F events + issuance sends on that rev), not `kit_pipeline` (current kit only). Kit-level `agreed` is not a heatmap fill key unless there is a real `code_a` event.
+
+Priority:
+
+1. **All** RD packages of this filename rev are annulled → `annulled`; letter `Ан` (do not paint F codes on a fully-annulled rev)
+2. F code on this rev → `code_a` / `code_b` / `code_c`; letter `A`/`B`/`C`
+3. Else TDO/incoming passed or accepted issuance on this rev → `tdo_review`; letter `T`
+4. Else sent/sr_upload on this rev → `sent_tdo`
+5. Else this rev is strictly higher than last official (`working_revision_text`) and present on disk → `working`; letter `W`
+6. Else present RD MTO at this rev → `not_uploaded`
+7. Else RD PDF/package at this rev but no MTO → `no_mto`; letter `–`
+8. Else do not insert a row (GUI `empty`)
+
+Always append `AB` to `letters` when canonical as-build or F `us_build` on this rev. Problem kinds: `transfer_order_conflict`, `transfer_mtime_conflict`, `dup_same_revision`, `file_missing`, plus `liquidity` when a package of this rev is pending-suspicious. Overlay collisions whose **any** `path_key` is in an annulled folder are omitted from this join.
+
+When computing heatmap `is_current` / `is_current_ifc`, skip files that sit in annulled folders (overlay-current on an annulled newest NN must not underline that cell).
+
+`KitCard` (frozen dataclass): identity, matrix summary **not** recomputed here (window still uses `build_kit_matrix` for Совпадает / gaps; issuance argument is effective latest), `pipeline`, `working_revision_text`, sources snapshot paths as **package** dirs, `packages: tuple[KitPackageRow, ...]` including `is_as_build`, cycles grouped per package (multiline Выдача / F), Google D/E reference fields, issuance latest (effective contour, for the old columns).
+
+MTO on the card = `mto_revision_text` per package. Do **not** show READY/WARNING on the kit card.
+
+## 8. Ingest
+
+`GoogleKitsLoadResult.issuance_sends` is **every** parsed Выдача row (`parse_issuance_sends`). `issuance_kits` on the load result remains latest-wins over the **raw** sheet for old tests/columns. After ingest the GUI paints `latest_effective_issuance_kits`.
+
+After `fetch_google_kits` / cache hydrate, `ingest_google_snapshot` → `CatalogDatabase.replace_google_snapshot` replaces `google_kit` + `google_event` + `issuance_send` in one transaction (does **not** delete `issuance_review`, `an_mto_file`, `kit_working_flag`, or `kit_annulled_flag`), then `rematch_issuance_reviews`. `CatalogWindow.refresh` then `rebuild_pipeline` (packages + revision matrix) when `rebuild_derived` is true. File scans and Google-**load**-thread completion pass `ingest_google=False` so the snapshot is not rewritten a second time. F-write completion ingests in `_apply_google_write_snapshot` (already fetched) and must **not** call `refresh()`; it scopes `rebuild_pipeline` with `changed_google_kit_keys` plus successful write jobs. Normal process start passes `rebuild_derived=False`. Palette: `rd_catalog/status_colors.py` + dialog; JSON `runtime_dir/status_colors.json`. Extra heatmap keys: `empty`, `no_mto`, `working`, `annulled`, `problem`, `current`, `us_build` (defaults in `default_palette()`).
+
+Call `rebuild_pipeline` from GUI `refresh()` after a scan or Google load so packages follow the last walk (`rebuild_derived` defaults True). Folder-scoped rescan (`rd_subtree` / `sq_subtree` / `robot_subtree`) passes those prefixes as `pipeline_subtrees`; derived rows rebuild only for `kit_keys_under_folders`. Full catalog scan still rebuilds every kit. Overlay in `store_scan` stays global (all present RD files) — do not invent a partial overlay. After missing detection a reliable RD `store_scan` clears `schema_meta.noncanonical_rd_clean` (does not walk all RD paths). Startup hydrate runs `purge_noncanonical_rd_files(..., skip_if_clean=True)` before `list_files`: skip when the flag is `1`, otherwise delete non-canonical RD rows and set the flag. Canonical `present=0` stays. Robot-only and unreliable RD scans do not purge and do not clear the flag. Qt «Все документы» tree full-rebuilds on a full scan and on a documents-tab folder rescan (`stay_on_documents`); keep_view (Пересканировать РД / робот MTO / SQ→RD) defers it.
+
+`parse_issuance_sends(rows)` returns all `IssuanceKit` rows; keep `parse_issuance_matrix` as latest-wins for existing tests/matrix.
+
+## 9. GUI monitor (`window.py`)
+
+- Bottom splitter: `QTabWidget` — **Карточка** (default) + **Текст** (current `QPlainTextEdit` dump). No «Файлы» tab; files stay in «Все документы».
+- Card fills from `get_kit_card` only. Two badges: `pipeline_review_label` (includes official rev) + `pipeline_approval_label` (`A · rev · date`, or `—`). Header also shows an MTO rollup from `list_mto_worklist` (`MTO: тек. рев. … · <short status> · нет файла: N · проблемы: N`; `MTO: нет данных` when none). Buttons «Папка РД» / four package actions (открыть папку / копировать путь / показать в «Все документы» / «Передать роботу») share context-menu handlers; enabled from `_update_action_states`. Double-click opens **package** path (`issued_package_dir` of `paths[0]` or `kit_package.package_path`). Copy paths copies package dirs. Color legend next to the buttons; repaints on `_reload_status_colors`.
+- Package table columns: NN, Пакет, Рев., Дата, Выдача (multiline), Рассмотрение (multiline), MTO rev, AB, Ликвидность. Resize: `Stretch` on columns 1/4/5, `ResizeToContents` on the rest; header **not** persisted (same exception as the heatmap). Cell colors skip grey issuance: «Рассмотрение» from matching `MtoWorklistRow.status` (`package_path`, else equivalent `revision_text`); «MTO» green when `mto_revision_text` equals the package revision, yellow when it lags (tooltip names both), `no_mto` fill when absent; «AB» uses `us_build`; «Ликвидность» uses `problem` when the label is `pending`. The `is_current` package row is bold, background unchanged. Jump to «Все документы» **that NN** (extend `_jump_to_kit_documents`).
+- Grey row: issuance without RD package; no folder button; muted color.
+- Upper комплекты table: columns **«Статус рассмотрения»** (`pipeline_review_label`) and **«Статус согласования»** from `list_kit_pipelines` / `kit_pipeline` (cell color only, never the whole row). Keep Google D/E and issuance columns as **reference** (issuance cells are the effective latest). Do not override revision green/yellow or robot origin paint. QSettings header key `window/kits_header_v10` (do not restore `window/kits_header_v9`). Button **«Сохранить шаблон колонок»** writes order+widths to `runtime_dir/kits_table_layout.json` and packaged [`rd_catalog/kits_table_layout.json`](rd_catalog/kits_table_layout.json) (has `"Ок"` immediately after `"Марка"`, `"Рабочая рев. РД"` immediately after `"РД · рев."` and `"АН МТО"` immediately after `"Сверка Авто МТО"`); that template is the default when the QSettings key is reset. Default rev cluster is **Выдача · рев.** | **Google · рев.** | **Робот МТО · рев.** | **SQ · рев.** | **РД · рев.** | **Рабочая рев. РД** | **MTO · рев.** «РД · рев.» is official; «Рабочая рев. РД» is informational (not `_KITS_REV_SOURCE_COLUMNS`; ` AB` when the working folder is as-build). Column **«Авто МТО»** is after **«MTO · рев.»**; **«Сверка Авто МТО»** is after **«Авто МТО»** (content compare vs official RD MTO or the manual pin; `auto_mto_compare_status`). After **«Сверка Авто МТО»** sits **«АН»** (`an_cell_text` / `kits_an_cell` / `match_an_to_kit`; paint vs «MTO · рев.» / `match_rd_mto`, not Auto MTO / overlay RD). Second filter row: **Код A** / **Прошли ТДО** (official cycle; unsent working is not TDO) / **Проблемы MTO** / **«АН закрывает Авто МТО»** / **Без as-build** / **Только as-build** (the last two mutually exclusive, no as-build column) — all but «Проблемы MTO» and АН-closes are kit-level `kit_pipeline`; «Проблемы MTO» is the per-revision `MtoKitFlags.has_problem` rollup (intentional). `MtoKitFlags` is built by `_reload_mto_worklist_rows()`, which must run **before** `_refresh_kits_table()` in `refresh()`; `_refresh_mto_worklist(reload=False)` reuses the rows. All eleven Комплекты filters persist `window/kits_filter_*`.
+- Color dialog + `%LOCALAPPDATA%\Documentation_PDF_out_NK\rd_catalog\status_colors.json`: review statuses (`not_uploaded`, `sent_tdo`, `tdo_review`, `agreed`) + approval (`code_a`, `code_b`, `code_c`, `approval_stale`) + F stages + heatmap extras (`empty`, `no_mto`, `working`, `annulled`, `problem`, `current`, `us_build`). Unknown → `other`. Toolbar next to ban/skip style.
+- Tab **«Ревизии MTO»**: `list_revision_matrix` only. Rows = `(title, mark)` present on «Все документы» (present files, skip-dirs, not banned); Google/issuance-only kits without files are omitted. Frozen first columns title+mark (Interactive); then export, **«РД · рев.»** (official via `set_export_records` + `official_detected_current_ids`), **«Авто МТО»**, **«Сверка Авто МТО»**; revision columns `Stretch` to the viewport — no horizontal scrollbar, header text may elide (tooltip = full rev). Header click sorts any column (not persisted). Cell = colored square + `letters` (heatmap **keeps** `working` / `W` and `annulled` / `Ан`). Jump to Комплекты is the context action «Показать в „Комплекты“» only (no click-jump). Filters persist `window/rev_matrix_*`. Ban/unban and skip-dir edits must refresh this tab, **«MTO · Перечень»**, **«АН»**, and **«Выдача · Журнал»**. Do not persist heatmap header widths. Legend widget on the tab (same palette). After export resolve the tab hydrates AutoMTO compare cache and the window enqueues pending content compares.
+- Tab **«MTO · Перечень»** ([`rd_catalog/mto_worklist_tab.py`](rd_catalog/mto_worklist_tab.py)), immediately after «Ревизии MTO»: `list_mto_worklist` only. Flat per-revision list (heatmap = which revisions exist; this tab = which MTO files to go and fix). 16 columns as in [AI_rd_catalog.mdc](.cursor/rules/AI_rd_catalog.mdc) (includes **Связь F → РД → MTO** and **Сверка Авто МТО**; `status`/`letters` remain the F journal). Status cell from the heatmap palette; bold on problems **or** `gap_kind`, underline on `is_current`. «Проблемы» shows `collision_kind_label`; raw tokens stay searchable. Filters persist `window/mto_worklist_*` on two rows; «Прошли ТДО» reuses `_TDO_STATUSES` from [`rd_catalog/revision_matrix_tab.py`](rd_catalog/revision_matrix_tab.py). Two header labels: bold coverage (титулы / комплекты / строки, visible over loaded) and a breakdown. `set_rows` honours the ban filter; `allowed_kits=None` so the universe is **Комплекты** (RD ∪ Google ∪ Выдача), not «Все документы». Rows carry `MtoWorklistRow` in a custom role. Header `window/mto_worklist_header_v4` (do not restore `window/mto_worklist_header_v3`, `window/mto_worklist_header_v2` or `window/mto_worklist_header`), Interactive. Refresh wherever the heatmap refreshes.
+- Tab **«Выдача · Журнал»** ([`rd_catalog/issuance_journal_tab.py`](rd_catalog/issuance_journal_tab.py)), after «MTO · Готовность робота», before «Письма о согласовании». Reads `list_issuance_journal`; writes `apply_journal_decision`; then `rebuild_pipeline(..., kit_keys={that kit})` like liquidity. Universe = Комплекты + ban. Header `window/issuance_journal_header_v1`, filters `window/issuance_journal_*`. Orphans are **one row per kit+revision** (F/RD/robot/Auto MTO flags, not one row per file). Kits context **«Показать в Выдача · Журнал»** filters to ``титул-марка`` and focuses the effective send that paints «Выдача · рев.» (`pick_journal_row_for_issuance`). Kits context **«Легализовать ревизию РД…»** opens a pre-filled add dialog. Does **not** write Google «Выдача РД ПД». Domain contract is `issuance_review` above — do not duplicate it in the widget.
+- Liquidity: context/buttons on a suspicious package row; write via `CatalogDatabase.upsert_liquidity_review`; then `rebuild_pipeline(..., kit_keys={that kit})` + refresh card.
+- Persist bottom tab index in existing `QSettings`.
+- Documents-tree extra labels: checkboxes on «Все документы» persist in the same `QSettings` (`window/doc_tree_show_*`). Revision text always; **Статус MTO** (first in the «В узле ревизии» row, `window/doc_tree_show_mto_status`) and date default **on**. Folder name / Google status / current / MTO / as-build are off until the user enables them. The word **рабочая** is always in the node when `hint.is_working` (checkbox `window/doc_tree_show_working` does not hide it). The word **аннулирована** is always in the node when `hint.is_annulled` (no hide checkbox). Working fill uses palette `working` unless layout-mismatch yellow already won; annulled fill uses palette `annulled` (after mismatch, and after working if both somehow exist — annulled wins). Revision-node context: mark/unmark working; unmark **manual** only; mark action is checkable; **«Пометить папку как аннулированную»** / **«Снять пометку «аннулирована»»** (always unmarkable; checkable when the flag exists). Marking one deletes the other. Google status comes from `list_folder_tree_hints` (matched `kit_cycle` only). «Статус MTO» paints `MTO: <short status>` + a 12px heatmap-palette icon; bold on `problem_kinds`; underline on `is_current_mto`; it is the Google F cell for that filename rev and does not flip to `working` when a sibling official folder still shares the rev. Overlay «Текущая» is a different question from MTO actuality (may still be the working **or annulled** package). Layout-mismatch / pending / problem paints run before the icon/font. History column **«Дата»** after «Имя» (newest PDF/MTO/DWG mtime in the row, pale-blue `#DCEEFF` on the latest date in the selected folder), **«Рабочая»** after «AB», **«Аннул.»** after «Рабочая», **«Ручной выбор MTO»** after «Аннул.», **«Статус MTO»** after the pin (15 columns; «Путь комплекта» index 14); header `window/history_header_v8` (do not restore `window/history_header_v7`); painted `_paint_pipeline_cell`. One-kit mark/unmark (working or annulled) goes through `_refresh_after_scoped_pipeline` (no full tree `clear()`).
+- Rebuild pipeline must not overlap an active scan/Google/robot/SQ-move (same busy flag as other workers). Ingest+rebuild after Google thread finishes on the GUI thread is OK (SQLite, no UNC).
+
+## 10. Tests (tmp/)
+
+- Extend `tmp/test_rd_catalog_google_kits.py`: `code_c`, `sr_upload`; `parse_issuance_sends` count > latest-wins.
+- Extend `tmp/test_rd_catalog_parse_smoke.py`: `issued_package_dir` UNC example (lexical).
+- New `tmp/test_rd_catalog_pipeline.py`: in-memory/temp sqlite fixtures:
+  - 9110-KSB1-like: last cycle TDO without code → review `tdo_review`, approval `—`; package path has no `\PDF\`; `list_folder_tree_hints` short status `ТДО` and match_reason `trm`.
+  - 9000-KSB-like: current cycle TDO passed, code B from earlier TRM → review `tdo_review`, approval stale grey `B · … · 20.08.2026`.
+  - As-build after A → review `tdo_review` + `review_as_build`, code A stale; not green “IFC still alive”.
+  - Current B without later cycle → review `tdo_review`, code B, not stale.
+  - Code-A kit → review `agreed`, code A, not stale.
+  - Same rev sent twice → one package, two cycle lines.
+  - Issuance rev without folder → grey row.
+  - Code A → origin customer; B then same-rev send → pi; B then higher rev → customer.
+  - TDO 1 September, mtime September → not suspicious; mtime December → pending; `confirmed_ok` survives a second `rebuild_pipeline`; higher mtime after OK → pending again.
+  - Disk overlay-current rev higher than last send → `working_revision_text` set, not suspicious; leftover higher-rank files in an earlier NN (3860 `01` vs `0-AN01`) are not auto-working; folder hint `is_working` without a review badge; kits current / worklist skip working; `official_revision_text` is last issued non-working.
+  - Overlay-current NN marked `kit_annulled_flag` → not auto-working, not official; next non-annulled package is official (or auto-working if still above last send); heatmap cell `annulled` / `Ан` when that rev lives only in annulled folders; overlay `TRANSFER_ORDER_CONFLICT` involving that folder is omitted from heatmap `problem_kinds`; `list_mto_worklist` skips the cell; sibling same-rev folder stays official. Mutual exclusion: `upsert_annulled_flag` removes the working flag on that folder.
+  - Two NN folders, same filename rev, manual flag on the later NN → sibling stays `is_current` / official; stored `working_revision_text` may equal official; kits column **«Рабочая рев. РД»** shows «—» unless the working filename rev strictly outranks official.
+  - FolderTreeHint MTO fields from the `kit_revision_cell` snapshot, including MTO on an older revision than the package (`_package_mto_revision`); `has_mto_file` vs `kit_revision_cell.has_mto`.
+  - Two kits: scoped `rebuild_pipeline(kit_keys={A})` updates A and leaves B package ids / pipeline / heatmap cells unchanged; a following full rebuild matches A.
+- Extend `tmp/test_rd_catalog_db_smoke.py`: migrate 2→3→4→5→6→7→8→9→10→11→12, `an_mto_file`, `kit_working_flag`, `kit_annulled_flag`, and `file_mtime_override` present; `kit_liquidity_review`, `issuance_review`, `kit_working_flag`, `kit_annulled_flag`, and `file_mtime_override` intact after google replace / `replace_kit_derived` / rescan of the same file; fingerprint miss (disk mtime change) is stale; `kit_revision_cell` exists; `SCHEMA_VERSION == 12`. `upsert_annulled_flag` deletes the working flag on the same folder and vice versa.
+- `tmp/test_rd_catalog_an_index.py`, `tmp/test_rd_catalog_an_scan.py`, `tmp/test_rd_catalog_an_tab.py` (kit jump sorts by Дата).
+- `tmp/test_rd_catalog_issuance_review.py` / pipeline: 1600-SOS annul + Google replace keeps decision/comment (identity rematch, not `row_index`); legalize 02-AN01 (`send_id` None, `match_reason=legalized`, empty date loses latest-wins).
+- GUI smoke: card widget exists; Комплекты buttons **«Показать легенду»** and **«Сохранить шаблон колонок»**; documents-tree extra checkboxes including As-build and **Статус MTO** (default on); «Папка NN» appends transfer folder to the revision label; **«Пометить папку как аннулированную»** on a revision node; «Ревизии MTO» tab + legend; **«MTO · Перечень»** tab (index 2, 16 headers including «Связь F → РД → MTO» and «Сверка Авто МТО», filters, coverage label shape); **АН** tab index 3; kit_headers «Ок» after «Марка», «Рабочая рев. РД» after «РД · рев.» and «АН МТО» after сверка; `kits_header_v10`; checkbox **«АН закрывает Авто МТО»**; menu **«Показать в „АН“»**; history «Аннул.» after «Рабочая», «Ручной выбор MTO» after «Аннул.»; `history_header_v8`; Комплекты MTO filter checkboxes including as-build mutual exclusion; card package-table Stretch/ResizeToContents; do not require UNC.
+- `tmp/test_rd_catalog_parse_smoke.py`: `path_is_as_build` true for `...\as-build\MTO as-build\2245\...\file.pdf` when NN name has no as-built; still true for `07_рев.02_…_as-built`.
+- `tmp/test_rd_catalog_google_kits.py`: F line US-BUILD → stage `us_build`; still does not become `code_*`.
+- `tmp/test_rd_catalog_revision_matrix.py` (helpers from `tmp/test_rd_catalog_pipeline.py`):
+  - Two filename revs: code A on `01`, TDO on `02` → two cells with those statuses.
+  - As-build `03` overlay-current, IFC `02` present → `is_current` on `03` unless `03` is working (then official wins), `is_current_ifc` on `02`.
+  - `TRANSFER_ORDER_CONFLICT` on a rev → `problem_kinds_json` contains that kind.
+  - `iter_mto_files_for_cells(..., predicate="code_a")` returns the `01` MTO path from `records` / `file_entry`.
+- `tmp/test_rd_catalog_mto_worklist.py`: `list_mto_worklist` — code A with a path, `no_mto_file`, `no_package`, as-build vs IFC, `package_count`, problem kinds, ordering; working **and annulled** cells skipped after `cell_keys.add`.
+
+## 11. Out of scope here
+
+- Multiple robot MTO roots / bulk copy of MTO files to a folder by code A or TDO. `iter_mto_files_for_cells` and `list_mto_worklist` are read APIs; **«MTO · Перечень»** is the GUI. Neither copies files.
+- READY/WARNING on the kit card or on the revision heatmap.
+- Overlay exclusion of illiquid files or as-build files.
+- Writing Google or UNC. The issuance journal does **not** write «Выдача РД ПД».
+- АН dump is not a source of truth; no UNC writes; user copies into RD and rescans.

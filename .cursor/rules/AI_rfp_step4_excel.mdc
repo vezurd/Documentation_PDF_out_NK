@@ -1,0 +1,257 @@
+---
+description: "RFP Запуск — финальный Excel Step4: столбцы, покраска, ед. изм. MTO/УЛ, Проблема данных УЛ, лёгкий GUI."
+globs:
+  - "RFQ/tags_rfp_compare/step4/**"
+  - "RFQ/tags_rfp_compare/step4_analyze_and_match.py"
+  - "RFQ/tags_rfp_compare/units_gate.py"
+  - "ds_compare_center/rfp_run_panel.py"
+  - "ds_compare_center/rfp_progress_parser.py"
+  - "ds_compare_center/rfp_settings_panel.py"
+  - "ds_compare_center/rfp_ds_id_panel.py"
+  - "ds_compare_center/rfp_ds_mp_panel.py"
+  - "RFQ/rfp_parts/ds_identity.py"
+  - "RFQ/rfp_parts/ds_id_coverage.py"
+  - "RFQ/tags_rfp_compare/ds_manager_roster.py"
+  - "base/tables_columns.py"
+  - "base/base_classes.py"
+  - "utils/colors.py"
+alwaysApply: false
+---
+
+# RFP Step4 — финальная таблица (Excel / цвета / УЛ)
+
+> Хендофф для чатов про **итоговый xlsx RFP · Запуск**, покраску, столбцы, ед. изм., статусы УЛ.
+> Не дублирует пайплайн step1–4 и не про grouped ДС.
+
+## Когда подключать
+
+- Финальный лист Step4: столбцы, outline, скрытие, заголовки, числовые qty.
+- Покраска ячеек / комментарии Excel для читаемости.
+- Ед. изм. RFP / MTO / УЛ, diff MTO−RFP, статусы конвертации, **«Проблема данных УЛ»**.
+- Лёгкий GUI **RFP · Запуск** (milestones, подписи), не настройки DS.
+
+**Не подключать без нужды:** полный [AI_ds_compare.mdc](.cursor/rules/AI_ds_compare.mdc). Полный [AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc) — split/match/`_COPY_COLS`/units gate/кэш/parts.
+
+## Карта файлов
+
+| Файл | Роль |
+|------|------|
+| [step4_6_save_match_result_to_excel.py](RFQ/tags_rfp_compare/step4/step4_6_save_match_result_to_excel.py) | `ColumnDef`, `OUTPUT_COLUMNS_CONFIG`, цвет из `CheckElement.color`, комментарии, zip→UNC |
+| [step4_6_quality_sheets.py](RFQ/tags_rfp_compare/step4/step4_6_quality_sheets.py) | доп. листы Сводка / **Статистика ДС** / Посадка / Статусы / Проблемы УЛ |
+| [step4_packing_compare.py](RFQ/tags_rfp_compare/step4/step4_packing_compare.py) | статусы УЛ, `packing_units_mismatch`, merge UL status/trace в result; skip `is_excluded_from_supply` |
+| [rfp_supply_status.py](RFQ/tags_rfp_compare/rfp_supply_status.py) | канон. «Исключен из поставки»; «тег заменен на»; unknown → fatal |
+| [gem_supply_codes.py](RFQ/tags_rfp_compare/gem_supply_codes.py) | справочник кодов ГЭМ 8950, overlay «Поставка ГЭМ» |
+| [step4_postmerge_ops.py](RFQ/tags_rfp_compare/step4/step4_postmerge_ops.py) | `apply_mto_rfp_quantity_diff` → `VALUES_MTO_RFP_DIFF`; `apply_mto_ul_quantity_diff` → `VALUES_MTO_UL_DIFF` |
+| [step4_quantity_balance.py](RFQ/tags_rfp_compare/step4/step4_quantity_balance.py) | баланс RFP/MTO/VO и УЛ; `detail` milestones |
+| [step4_analyze_and_match.py](RFQ/tags_rfp_compare/step4_analyze_and_match.py) | snapshots → TM loop → balance → `check_values_sum` → УЛ → overlay ГЭМ → баланс УЛ → Excel |
+| [step4_bcc_accum_matrix.py](RFQ/tags_rfp_compare/step4/step4_bcc_accum_matrix.py) | накопительная матрица BCC (`Шаг4_Матрица_BCC_*.xlsx`): лист A–N + лист «Сводка»; не match Step4 |
+| [units_gate.py](RFQ/tags_rfp_compare/units_gate.py) | общий gate конвертации до Step4 (вне TM loop); см. [AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc) |
+| [ds_manager_matrix.py](RFQ/tags_rfp_compare/ds_manager_matrix.py) | матрица МП по ДС: загрузка xlsx, fill `DS_MANAGER` / `PATH_RFP` / `PATH_MTO` |
+| [tables_columns.py](base/tables_columns.py) | константы колонок + `ColNames.column_list` |
+| [base_classes.py](base/base_classes.py) | `_COPY_COLS` / `_ALWAYS_COPY_COLS` у light-копий |
+| [ds_units_normalize.py](RFQ/ds_compare/ds_units_normalize.py) | `normalize_units_text`, `merge_units_status_trace`, `copy_mto_units_fields` |
+| [rfp_run_panel.py](ds_compare_center/rfp_run_panel.py) | блок «Ход выполнения», 15 milestones |
+| [rfp_ds_id_panel.py](ds_compare_center/rfp_ds_id_panel.py) | вкладка **RFP · ДС ↔ УЛ**: таблица покрытия RFP vs папки УЛ |
+| [rfp_ds_mp_panel.py](ds_compare_center/rfp_ds_mp_panel.py) | вкладка **RFP · ДС ↔ МП**: файлы RFP vs фамилии МП |
+| [ds_manager_roster.py](RFQ/tags_rfp_compare/ds_manager_roster.py) | лист «Фактический и порядковый»; `run_ds_roster_compare_job` |
+| [ds_identity.py](RFQ/rfp_parts/ds_identity.py) | `parse_rfp_ds_identity` / `parse_ul_folder_ds_identity`, `DsIdentity` |
+| [ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py) | `check_ds_id_coverage`, `run_ds_id_coverage_job`; milestone `ds_id_check` |
+| [colors.py](utils/colors.py) | `Color.*` → fill в xlsxwriter |
+
+**Не путать:** вкладка **ДС · Столбцы Excel** — другой Excel. Step4 раскладка **только в коде** `OUTPUT_COLUMNS_CONFIG`.
+
+## Видимые столбцы (актуально)
+
+Источник: `OUTPUT_COLUMNS_CONFIG` в [step4_6_save_match_result_to_excel.py](RFQ/tags_rfp_compare/step4/step4_6_save_match_result_to_excel.py).
+
+- **RFP:** `Ед. изм. RFP` (`UNITS`) сразу после `Кол-во RFP` (`VALUES`); **`Теги RFP`** (`TAGS`) сразу после единиц, перед `Тег (VO/MTO/RFP)`.
+- **Статус поставки** (`RFP_SUPPLY_STATUS`, секция `status`, сразу после «MTO, Статус позиции»): видимая колонка **«Статус поставки»**, не «MTO, Статус позиции». Канон. **«Исключен из поставки»** из частей; строка остаётся в Excel, но не матчится с MTO/VO/УЛ и не входит в Σ ДС матрицы BCC. Канон. **«{старый} тег заменен на {новый}»** — `TAGS` уже новый с чтения частей/Step1; строка матчится как обычная. Иное непустое в исходной колонке — fatal (`RfpSupplyStatusError`), до Step4 не доходит.
+- **MTO block:** `Количество MTO` → `Ед. изм. MTO` → `Номера MTO`. `UNITS_CHECK_STATUS` / `UNITS_CONVERSION_TRACE` **скрыты** (`output=False`).
+- **`МТО − RFP`** (`VALUES_MTO_RFP_DIFF`) стоит **сразу перед** **`МТО − УЛ`** (`VALUES_MTO_UL_DIFF`), затем `Кол-во по УЛ` (коричневые заголовки diff, секция `mto`).
+- **Скрыто:** `DS_LOT` («Лот»), `UL_DATA_STATUS` («Качество данных УЛ»), `UL_ORDERED_VALUES` («Заказано по RFP»), RFP `VALUES_2`, статус/trace ед. изм., большинство pre_status/match debug-колонок.
+- **УЛ:** «Остаток поставки» переименован в **`RFP − УЛ`**. После «Статус УЛ»: **«Статус тегов УЛ»** (`UL_TAG_MATCH_STATUS`) → **«Тег УЛ»** (`UL_TAGS`, не свёрнут) → **«Наименование УЛ»** (`UL_NAME`, не свёрнут) → Код УЛ → Источник.
+- **Заголовки UL:** секция `ul` → fill **`#C6EFCE`**, текст чёрный (`HEADER_FILL_COLORS`).
+- **Гиперссылки:** Excel ~**65 530 ссылок на книгу**. `PATH_RFP` / `PATH_MTO` — обычный полный путь, без `write_url`. Ссылка только у **`UL_SOURCE_FILES`**, и только если в ячейке **один** источник (несколько строк — обычный текст). Текст УЛ без сокращения (`файл · вкладка · строка N`); URL относительно корня TSD (`packing_audit.dataset.meta.root`) + вкладка/`A{строка}`. Без tooltip.
+- **Identity ДС:** **`Порядковый ДС`** (`DS_NAME`, ярлык файла `ДС23` / `ДС92_24Б`) → **`Фактический ДС`** (`DS_ACTUAL`, `ДС{actual}` из `parse_rfp_ds_identity`) → **`№ позиции`** → **`Менеджер ДС`**. `DS_NUMBER` не путать с фактическим номером. Пустой actual на **RFP-строке**: ячейка пустая, comment **`нет фактического ДС`** на этой колонке (не `Проблема данных УЛ`).
+- **Leftover «Только в УЛ»:** `_fill_packing_only_ds_identity` — фактический номер из папки УЛ (первый сегмент `ANNOTATION`, тот же `parse_ul_folder_ds_identity`, что вкладка **RFP · ДС ↔ УЛ**). **`DS_ACTUAL` = `ДС{n}`**, **`DS_NAME` = `ДС{n}_RFP_не_найден`** (ГФ без `ДСn` — actual пустой, порядковый `RFP_не_найден`). **Фамилия МП leftover:** если фактический номер встречается с **одной** фамилией (на RFP-строках, иначе в матрице) — копируем её; если фамилий несколько или номера нет — пусто, без жёлтого. RFP-ярлыки вроде `ДС1_ГОСФИН_AGCC` / `ДС13_ПРИЛОЖЕНИЕ` ищут МП по `DS_NAME`, при промахе — по `DS_ACTUAL`; алиас матрицы отрезает нечисловой хвост после `ДС{n}_`.
+- **Матрица МП:** **`Менеджер ДС`** (`DS_MANAGER`) сразу после **`№ позиции`**; последние столбцы **`Путь к RFP`** / **`Путь к МТО`** (`PATH_RFP` / `PATH_MTO`, секция `paths`, заголовок `#D9E2F3`). Не в `_COPY_COLS`: заполняются после collapse+УЛ, перед Excel. Конфиг: `paths.ds_manager_matrix` → `Список ДС - Фамилии МП.xlsx` (свод `Имя ДС`/`Фамилия`; лист позиций не читается). Сверка наличия файлов с `RFP_Зиновьев` и фамилий — **не fatal** (лог + milestone **`ds_mp_check`**). Лист **«Фактический и порядковый»** пересобирается при каждом Запуске и вручную с вкладки **RFP · ДС ↔ МП** ([ds_manager_roster.py](RFQ/tags_rfp_compare/ds_manager_roster.py)); при расхождении файл переписывается. Значения Лист2 **«Имя ДС» / «Фамилия»** не меняются (их читает pipeline); справа дописываются столбцы **Статус / Дубликат / Что делать**. Если книга открыта в Excel — пишется копия с датой/временем в имени.
+
+## Новый / скрытый столбец — чеклист
+
+1. Константа в `base/tables_columns.py` и слот в `ColNames.column_list`.
+2. Если **пишут** match / post-match / УЛ: `_COPY_COLS` в `get_row_copy_light` и `batch_copy_light`; UL-блок ещё в `_ALWAYS_COPY_COLS`. См. актуальный список в [AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc) §5.
+3. `ColumnDef` в `OUTPUT_COLUMNS_CONFIG`: `section`, `output`, `width`, `group_level` / `group_collapsed`.
+4. Qty в Excel → `NUMERIC_QUANTITY_COLUMNS` (включая `VALUES_MTO_RFP_DIFF`, `VALUES_MTO_UL_DIFF`, `UL_REMAINING_VALUES`).
+
+`output=False` — столбца нет на листе. Смежные `group_level=1` схлопываются одним «−».
+
+## Покраска
+
+- Цвет ячейки = `row.el[col].color` в момент `write()`. Нет второго прохода.
+- Комментарий Excel: только непустой `el.comment`, прошедший `should_write_excel_comment`. Для УЛ — **только «Статус УЛ»** (`UL_COMPARE_STATUS`), и только если статус **«Недопоставка»** / **«Есть в МТО, Недопоставлено, Нет в RFP»** / **«Есть в РКД, Недопоставлено, Нет в RFP»** / **«Проблема данных УЛ»** или в тексте есть fallback (`Fallback сопоставления:`). Комплектна, полная поставка leftover на МТО/РКД, неотгружено, «Только в …» — без облачка (текст остаётся на `RowStd` для листов Сводка/Посадка). На `UNITS_MTO` — **только** если строка реально конвертирована матрицей (`status=converted` и ед. изм./qty изменились); identity и `шт.`→`шт` без комментария (`converted_units_comment_text`).
+- Статусы УЛ: комплектна → green; leftover **«Есть в МТО/РКД, Поставлено, Нет в RFP»** → `match_matched` (`#C6EFCE`); **Поставка ГЭМ** → вся строка `match_matched` (`#C6EFCE`), не только «Статус УЛ»; **ЗИП для СМР, ПНР** → `match_matched` (`#C6EFCE`); недопоставка / leftover недопоставлено на МТО/РКД / **Неотгружено по УЛ** / **Только в RFP (лишняя)** / **Только в МТО (Недопоставка)** / **Только в РКД** / **Исключен из поставки** → yellow; перепоставка / **Только в УЛ** → soft_cyan; проблема данных / недоступны → red. «Нет в УЛ» в Step4 больше не пишется. Overlay ГЭМ/ЗИП **не** перебивают «Исключен из поставки». Overlay ГЭМ **не** ставится на непустой `IN_CABINET`.
+- **`UL_TAG_MATCH_STATUS`:** приоритет: среди allocated есть `tag_mismatch` →
+  **«Собрано по несопоставленным тегам»** (yellow); иначе есть `via_mto` →
+  **«Собрано по тегу МТО»** (`soft_yellow`); иначе пусто. Комментарий Excel на эту колонку не пишется.
+  Флаг `step4.ul_match_use_mto_tags` (default true). Порядок посадки — **блоки A → leftover B → leftover C**, каждый блок — глобальные проходы (сначала все строки — жёсткий шаг, потом слабее), как RFP↔MTO в `step4_2`.
+  **Не** «все фазы внутри одной строки Excel, потом следующая».
+  **A** (только строки с фактическим ДС, ключ `(actual, title, system, code)`): A1 свой тег RFP; A2 безтеговые; A3 тег МТО той же строки; A4 слепой добор (`tag_mismatch`). A3–A4 **не** забирают тег, который сосед **этой же 4-tuple очереди** ещё ждёт как тег RFP.
+  После A4 остаток очередей **переиндексируется** по `(title, system, code)` (хвост ключа, без actual) и **не** сразу становится «Только в УЛ».
+  **B** (нет RFP, есть МТО, в т.ч. МТО+РКД на одной строке): B1 тег `TAG_MTO`; B2 безтеговые leftover; B3 слепой добор leftover. B3 резервирует `TAG_MTO` соседа с тем же 3-tuple. Слоты из разных папок УЛ могут сесть на одну МТО-строку, пока хватает `VALUES_MTO`.
+  **C** (leftover после B; «Добавлен из VO», нет RFP и нет МТО): то же с `TAG_VO` / `CODE_VO` / `VALUES_VO`.
+  Затем dump leftover **«Только в УЛ»**. B1/C1 **не** ставят `via_mto` (это не pass A3).
+  Разная title-mark (`8445-SOT` ≠ `8445-SOT1`) — разные очереди A. Разный фактический ДС (`29` vs `82`) — разные очереди A; leftover B/C actual не требует.
+- **`VALUES_MTO_RFP_DIFF`:** только при совпадении нормализованных RFP/MTO ед. изм.; diff=0 → green, иначе yellow; несовместимые ед. изм. → diff пустой, `UNITS`/`UNITS_MTO` yellow + comment (`apply_mto_rfp_quantity_diff`). Пустой `UNITS_MTO` при числовом `VALUES_MTO` заполняется из RFP `UNITS` (после gate это уже Google).
+- **`VALUES_MTO_UL_DIFF`:** после посадки УЛ (`apply_mto_ul_quantity_diff`); `VALUES_MTO − UL_VALUES` при совместимых `UNITS_MTO`/`UL_UNITS`; diff=0 → green, иначе yellow; пустой УЛ / нет числа MTO → пустая ячейка, не 0; несовместимые ед. изм. → diff пустой, `UL_UNITS` yellow + comment (существующий comment УЛ не затирается).
+- **`packing_units_mismatch`:** `UL_REMAINING_VALUES` **без числа** (пусто), `UL_UNITS` yellow, статус «Проблема данных УЛ» red.
+
+Колонки с записью после split должны быть в `_COPY_COLS` (в т.ч. `UNITS`, `UNITS_MTO`, `UNITS_CHECK_STATUS`, `UNITS_CONVERSION_TRACE`).
+
+## Ед. изм. и units gate
+
+- **До Step4** (в [agregate_tags.py](RFQ/tags_rfp_compare/agregate_tags.py)): один [units_gate.py](RFQ/tags_rfp_compare/units_gate.py) для raw RFP + MTO + активных строк УЛ (VO не участвует). Матрица: `paths.units_convert_matrix` / override; Google — strict index из одной загрузки `load_base()`.
+- **Step4** получает уже сконвертированные строки; `packing_dataset` из оркестратора **не перечитывается** (`_resolve_packing_dataset_for_step4`); при прямом вызове step4 без dataset — fallback `load_packing_dataset()`.
+- MTO ед. изм. → `UNITS_MTO` через `copy_mto_units_fields`; matcher УЛ сравнивает RFP `UNITS` с УЛ.
+- **Collapse** (`_collapse_rfp_rows_before_export`): ключ включает `normalize(UNITS)`, `normalize(UNITS_MTO)` и `is_excluded_from_supply`; survivor суммирует qty и **`merge_units_status_trace`** из всех строк группы.
+- **Баланс qty:** `quantity_balance` / `check_values_sum` **не** вычитают исключённые `VALUES` (вход = выход). Покрытие MTO/VO/УЛ и Σ ДС матрицы BCC эти строки не берут.
+- **УЛ matcher** ([step4_packing_compare.py](RFQ/tags_rfp_compare/step4/step4_packing_compare.py)): строки `is_excluded_from_supply` не входят в `build_ordered_snapshot` и не в очереди A/B/C (`UL_COMPARE_STATUS` = «Исключен из поставки», жёлтый, без облачка). Ключ блока A `(actual, title, system, code)` через `rfp_packing_match_key` (`actual` в ключе — `"24"`, не `"ДС24"`). **Нет** fallback на 3-tuple **внутри A** (RFP без actual в A не сажается). RFP actual: `rfp_row_actual_ds` ← `DS_NAME`; УЛ actual: `packing_row_actual_ds` ← первая папка `ANNOTATION`. Разная title-mark — **никогда не матч**. Разная actual (29 vs 82) — разные очереди A. Тег **не** в ключе. Grouped DS по-прежнему 3-tuple `packing_match_key`. `_merge_packing_units_trace` дописывает status/trace УЛ без затирания RFP/MTO. Целое qty → поштучная очередь (`qty=1` + теги); настоящая дробь → слот с весом остатка. **Проходы:** A1–A4 по 4-tuple, затем leftover B1–B3 / C1–C3 по `(title, system, code)` — см. покраска / `UL_TAG_MATCH_STATUS`. Одна A-строка без соседа по-прежнему может взять чужой тег того же кода (A4). `UL_VALUES` = сумма весов. Пустой `allocated` **не** пишет `0` и не ставит «Недопоставка». Теги > qty — fatal. УЛ без actual (ГФ) не входит в A; если не съеден блоком B/C → leftover **«Только в УЛ»**, не `packing_key_missing`; `DS_NAME`=`RFP_не_найден`. Leftover dump с номером папки — `DS_ACTUAL`=`ДС{n}`, `DS_NAME`=`ДС{n}_RFP_не_найден` (см. Identity выше). Строка «Добавлен из МТО», на которую сел leftover: **не** ставить `DS_NAME`=`ДС{n}_RFP_не_найден`; `DS_ACTUAL`=`ДС{n}` только если все севшие слоты из одной папки. Инварианты `take()` / живое резервирование / ранний выход trace — раздел **Инварианты матчера УЛ** ниже.
+- **Ловушка тегов (закрыта глобальными проходами A, затем B/C):** раньше каждая строка сразу доходила до слепого добора и крала тег соседа той же очереди. Пример 8525: позиция с RFP-тегом `…-AVI-1001` забирала слот `…-AVI-1002`, слот `1001` оставался в очереди `6550-SOT` («Только в УЛ»). B3/C3 так же резервируют тег МТО/РКД соседа leftover-ключа.
+- **Ловушка 8445 ДС29/ДС82 (закрыта ключом actual в A):** раньше очередь была `('8445', 'sot', 'bcc0003052')` без ДС; слот УЛ ДС82 мог сесть на RFP ДС29. Сейчас A включает actual; fallback без ДС для RFP запрещён. Leftover после A4 **можно** сажать на МТО-only без actual (блок B) — это не кража у RFP.
+- **Ловушка «Добавлен из МТО» без `DS_NAME` ≠ проход A3:** A3 берёт `TAG_MTO` **той же строки RFP**, уже попавшей в очередь с actual. Строка `create_rfp_row_from_mto` / `_from_vo` **не** пишет `DS_NAME` → не входит в A → после A4 шла в «Только в УЛ», а МТО-only получала «Только в МТО (Недопоставка)». Не чинить подстановкой `actual=""` в ключ A (повторит 8445). Нужны блоки B/C по leftover. Не выдумывать `DS_NAME` в `create_rfp_row_from_mto`.
+- **H1 / пустой RFP `CODE`:** `capacity` из `VALUES`, иначе `VALUES_MTO`, иначе `VALUES_VO`. Fallback на код МТО/VO без снимка RFP списывает очередь по qty МТО/VO, **не** дебетуя снимок RFP-кода. Перебор H1 ищет ключ **с тем же actual** (блок A). Если МТО-only всё же попала в A (смоук с `ДС1`) и набрала qty — статус leftover-поставки на МТО, не «Поставка комплектна». Overlay ГЭМ **не** включает новые «Поставлено» статусы.
+
+Не смешивать с DS grouped `highlight_compared_units_columns`.
+
+## Инварианты матчера УЛ
+
+Код: [step4_packing_compare.py](RFQ/tags_rfp_compare/step4/step4_packing_compare.py). Ускорение шага (1008,6 с → 9,3 с) — `.cursor/rules/AI_performance.mdc` и [ul_matcher_perf.plan.md](.cursor/plans/ul_matcher_perf.plan.md). Три правила нельзя нарушать: иначе тихая смена посадки или смена Excel.
+
+1. **`delivered == _delivered_qty(allocated)`.** Слоты в `_RowAllocationState.allocated` только через `take()`. Прямой `allocated.append(...)` ломает `remaining_qty()` и тихо меняет посадку. Побитовая эквивалентность держится на том, что running-total накапливается в том же порядке, что и полная сумма, поэтому сравнения с `_EPS` не меняются.
+2. **Запрет статического снапшота резервирования.** `_reserved_tags_for_state` и `_reserved_leftover_tags` обязаны читать `other.remaining_qty()` **живьём** в момент хода текущей строки. Предвычислять сами reserved-множества, кэшировать их по ключу или снимать снапшот активности соседей вне цикла **запрещено** — это возвращает инциденты 8525 (кража тега соседа) и 8445 (ДС29/ДС82 делят очередь). Предвычислять можно **только группировку** по неизменным ключам (`states_by_key`, `by_code_key`).
+3. **Ранний выход в `_merge_packing_units_trace`.** Если ни у одного слота нет ни `units_check_status`, ни `units_conversion_trace`, функция обязана выйти, не тронув существующее значение цели: иначе пустая строка `""` превратится в `None`.
+
+**Порядок строк в итоговом Step4 xlsx нестабилен между прогонами и это не регрессия.** Проверено по 25 архивным прогонам: при одинаковом числе строк порядок отличается (27.08 11.48 начинается с ДС23, 27.08 12.16 — с ДС29 при одинаковых 37 108 строках), ведущий ДС ротируется между ДС23 / ДС29 / ДС6 / ДС1_ГОСФИН. Идентичность проверять **только мультимножеством** через [compare_step4_files.py](RFQ/tags_rfp_compare/compare_step4_files.py); позиционный дифф двух файлов даёт сотни тысяч ложных расхождений и для этой задачи бессмыслен. Комментарии к ячейкам `compare_step4_files.py` не проверяет — если нужна сверка `_allocation_comment`, сравнивать их отдельно как мультимножество.
+
+## Статусы УЛ (наличие RFP/МТО, если поставки нет)
+
+Вместо **«Нет в УЛ»**:
+
+| Статус | Когда |
+|--------|--------|
+| **Неотгружено по УЛ** | есть RFP и МТО, `allocated` пуст |
+| **Исключен из поставки** | `RFP_SUPPLY_STATUS` канон. из частей; не в очереди УЛ; `UL_COMPARE_STATUS` тот же текст, жёлтый; хелпер `is_excluded_from_supply` |
+| **Поставка ГЭМ** | код из `paths.gem_supply_codes` и титул 8950*, исходный статус был «Неотгружено по УЛ» или «Только в МТО (Недопоставка)»; частичная «Недопоставка» не меняется. **Шкафные** (непустой `IN_CABINET` / «Тег Шкафа») **не** overlay — статус и цвет как после посадки УЛ |
+| **ЗИП для СМР, ПНР** | `UL_NAME` матчит комплект ЗИП для СМР/ПНР (в т.ч. «для проведения СМР», «ППНР»); overlay после ГЭМ; leftover cyan → match_matched |
+| **Только в RFP (лишняя)** | есть RFP, нет МТО и УЛ |
+| **Только в МТО (Недопоставка)** | origin «Добавлен из МТО» / есть `CODE_MTO`/`VALUES_MTO`, нет RFP и УЛ |
+| **Есть в МТО, Поставлено, Нет в RFP** | нет RFP, есть МТО, leftover УЛ покрыл `VALUES_MTO`; цвет `match_matched` |
+| **Есть в МТО, Недопоставлено, Нет в RFP** | то же, `0 < УЛ < МТО`; жёлтый + Excel-облачко как у «Недопоставка» |
+| **Только в РКД** | origin «Добавлен из VO», нет RFP/МТО и УЛ |
+| **Есть в РКД, Поставлено, Нет в RFP** | leftover УЛ на VO-only, qty совпало |
+| **Есть в РКД, Недопоставлено, Нет в RFP** | leftover УЛ на VO-only, частичное покрытие |
+| **Только в УЛ** | остаток очереди после A+B+C |
+
+«Недопоставка» (RFP) только при `allocated > 0` и `remaining > 0`. Хвост leftover больше ёмкости МТО/РКД не сажается на ту строку — идёт в C или «Только в УЛ».
+
+## «Проблема данных УЛ»
+
+`STATUS_DATA_PROBLEM = "Проблема данных УЛ"`. Качество: `DATA_ROW_PROBLEM = "Проблема строки УЛ"` (колонка скрыта в основном листе).
+
+| Код / ветка | Смысл |
+|-------------|--------|
+| `packing_units_mismatch` | RFP ед. изм. ≠ УЛ (при ненулевой поставке); numeric remainder blank |
+| `packing_key_missing` / invalid qty | leftover с `UL_VALUES=None` |
+| `rfp_composite_title` | кривой `DS_TITLE` |
+| tags > quantity | **fatal** `RfpPackingFatalError`, Excel нет |
+
+Ловушка `allocated=0`: см. [AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc) §13.
+
+## Порядок пайплайна
+
+**Запуск (до Step4):** prepare → **`ds_id_check`** (non-fatal, имена RFP vs папки УЛ) → **`ds_mp_check`** (non-fatal, файлы RFP vs фамилии МП + sync листа «Фактический и порядковый») → parts preflight → **`ul_preflight`** (свежесть кэша/свода УЛ, при необходимости пересборка) → `step1_load_rfp_raw` → parallel MTO/VO/`load_base` → milestone **`units_gate` Running** → optional `load_packing_dataset` once → **`load_tags=false`**: Step1 читает `rfp_parts_net_no_tags.xlsx` (лот как в ДС; боевой net не трогать); обнуляет `TAGS` в памяти (кэш УЛ не трогает; default `true` = теговый net и раскладка `VALUES=1` на два тега) → **`run_units_gate`** → **`units_gate` Done** (detail = per-contour summary) → `step1_finalize_rfp_data` → column optimization.
+
+**Step4 main (после gate):** compare_title_systems → input snapshots + `build_ordered_snapshot` (УЛ) → TM loop (match, collapse, per-row postmerge) → restore order → TAG_EFFECTIVE duplicates → **quantity balance** → **`check_values_sum`** → **УЛ** (`compare_rfp_rows_with_packing`) → **overlay ГЭМ** (вся строка `#C6EFCE`) → overlay ЗИП (`apply_zip_smr_pnr_status`) → **баланс УЛ** → **`apply_mto_ul_quantity_diff`** → `apply_ds_source_columns` → **`paint_gem_supply_rows`** (повтор заливки ГЭМ после МП/diff) → Excel.
+
+`compare_rfp_rows_with_packing` — это матч УЛ; overlay ГЭМ (`apply_gem_supply_status`) и overlay ЗИП (`apply_zip_smr_pnr_status`) сразу после него, не до.
+
+Gate **вне** TM loop; УЛ не входят в суммы RFP/MTO/VO.
+
+## GUI (точечно)
+
+15 milestones: `prepare`, **`ds_id_check`**, **`ds_mp_check`**, `parts_preflight`, **`ul_preflight`**, `rfp_load`, `mto_google_load`, `vo_load`, **`units_gate`**, `step4_match`, `global_checks`, `packing_lists`, `save_excel`, **`bcc_accum_matrix`**, `complete`. Протокол: `@@RFP_MILESTONE ` + JSON. Парсер: [rfp_progress_parser.py](ds_compare_center/rfp_progress_parser.py).
+
+### Номера ДС (порядковый / фактический)
+
+Парсер и покрытие — подготовка идентификаторов. Ключ посадки Step4 — **`(actual, title, system, code)`** (`rfp_packing_match_key`); join только `DsIdentity.actual`, не `match_keys` составных папок. `DS_NAME` в Excel — порядковый ярлык; в ключе — число actual.
+
+- [ds_identity.py](RFQ/rfp_parts/ds_identity.py) — `parse_rfp_ds_identity`, `parse_ul_folder_ds_identity`, `DsIdentity` (`sequential`, `actual`, `letter`, `compound`, `match_key`).
+- [ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py) — `check_ds_id_coverage`, `run_ds_id_coverage_job`; GUI/CLI-таблица. Join покрытия по **фактическому** номеру.
+- Legacy [parse_ds_name_from_file_name](RFQ/rfp_parts/ds_checklist.py) по-прежнему отдаёт весь префикс (`ДС92_24Б`) для свода частей / `DS_NAME` — **не** заменён.
+
+| Источник | Пример | Смысл |
+|----------|--------|--------|
+| Папка УЛ | `согл УЛ ДС24` | фактический ДС |
+| Обычный RFP | `ДС23. AGCC…` | порядковый = фактический |
+| Корректировка | `ДС92_24Б. AGCC…` | 92 фактический (сразу после ДС), 24 порядковый информационный, А/Б ревизия |
+| Копия файла | `ДС4905_1.xlsx` | суффикс копии, **не** actual=1 (нужен `. ` или пробел после исходной части) |
+| Часть в имени | `ДС13_ (5)_…` | ДС13, не compound |
+| Голая папка | `согл УЛ 4905` | `kind=bare`, всё же 4905; prep-запрос — переименовать в `согл УЛ ДС4905` |
+| ГФ с номером | `согл УЛ ДС1 ГФ 5титулов` | `ДСn` важнее пометки ГФ, actual=1 |
+| ГФ без номера | `согл УЛ ГФ 5титулов` | `kind=gf`, без actual |
+
+Milestone **`ds_id_check`** после `prepare`, до **`ds_mp_check`**; **не fatal**. Detail: `ОК: пар N, замечаний нет` или `Замечания: …`. Вкладка **RFP · ДС ↔ УЛ** (`--tab rfp_ds_id` / `ds_id` / `rfp_ul`), панель [rfp_ds_id_panel.py](ds_compare_center/rfp_ds_id_panel.py). Смоук: `python tmp/test_ds_identity_smoke.py`.
+
+Milestone **`ds_mp_check`** после `ds_id_check`, до `parts_preflight`; **не fatal**. Тот же `sync_ds_roster_sheet`, что вкладка **RFP · ДС ↔ МП**. Detail: `ОК: все файлы RFP с фамилией…` / `Надо дозаполнить: …` / `Ошибка: …`; пустой `paths.ds_manager_matrix` → Skipped. Вкладка (`--tab rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers`), панель [rfp_ds_mp_panel.py](ds_compare_center/rfp_ds_mp_panel.py).
+
+Milestone **`ul_preflight`** после `parts_preflight`, до `rfp_load`. При `step4.include_packing_lists` вызывает [ensure_tsd_packing_cache_current](RFQ/ds_compare/tsd_packing_load.py) = тот же `load_and_cache_tsd_packing(root, force=False)`, что grouped DS: fingerprint исходной папки ТСД vs кэш. Hit → Done `unchanged; …`; иначе пересборка pickle/свода. `include_packing_lists=false` (as-build) → Skipped. Нет папки ТСД → Error, запуск **не** останавливается (как `ds_id_check`). Ошибка пересборки → Error + `complete` Error (как свод частей).
+
+Сопутствующий файл **`Шаг4_Матрица_BCC_*.xlsx`** — **не** лист match Step4; кнопка «Открыть накопительную матрицу BCC». Флаг `step4.export_bcc_accum_matrix`. Снимок qty после `units_gate` (полный склад МТО/RFP/УЛ, без замен кодов и тегов). Ошибка записи → milestone `bcc_accum_matrix` Error, основной Шаг4 уже сохранён.
+
+**Лист «Матрица BCC» (ровно A–N, без колонок с O):**
+
+Порядок как в `Накопительная ведомость АГХК.xlsx` (identity → суммы/diff → wrap-источники):
+
+- A–E: Код, Наименование, Тип / марка, Вендор, Ед. изм. (Google-база по коду; пустой код у `position_row` — поля исходной строки).
+- F–H: Σ МТО / Σ ДС / Σ УЛ. I–K: МТО−ДС / ДС−УЛ / МТО−УЛ (пусто при несовместимых ед. изм.).
+- **L «Титулы МТО» / M «Источники ДС» / N «Источники УЛ»:** компактный разрез qty, не отдельные столбцы. Формат `{имя} - {qty}`, каждая пара с новой строки (`\\n`), сортировка имён. Целое без `.0`. Пустой контур — пустая ячейка. ДС — по `DS_NAME` (не № позиции: qty уже свёрнут по имени ДС). УЛ — basename файла. Wrap + высота строки по числу строк.
+
+**Лист «Сводка»:** KPI слева (только МТО/ДС/УЛ, все три контура, ненулевые diff, конфликт ед. изм.) → справа покрытие титул/ДС/файл УЛ (имя, число кодов, Σ qty) → таблица «Расхождения» **ниже** покрытия (ненулевой diff или конфликт ед. изм., AutoFilter).
+
+Не путать с листами внутри `Шаг4_Сопоставление_RFP_MTO_*.xlsx` ([step4_6_quality_sheets.py](RFQ/tags_rfp_compare/step4/step4_6_quality_sheets.py)): **Сводка** / **Статистика ДС** / Посадка / Статусы / Проблемы УЛ.
+
+**Лист «Статистика ДС»** (книга Step4 match, не матрица BCC): одна строка на группу `(DS_ACTUAL, DS_NAME, DS_MANAGER)` среди position_row. Столбцы: фактический → порядковый → фамилия МП (пустые группы не отбрасываются) → счётчики **«Статус УЛ»**. Порядок статусов: Недопоставка → Неотгружено по УЛ → **Исключен из поставки** → Только в УЛ → остальные известные `STATUS_*` → неожиданные строки → `(пусто)` только если есть. В заголовке статуса итог по книге: `Недопоставка (400)`. Leftover «Только в УЛ» — отдельная строка `ДС{n}_RFP_не_найден`; фамилия заполняется только если у этого фактического ДС одна уникальная МП. RFP госфин `ДС1_ГОСФИН_AGCC` берёт МП по фактическому `ДС1`. ГФ leftover без номера — порядковый `RFP_не_найден`, фамилия пустая. Ширины: `_ds_stats_column_widths` (identity по длине подписи/данных, порядковый до ~26 под маркер; статусы с wrap, высота шапки 40). Счётчики статусов (не identity): **0 → green** `#C6EFCE` (`Color.match_matched`); **>0 → yellow** `#fbec5d` (`Color.yellow`); столбец **«Поставка комплектна (N)»** при кол-ве **>0 всегда green**. Identity A–C: **green**, если в строке нет жёлтых счётчиков (поставка завершена); иначе без заливки.
+
+**`units_gate` detail (Done):** краткая сводка из plan actions по контурам RFP/MTO/УЛ (префиксы `request_id`: `rfp:`, `mto:`, `ul:`): проверено, преобразовано (`STATUS_CONVERTED`), без Google (`STATUS_NO_GOOGLE`); при ненулевом identity — «без изменений N»; при дробном coef≠1 — «дробных N». Пример: `RFP: проверено 2, преобразовано 1, без Google 0, без изменений 1; MTO: ...; УЛ: ...`. Ошибка gate → `units_gate` Error + `complete` Error (не `global_checks`). Дробный результат не Error: логи `дробные значения после конвертации {RFP|MTO|УЛ}.xlsx` в `result_dir`.
+
+**Sidecar частей (не лист Step4):** Запуск может скопировать `Отчет по позициям без кода - сбор частей.xlsx` из штампа частей в `result_dir`. Эти строки **не** в `Шаг4_Сопоставление_*.xlsx`. Отдельный quality sheet не добавлять.
+
+## Смоуки
+
+```powershell
+$env:PYTHONUTF8='1'
+python tmp/test_rfp_packing_compare_smoke.py
+python tmp/test_rfp_progress_markers_smoke.py
+python tmp/test_step4_units_gate_order_smoke.py
+python tmp/test_units_convert_matrix_smoke.py
+python tmp/test_rfp_native_settings_smoke.py
+python tmp/test_rfp_load_tags_smoke.py
+python tmp/test_bcc_accum_matrix_smoke.py
+python tmp/test_ds_manager_matrix_smoke.py
+python tmp/test_ds_identity_smoke.py
+python tmp/test_rfp_ds_id_panel_smoke.py
+python tmp/test_rfp_ds_mp_panel_smoke.py
+python tmp/test_rfp_run_progress_table_smoke.py
+python tmp/test_step4_ds_status_stats_smoke.py
+python tmp/test_rfp_supply_status_smoke.py
+python tmp/test_rfp_tag_count_mismatch_smoke.py
+```
+
+`test_rfp_packing_compare_smoke.py` также покрывает collapse по ед. изм., MTO−RFP diff, light-copy UL, Excel UL headers, «Порядковый ДС» / «Фактический ДС», leftover «Только в УЛ» (`DS_ACTUAL`=`ДС{n}` из папки, `DS_NAME`=`ДС{n}_RFP_не_найден`, фамилия МП если фактический ДС с одной МП; ГФ — `RFP_не_найден`), госфин-ярлык `ДС1_ГОСФИН_AGCC` → МП по `ДС1`, изоляцию очередей A по actual (ДС29 vs ДС82, `ДС92_24Б`↔папка ДС92, ГФ leftover), leftover УЛ → МТО/РКД без RFP (`ds_name=""`; инцидент 2319-KSB; регрессия 8445: RFP ДС29 не теряет слоты, хвост ДС82 садится на МТО-only), «Менеджер ДС» / пути RFP·МТО, overlay ГЭМ (OPEN_UPD / «Только в МТО» + титул 8950 + справочник кодов; **вся строка** `#C6EFCE`; новые «Поставлено» статусы **не** в overlay; непустой `IN_CABINET` **не** overlay), лист **Статистика ДС**. Skip «Исключен из поставки»: **`test_rfp_supply_status_smoke.py`**.
+
+## Соседние правила
+
+| Нужно | Файл |
+|-------|------|
+| launch order / gate / `_COPY_COLS` / matrix | [AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc) |
+| свод частей `rfp_parts_net` | [AI_rfp_parts.mdc](.cursor/rules/AI_rfp_parts.mdc) |
+| grouped ДС Excel | [AI_ds_compare.mdc](.cursor/rules/AI_ds_compare.mdc) |

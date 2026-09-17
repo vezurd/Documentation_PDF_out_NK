@@ -1,0 +1,656 @@
+---
+description: Дорожная карта оптимизации step4 (скорость + память). Читай перед работой над оптимизацией. Обновляй после.
+alwaysApply: false
+globs:
+  - RFQ/tags_rfp_compare/step4/**
+  - RFQ/tags_rfp_compare/step4_analyze_and_match.py
+  - RFQ/tags_rfp_compare/step1_load_rfp.py
+  - base/base_classes.py
+---
+
+# AI Optimization Roadmap — step4 performance & memory
+
+> Создан 26.02.2026. Источник: оценка плана "Параллельный step4 по title_mark".
+
+## ПРАВИЛА ДЛЯ ВСЕХ ЧАТОВ
+
+> **ОБЯЗАТЕЛЬНО** для каждого чата, работающего над оптимизацией step4:
+>
+> 1. **Прочитай этот файл целиком** перед началом работы
+> 2. **После завершения работы** — обнови этот файл:
+>    - Статус этапа (НЕ НАЧАТ → В РАБОТЕ → ЗАВЕРШЁН)
+>    - Замеры "после" (timing, memory) если проводились
+>    - Раздел "Результат работы чата" в соответствующем этапе
+>    - Раздел "Заметки" — если обнаружены проблемы, edge cases, инсайты
+> 3. **Не меняй порядок этапов** без явного указания пользователя
+> 4. **Не удаляй** записи предыдущих чатов — только дополняй
+> 5. **Обнови AI_performance.mdc** если изменились замеры производительности
+> 6. Каждый этап имеет секцию "Задание для чата" — следуй ей
+> 7. Проверяй результат через `compare_step4_files.py` — результат должен быть идентичен
+
+---
+
+## Baseline (замер 25.02.2026 23:54)
+
+| Метрика | Значение |
+|---|---|
+| total_runtime | 167.6s |
+| step4_total | 141.1s |
+| save_match_result_to_excel | 46.3s (из них wb.save ~38s) |
+| check_mto_data (split MTO) | 39.6s |
+| match_added_vo_with_mto_by_code | 16.4s |
+| match_rfp_with_mto | 12.5s |
+| match_rfp_with_vo | 9.3s |
+| peak RSS | 14.9 GB (77.1% of 32.5 GB) |
+| mto_data после split | 1.58M rows / 19.3 GB |
+| rfp_data после split | 391K rows / 6.7 GB |
+| result_rows | 27,196 rows |
+
+---
+
+## Целевые показатели (после всех этапов A+B+C)
+
+| Метрика | Baseline | Цель | **Факт (8w+gc.disable)** |
+|---|---|---|---|
+| step4_total | 141s | 40-50s (3x) | **26.4s (5.3x)** |
+| total_runtime | 168s | — | **35.7s (4.7x)** |
+| peak RSS | 15 GB | 5-6 GB | TBD |
+| save_match_result_to_excel | 46s | 5-10s | **3.4s (13.5x)** |
+
+---
+
+## Этап A: Оптимизация Excel save
+
+**Статус: ЗАВЕРШЁН**
+
+| Параметр | Значение |
+|---|---|
+| Файл | `RFQ/tags_rfp_compare/step4/step4_6_save_match_result_to_excel.py` |
+| Связанный файл | `RFQ/tags_rfp_compare/step4/step4_6_cell_colors.py` |
+| Зависит от | ничего (можно делать первым) |
+| Ожидание | save: 46s → 5-10s, step4_total: 141s → ~105s |
+| Сложность | НИЗКАЯ (~200-300 строк в одном файле) |
+
+### Суть проблемы
+
+`save_match_result_to_excel` тратит 46.3s, из которых:
+- ws.append (запись данных): 1.0s
+- styling (border, alignment, fill): 6.9s
+- **wb.save() (сериализация XML): ~38.4s** — НЕ тайминится в коде, это главный bottleneck
+
+Openpyxl сериализует весь workbook в XML при save. Для 27K+ rows с полной стилизацией это крайне медленно.
+
+### Задание для чата
+
+1. **Изучить текущий код** `step4_6_save_match_result_to_excel.py`:
+   - Как строятся headers, data rows, стили (border, alignment, fill/color)
+   - Какие используются column widths, auto_filter, freeze_panes
+   - Как применяются цвета из `step4_6_cell_colors.py` (CheckElement.color → fill)
+
+2. **Выбрать подход** (обсудить с пользователем если неочевидно):
+   - **Вариант 0 (приоритетный)**: остаться на openpyxl, добавить явный замер `wb.save()`, минимизировать стили и только после замеров решать переход на другой writer.
+   - **Вариант 1: xlsxwriter** — нативный C, write-only, поддерживает стили. Самый быстрый.
+     Ограничение: не читает xlsx (нам не нужно), API отличается от openpyxl.
+   - **Вариант 2: openpyxl write_only mode** — меньше изменений, но ускорение скромнее.
+   - **Вариант 3: openpyxl + lxml** — установить lxml для ускорения XML сериализации.
+
+3. **Реализовать замену**, сохранив:
+   - Точную структуру колонок (headers, порядок, widths)
+   - Стили: border для всех ячеек, alignment, fill/color по CheckElement.color
+   - auto_filter на весь диапазон
+   - freeze_panes = 'A2'
+   - Формат имени файла: `Шаг4_Сопоставление_RFP_MTO_{timestamp}.xlsx`
+
+4. **Добавить тайминг** для wb.save() / writer.close() — чтобы видеть реальное время сериализации
+
+5. **Проверить результат**:
+   - Запустить полный pipeline
+   - Сравнить Excel визуально (структура, стили, данные)
+   - Записать timing_log, memory_log
+   - Сравнить через `compare_step4_files.py` если применимо
+
+### Критерии приёмки
+
+- [ ] Полный стабильный прогон без падений кодировки/консоли
+- [ ] timing для wb.save/writer.close добавлен в timing_log
+- [ ] Таргет по времени Excel фиксируется с учётом этапа C (перекрытие записью по мере готовности TM-блоков), а не только по isolated save_time
+- [ ] Нет регрессии в других этапах step4
+
+### Риски
+
+- xlsxwriter API отличается от openpyxl (cell.border → format objects)
+- auto_filter и freeze_panes имеют другой синтаксис в xlsxwriter
+- Цвета: проверить что hex-коды из CheckElement.color корректно маппятся
+
+### Результат работы чата
+
+> - Выбранный подход: openpyxl (без смены writer), добавлен явный тайминг `wb.save()`
+> - Время save после (стабильный прогон 10:19): `step4::save_match_result_to_excel = 12.798s`, из них `write=1.039s`, `styles_total=7.066s`, `wb.save=3.714s`
+> - step4_total после (10:19): `98.632s` (`total_runtime=118.018s`)
+> - Проблемы/особенности: падение `UnicodeEncodeError` (cp1251) устранено заменой не-ASCII индикаторов в консольном выводе `check_values_sum`
+
+---
+
+## Этап B: Sequential per-TM processing
+
+**Статус: ЗАВЕРШЁН (с минорным замечанием по order)**
+
+| Параметр | Значение |
+|---|---|
+| Основные файлы | `step4_analyze_and_match.py`, `step1_load_rfp.py` |
+| Новый файл | `RFQ/tags_rfp_compare/step4/step4_worker.py` |
+| Зависит от | ничего (можно параллельно с A) |
+| Ожидание | peak memory: 15 GB → 7-8 GB (-50%) |
+| Сложность | СРЕДНЯЯ (~800-1000 строк) |
+
+### Суть
+
+Вместо обработки ВСЕХ title_marks разом, обрабатывать по одному (или группами).
+После collapse каждого TM — освобождать промежуточные split-данные (GC).
+Это даёт основной выигрыш по памяти без сложности multiprocessing.
+
+### Задание для чата
+
+**Подэтап B.1: Вынести per-TM pipeline в отдельную функцию**
+
+1. Изучить `step4_analyze_and_match.py` — последовательность вызовов step4_1..step4_4 + post-match
+2. Создать `step4/step4_worker.py` с функцией `process_title_mark()`:
+   - Принимает: `(title_mark, rfp_rows_tm, mto_rows_tm, vo_rows_tm, replacement_table, lot_registry, config)`
+   - Выполняет: split RFP → check_mto → check_vo → match_rfp_mto → match_rfp_vo → assign_status → add_unmatched → post-match → collapse
+   - Возвращает: collapsed rows + статистику (code_ban_data, values_sum_data)
+3. В `step4_analyze_and_match.py` добавить цикл по title_marks, вызывающий `process_title_mark()`
+4. **Проверить что результат ИДЕНТИЧЕН** текущему (compare_step4_files.py)
+
+**Подэтап B.2: Перенести RFP split из step1 в per-TM pipeline**
+
+1. В `step1_load_rfp.py`: добавить параметр `skip_split=True` (по умолчанию False для обратной совместимости)
+2. При `skip_split=True`: пропускать `step1_split_rows_loop`, возвращать несплитованные строки
+3. Split RFP выполняется внутри `process_title_mark()` — только для rows текущего TM
+4. Аналогично MTO split (check_mto_data) — уже per-TM по природе данных
+
+**Подэтап B.3: GC после каждого TM**
+
+1. После collapse TM: `del` промежуточных split-данных + `gc.collect()`
+2. Добавить memory_log точки внутри цикла (каждые N title_marks)
+
+**Подэтап B.4: Section/header ordering**
+
+1. RFP содержит section_row, cabinet_title_row — они привязаны к DS_TITLE
+2. При partition по DS_TITLE: служебные строки идут в свой TM
+3. При merge: восстановить порядок секций (сортировка по оригинальному индексу)
+4. **КРИТИЧНО**: проверить что порядок строк в итоговом Excel совпадает с текущим
+
+### Критические моменты
+
+- **_COPY_COLS**: worker должен использовать актуальную версию из base_classes.py
+- **compare_title_systems**: выполняется ДО цикла по TMs (cross-TM check)
+- **TAG_EFFECTIVE duplicate detection**: выполняется ПОСЛЕ merge всех TMs
+- **VO нормализация**: `_normalize_title_system()` маппит RFP DS_TITLE → VO title_system.
+  При partition VO данные привязывать по нормализованному ключу
+- **used_mto_rows / used_vo_rows**: безопасно per-TM (MTO строка принадлежит одному TM)
+- **mto_remaining_qty**: безопасно per-TM
+- **Collapse**: ключ содержит DS_TITLE — безопасно per-TM
+
+### Критерии приёмки
+
+- [ ] Результат идентичен текущему (compare_step4_files.py)
+- [ ] peak RSS < 10 GB
+- [ ] step4_total ±10% от текущего (не медленнее)
+- [ ] memory_log показывает снижение пика после check_mto_data
+- [~] Section/header ordering в Excel совпадает с baseline *(минорное замечание: данные идентичны по multiset, но baseline-order не полностью восстановлен)*
+
+### Риски (высокие)
+
+- Регрессия результатов из-за неучтённых cross-TM side-effects
+- Section ordering при merge — нетривиально, тестировать тщательно
+- Объём работ может быть больше оценки
+
+### Результат работы чата
+
+> - Завершённые подэтапы: **B.1 + B.2 + частично B.3**
+> - Что сделано:
+>   - добавлен `RFQ/tags_rfp_compare/step4/step4_worker.py` с `process_title_mark()`
+>   - `step4_analyze_and_match.py` переведён на последовательный цикл по `title_mark`
+>   - `compare_title_systems` оставлен до цикла (cross-TM check)
+>   - collapse перенесён в per-TM worker (через `collapse_func`)
+>   - `TAG_EFFECTIVE` duplicate detection оставлен после merge всех TM (глобально)
+>   - добавлены `gc.collect()` и memory-log точки внутри цикла (`step4_tm_loop_after_N`)
+> - `peak RSS` после: **не измерялся в этом чате**
+> - `step4_total` после: **не измерялся в этом чате**
+> - Порядок строк совпадает: **нет (глобальный порядок отличается), но данные идентичны как мультимножество строк**
+> - Проблемы/особенности:
+>   - B.2 реализован в коде: `step1.skip_split=True` + split RFP внутри worker (per-TM)
+>   - выполнен полный прогон 26.02.2026 11:09 (без падений, exit 0)
+>   - `compare_step4_files.py` показывает ложные различия из-за неуникального ключа сравнения
+>     (`Имя ДС`, `№ позиции`, `Теги RFP`): найдено 943 дублирующихся ключа (6450 строк)
+>   - `compare_step4_files.py` ЗАМЕНЕН на корректное multiset-сравнение
+>     (без зависимости от порядка и неуникальных ключей);
+>     baseline vs new: `only_old=0`, `only_new=0` → **идентичны по данным**
+>   - добавлен fingerprint входных данных `input_fingerprints.json` (MTO/VO: file path + size + mtime + md5),
+>     чтобы подтверждать, что прогоны сравниваются на одинаковом наборе источников
+>   - остаётся B.4: если нужен именно стабильный глобальный порядок строк как в baseline,
+>     требуется отдельная доработка merge-order
+> - Обновление 26.02.2026 (текущий чат):
+>   - реализован фикс B.4 merge-order:
+>     - в `step1_load_rfp.py::split_rfp_rows()` при split-копиях переносится `_orig_idx` и ставится `_orig_split_seq`
+>     - в `step4_analyze_and_match.py::_restore_original_row_order()` сортировка обновлена до `(orig_idx, orig_split_seq)`
+>   - цель фикса: вернуть стабильный порядок строк после per-TM merge при `split_rfp_in_worker=True`
+>   - прогон/замеры в этом чате **не выполнялись** (только код + lint)
+> - Контрольный прогон 26.02.2026 (timing_log=False):
+>   - конфиг: `step1.skip_split=True`, `step4.timing_log=False`, debug flags off
+>   - итог: `elapsed_ms=666999` (~11.1 мин), `exit_code=0`
+>   - для сравнения: предыдущие прогоны с `timing_log=True` дали `1027884` (~17.1 мин) и `1707190` (~28.5 мин)
+>   - вывод: отключение `timing_log.xlsx` даёт заметное ускорение (~35% до ~61%), но даже после этого runtime остаётся существенно выше исторического baseline (<200s)
+> - Валидация B.4 (26.02.2026, текущий чат):
+>   - сравнение `14.48` (new) vs `10.19` (baseline-like):
+>     - multiset идентичен: `only_new=0`, `only_old=0`
+>     - порядок строк НЕ совпадает: `order_mismatch_rows=26706/27195`
+>   - clean control pair `14.24` vs `14.48`:
+>     - multiset идентичен: `only_new=0`, `only_old=0`
+>     - fingerprints входов совпадают:
+>       - `MTO fingerprint_md5 = 91f197f3563b2b40df63b79246c910d4`
+>       - `VO fingerprint_md5 = 20799afa4d4e80e0313d197e39bb7fc0`
+>   - memory_log (run `14.48`): `peak rss=11545.8MB` (~`11.275 GB`), что выше цели этапа B (`<10 GB`)
+>   - итог по B.4: фикс `(orig_idx, split_seq)` недостаточен для восстановления baseline-order
+
+### Старт следующего чата (handoff на Этап B → подготовка к C)
+
+1. **Режим прогонов по умолчанию:** `step4.timing_log=False` (иначе сильная деградация runtime из-за частой записи `timing_log.xlsx`).
+2. **B.4 остаётся незавершённым:**
+   - текущая валидация показала `order_mismatch_rows=26706/27195` (new `14.48` vs baseline-like `10.19`);
+   - при этом данные идентичны по multiset (`only_new=0`, `only_old=0`) — проблема именно в порядке.
+3. При каждом сравнении проверять `input_fingerprints.json` для MTO/VO (идентичность входов между прогонами).
+4. Зафиксировать метрики run `14.48` (`timing_log=False`) в roadmap + `AI_performance.mdc`:
+   - `elapsed_ms=666999`, `peak rss=11.275 GB`.
+5. Перед этапом C отдельно решить стратегию порядка:
+   - либо довести baseline-order совместимость,
+   - либо зафиксировать новый order-contract (если пользователь согласует отказ от строгого baseline-order).
+
+### Открытые вопросы перед этапом C
+
+- Подтвердить, не влияет ли `_orig_split_seq` сортировка на локальный порядок внутри TM в edge-cases (строки без `_orig_idx`, добавленные из MTO/VO).
+- Определить целевой формат timing-логов на период C: оставить `timing_log=False` для боевых прогонов и включать только на диагностических.
+
+---
+
+## Этап C: ProcessPoolExecutor
+
+**Статус: В РАБОТЕ**
+
+| Параметр | Значение |
+|---|---|
+| Основной файл | `step4_analyze_and_match.py` |
+| Worker | `step4/step4_worker.py` (из этапа B) |
+| Config | `rfp_tags_compare_config.json`, `rfp_tags_settings_gui.py` |
+| Зависит от | **Этап B** (sequential per-TM должен работать) |
+| Ожидание | step4_total: ~100s → 40-50s (с A+B+C). **Факт: 26.4s** |
+| Сложность | ВЫСОКАЯ (~500-800 строк + тестирование) |
+
+### Суть
+
+Обернуть `process_title_mark()` из этапа B в ProcessPoolExecutor.
+Каждый worker обрабатывает свой title_mark в отдельном процессе.
+
+### Задание для чата
+
+**Подэтап C.1: ProcessPoolExecutor**
+
+1. В `step4_analyze_and_match.py`: новая функция `step4_analyze_and_match_parallel()`
+2. `process_title_mark()` уже module-level (из этапа B) — pickling OK
+3. `ProcessPoolExecutor(max_workers=N)`, `executor.map(process_title_mark, args_list)`
+4. Собрать результаты, merge, post-merge operations (TAG_EFFECTIVE duplicates, etc.)
+
+**Подэтап C.2: Fallback**
+
+1. `try/except` вокруг MP — при PicklingError fallback на sequential
+2. Логировать причину fallback
+
+**Подэтап C.3: Балансировка нагрузки**
+
+1. Добавить **оценку веса TM до запуска MP** (не только rows count):
+   - `rfp_rows_tm`, `mto_rows_tm`, `vo_rows_tm`
+   - `pred_split_rfp_tm`: прогноз раскрытий RFP по `VALUES` для строк без тегов с учётом `code_ban`/`units_ban`
+   - `pred_split_mto_tm`: прогноз раскрытий MTO по `VALUES` и `tags_count`
+   - `heavy_code_hits_tm`: количество кодов из `ban_code`/списков ограничений (как штрафной коэффициент сложности)
+2. Рассчитать интегральный вес `tm_weight` (линейная формула с коэффициентами из baseline) и
+   распределять TM по workers по схеме **LPT (largest-processing-time-first)**:
+   сначала самые тяжёлые TM, каждый следующий — в наименее загруженный worker.
+3. Использовать динамический добор задач (`chunksize=1`, `as_completed`) чтобы снижать tail latency.
+4. После прогона сохранять фактическое `duration_per_tm` и корректировать `tm_weight`
+   (feedback, например EWMA), чтобы следующий запуск давал более ровный баланс.
+5. Зафиксировать ограничение: **идеального выравнивания не требуется**; цель — убрать грубый перекос,
+   а не добиться одинакового времени каждого worker.
+
+**Подэтап C.4: Конфигурация + GUI**
+
+1. `step4.parallel_by_title_mark: true/false` в JSON config
+2. `step4.max_workers: 4` (0 = auto = cpu_count - 1)
+3. GUI checkbox в `rfp_tags_settings_gui.py`
+4. Объединить или разграничить с существующим `step4.use_multiprocessing`
+
+**Подэтап C.5: Mini-дизайн записи Excel (as-completed + single writer)**
+
+1. Workers считают `title_mark` параллельно и возвращают **готовые к экспорту** строки TM
+   (локальный порядок строк внутри TM сохраняется как в текущем pipeline).
+2. В main process работает **один** writer для Excel (openpyxl); несколько writers в один workbook не использовать.
+3. Результаты писать по мере готовности через `as_completed`:
+   - глобальный порядок TM не фиксируется;
+   - это допустимо, т.к. для пользователей важен порядок внутри TM, а анализ делается фильтрацией.
+4. Для каждого готового TM писать блок строк и сразу применять стили к диапазону этого блока.
+5. После завершения всех TM выполнить финализацию листа:
+   `auto_filter`, `freeze_panes`, ширины колонок, `wb.save()`.
+6. Логировать отдельные тайминги:
+   - `excel_write_block::<tm>`
+   - `excel_style_block::<tm>`
+   - `excel_finalize`
+   - `excel_wb_save`
+
+### Pickle overhead (Windows)
+
+- Windows использует spawn (не fork) — каждый worker новый процесс
+- Данные передаются через pickle: RFP_TM + MTO_TM + VO_TM + replacement_table + config
+- Для крупных TMs pickle overhead может быть 1-5s на TM
+- Митигация: если overhead > 20% от работы TM — автоматически sequential для мелких TMs
+
+### Критерии приёмки
+
+- [ ] Результат идентичен sequential per-TM (этап B)
+- [ ] step4_total < 60s с 4 workers
+- [ ] peak RSS не выше чем в этапе B
+- [ ] Fallback на sequential работает при ошибке pickle
+- [ ] Конфигурация доступна в JSON и GUI
+- [ ] Перекос загрузки между workers в основном прогоне контролируемый (ориентир: max/min времени worker <= 1.5)
+
+### Результат работы чата
+
+> - Текущий статус: **C.1 + C.2 + C.4 (базово) реализованы**, C.3/C.5 — в ожидании замеров и доработки
+> - Что реализовано в коде:
+>   - `step4_analyze_and_match.py`:
+>     - добавлены параметры `parallel_by_title_mark`, `max_workers`
+>     - добавлен путь `ProcessPoolExecutor + as_completed` для `process_title_mark()`
+>     - реализован fallback на sequential при любой ошибке запуска/пиклинга worker'ов
+>     - добавлено логирование таймингов per-TM и fallback-события
+>   - `agregate_tags.py`: прокинуты `parallel_by_title_mark` и `max_workers` в `step4_analyze_and_match(...)`
+>   - `rfp_tags_utils.py::get_default_config()`:
+>     - добавлены дефолты `step4.parallel_by_title_mark=false`, `step4.max_workers=4`
+>   - `rfp_tags_compare_config.json`: добавлены поля `parallel_by_title_mark`, `max_workers`
+>   - `rfp_tags_settings_gui.py`: добавлены checkbox `parallel_by_title_mark` и поле `max_workers`
+> - Что пока не сделано:
+>   - ~~замеры `step4_total`/`peak RSS` для MP-режима~~ (выполнено, см. ниже)
+>   - ~~оценка pickle overhead~~ (выполнено — pickle **доминирует**, см. ниже)
+>   - ~~устранение pickle overhead~~ (выполнено — workers возвращают lightweight summaries)
+>   - балансировка C.3 (веса TM + LPT + feedback) — разблокирована после pickle fix
+>   - incremental Excel по as-completed C.5 (single writer блоками)
+>
+> - **[26.02.2026] Устранена причина зависания MP-режима (defer_reports)**:
+>   - диагноз: 197 TMs × 4 workers одновременно печатали баннеры (`"=" * 80`),
+>     `tqdm` (по 1 item), таблицы дубликатов и писали Excel файлы —
+>     **console I/O contention** на Windows вызывал блокировку worker'ов
+>   - исправлено: добавлен `defer_reports=True` в `check_mto_data`/`check_vo_data` при parallel mode:
+>     - подавляются `print`, `tqdm`, `log_mto_tag_distribution` в worker'ах
+>     - Excel-отчёты `Шаг4_Дублирующиеся_теги_MTO`, `Шаг4_Несовпадения_тегов_VALUES`,
+>       `Шаг4_Дублирующиеся_теги_VO` **не пишутся** каждым worker'ом
+>     - вместо этого диагностические данные возвращаются через return-dict worker'а
+>     - в main-процессе после merge всех TMs данные агрегируются и
+>       сохраняются **единым** файлом через `save_mto_diagnostics_reports()`/`save_vo_diagnostics_reports()`
+>   - затронутые файлы: `step4_1_check_mto_data.py`, `step4_worker.py`, `step4_analyze_and_match.py`
+>
+> - **[26.02.2026] Контрольный MP-прогон `16.28` (exit_code=0, первый успешный)**:
+>   - конфиг: `parallel_by_title_mark=True`, `max_workers=4`, `skip_split=True`, `timing_log=True`
+>   - `elapsed_ms=1449696` (~24.2 мин), `step4_total=1429.249s`, `tm_loop_total=1411.487s`
+>   - `peak rss=15258 MB` (~15.3 GB), `system available min=8049 MB`
+>   - post-merge: `save_match_result_to_excel=12.428s` (wb_save=3.781s), `check_values_sum=2.019s`
+>   - **result_rows=27196, match stats: MTO matched=12999, VO matched=4141**
+>   - `defer_reports` fix подтверждён: по 1 файлу MTO/VO диагностики, без CRC ошибок
+>
+> - **[26.02.2026] КРИТИЧЕСКИЙ ВЫВОД: pickle overhead делает MP-mode 2.35x медленнее sequential**:
+>   - `tm_loop_total=1411s` vs sequential ~600s — **2.35x замедление**
+>   - CPU workers суммарно: ~65s (20+15+14+16). CPU main process: ~486s
+>   - Корень проблемы: **worker возвращает POST-split MTO данные** через pickle:
+>     - MTO до split: 27,795 rows / 488 MB
+>     - MTO после split (внутри worker): **1,584,058 rows / 23,676 MB** (57x expansion!)
+>     - Каждый TM возвращает ~120 MB split-MTO через pickle → 197 TMs × ~7s/TM ≈ 1379s
+>   - `mto_data_tm` и `vo_data_tm` в return-dict нужны ТОЛЬКО для `check_values_sum` и `_save_code_ban_list`
+>   - **Решение: не возвращать split mto/vo из worker, а вычислять необходимые summary-данные
+>     (VALUES суммы, коды для code_ban) per-TM внутри worker и возвращать лёгкие dict/set**
+>   - Ожидаемый эффект: pickle payload уменьшится с ~120 MB до ~1-2 KB per TM,
+>     tm_loop_total должен упасть до ~150-200s (4 workers × ~600s/4 параллельной работы)
+>
+> - **[26.02.2026] Реализовано устранение pickle overhead (lightweight summaries)**:
+>   - `step4_worker.py`: добавлена `_compute_mto_vo_summaries()` — вычисляет в worker'е:
+>     - `mto_summary`: `tagged_sum`, `tagged_values_by_code`, `codes_with_tags`
+>     - `vo_summary`: `tagged_sum`, `codes`
+>   - `mto_data_tm`/`vo_data_tm` **удалены** из return-dict worker'а
+>   - `step4_analyze_and_match.py`:
+>     - `processed_mto_data`/`processed_vo_data` заменены на лёгкие аккумуляторы:
+>       `agg_mto_tagged_sums`, `agg_mto_tagged_values_by_code`, `agg_vo_tagged_sums`,
+>       `agg_vo_codes`, `agg_mto_codes_with_tags`
+>     - `_merge_tm_result()` обновлён для merge summaries
+>     - `_save_code_ban_list()` принимает `vo_codes: Set[str]` и `mto_tagged_codes: Set[str]`
+>   - `step4_5_check_values_sum.py`:
+>     - `check_values_sum()` принимает pre-computed `mto_tagged_sums`, `mto_tagged_values_by_code`, `vo_tagged_sums`
+>     - добавлена `_calculate_used_mto_without_tags_from_summary()` (работает с pre-computed данными)
+>     - debug-функции `_save_vo_debug_rows`/`_save_mto_values_debug_log` более не вызываются из `check_values_sum`
+>   - **Ожидаемый pickle payload: ~1-2 KB per TM вместо ~120 MB** — требуется контрольный прогон
+>
+> - **[26.02.2026] Добавлен `step1.skip_split` в config/GUI (C.4 дополнение)**:
+>   - `rfp_tags_compare_config.json`: добавлено `step1.skip_split: false`
+>   - `rfp_tags_settings_gui.py`: добавлен checkbox в секцию Step1
+>   - `rfp_tags_utils.py::get_default_config()`: добавлен дефолт `skip_split: False`
+>
+> - **[26.02.2026] Добавлен мониторинг прогресса при parallel mode**:
+>   - в `as_completed` loop: печать строки `[N/total] TM done in Xs` каждые 10 TM
+>   - формат: `[10/197] 8445-SOT1  3.2s  rows=142  mto=45 vo=12  (total 35s)`
+>
+> - **[26.02.2026] Исправлен check_values_sum при skip_split=True**:
+>   - при `skip_split=True` снимок RFP VALUES брался из нераскрытых данных (дробные),
+>     а результат содержал раскрытые строки (int-усечение) → ложные ERROR
+>   - фикс: `_extract_rfp_snapshot_for_check()` получает `skip_split`, `units_ban`, `code_ban`
+>     и эмулирует split_rfp_rows логику (int-усечение + multi-tag min())
+>   - контрольный прогон: **0 ошибок check_values_sum** (было 5)
+>
+> - **[26.02.2026] Реализована балансировка C.3 (LPT scheduling)**:
+>   - перед submit TMs в ProcessPoolExecutor — сортировка по весу `n_rfp + n_mto*2 + n_vo` (descending)
+>   - тяжёлые TMs запускаются первыми → `as_completed` динамически добирает задачи
+>   - `print(f"weight range={top_w}..{bot_w}")` для контроля диапазона весов
+>
+> - **[26.02.2026] Контрольный MP-прогон `22.04` (LPT + pickle fix + check_values_sum fix)**:
+>   - конфиг: `parallel_by_title_mark=True`, `skip_split=True`, `max_workers=4`, `timing_log=True`
+>   - `total_runtime=217.4s` (3.6 мин), `step4_total=205.7s`, `tm_loop_total=189.2s`
+>   - **compare_step4_files.py vs baseline `18.32`: only_new=0, only_old=0 (ИДЕНТИЧНО)**
+>   - check_values_sum: **OK, 0 ошибок**
+>   - weight range=1332..1 (тяжёлые TM первыми)
+>   - tm_loop 189s vs 223s (без LPT) → **15% ускорение** от балансировки
+>   - vs sequential baseline (~640s step4_total): **3.1x speedup**
+>
+> - **[26.02.2026] CPU utilization boost — 4 оптимизации**:
+>   - **max_workers test**: 4w=205.9s, 6w=225.1s, 8w=209.9s (total_runtime).
+>     4 workers optimal — bottleneck is network I/O (`\\bcc\eng\...`), not CPU.
+>   - **Parallel step2||step3**: `ThreadPoolExecutor(2)` в `agregate_tags.py`.
+>     `step2+step3_parallel_load=7.8s` (vs sequential ~11s → **-3.2s**)
+>   - **7 per-row postmerge ops → worker** (новый `step4/step4_postmerge_ops.py`):
+>     `apply_all_postmerge_per_row_ops()` вызывается после collapse в worker.
+>     Main post-merge: 0.2s (vs ~1s). `lot_map` загружается один раз в main, передаётся в worker.
+>     TAG_EFFECTIVE phase 2 (duplicate detection) и `_save_code_ban_list` остаются в main.
+>   - **xlsxwriter migration** (`step4_6_save_match_result_to_excel.py`):
+>     `3.8s` total (write+styles=1.4s, wb.close=2.2s) vs openpyxl `14.0s` → **3.7x faster**
+>
+> - **[26.02.2026] Контрольный прогон `22.28` (4w + все CPU optimizations)**:
+>   - `total_runtime=205.9s`, `step4_total=196.1s`, `tm_loop=190.8s`
+>   - `excel_save=3.8s`, `step2+3_load=7.8s`, `main_postmerge=0.2s`
+>   - **compare vs baseline `22.04`: only_new=0, only_old=0 (ИДЕНТИЧНО)**
+>   - check_values_sum: **OK, 0 ошибок**
+>   - vs baseline 217s → **-11.5s, 5.3% faster**
+>   - vs sequential baseline (~640s): **3.3x speedup**
+>
+> - **[26.02.2026] Timing_log bottleneck fix + initializer + memory_log toggle**:
+>   - **Buffered timing_log**: `append_timing_log()` буферизует в `_timing_buffer` list (O(1));
+>     `finalize_timing_log()` пишет все записи одним openpyxl save. Убрано ~210 циклов load+save.
+>   - **Worker duration**: `process_title_mark()` возвращает `worker_duration` (perf_counter delta);
+>     timing_log теперь показывает реальное время работы TM внутри worker.
+>   - **ProcessPoolExecutor initializer**: `worker_init()` + `initargs=(tm_common_kwargs,)`;
+>     `process_title_mark_parallel()` wrapper читает shared kwargs из `_shared_kwargs` global.
+>     Per-TM submit отправляет только `title_mark` + `rfp_rows_tm` + `mto_rows_tm` + `vo_rows_tm`.
+>   - **memory_log=false** в конфиге (GUI toggle уже был).
+>
+> - **[26.02.2026] Контрольный прогон `23.03` (buffered timing + initializer)**:
+>   - `total_runtime=180.8s`, `step4_total=171.6s`, `tm_loop=167.4s`
+>   - `excel_save=3.4s`, `step2+3_load=7.9s`
+>   - **compare vs baseline `22.04`: only_new=0, only_old=0 (ИДЕНТИЧНО)**
+>   - check_values_sum: **OK, 0 ошибок**
+>   - vs `22.28` (206s) → **-25s, 12% faster**
+>   - vs `22.04` (217s) → **-36s, 17% faster**
+>   - vs sequential baseline (~640s): **3.5x speedup**
+>
+> - **[26.02.2026] КРИТИЧЕСКАЯ НАХОДКА: gc.collect() = 158s из 167s tm_loop**:
+>   - профилирование merge loop (run `23.17`, 8w):
+>     - `future.result()` (pickle deserialize): **0.0s**
+>     - `_merge_tm_result()`: **0.0s**
+>     - **`gc.collect()` × 197: 158.2s** (~0.8s/call, растёт с ростом result_rows)
+>   - pickle overhead оказался нулевым — весь overhead был от GC
+>   - fix: `gc.disable()` перед циклом `as_completed`, один `gc.enable() + gc.collect()` после
+>   - применён ко всем трём путям (parallel, fallback sequential, non-parallel)
+>
+> - **[26.02.2026] Контрольные прогоны с gc.disable() (8w vs 4w)**:
+>
+>   | Metric | 4w+gc/iter (23.03) | 8w+gc/iter (23.12) | **8w+gc.disable (23.22)** | **4w+gc.disable (23.25)** |
+>   |---|---|---|---|---|
+>   | total_runtime | 180.8s | 180.9s | **35.7s** | **40.5s** |
+>   | step4_total | 171.6s | 171.5s | **26.4s** | **30.9s** |
+>   | tm_loop | 167.4s | 166.8s | **21.6s** | **26.7s** |
+>   | excel_save | 3.4s | 3.4s | 3.4s | 3.4s |
+>   | check_values_sum | OK | OK | **OK** | **OK** |
+>   | Compare | ИДЕНТ. | ИДЕНТ. | **ИДЕНТ.** | **ИДЕНТ.** |
+>
+>   - **8w оптимален**: tm_loop 21.6s vs 26.7s (4w), +5s от большего параллелизма
+>   - max_workers установлен в **8**
+>   - LPT балансировка идеальна: 8w loads=[10.2, 10.1, 10.1, 10.1, 10.1, 10.1, 10.1, 10.1]
+>   - **vs sequential baseline (~640s): 18x speedup**
+>   - **vs предыдущий best (23.03, 181s): 5.1x speedup** (только от gc.disable)
+
+---
+
+## Этап D: шаг УЛ (Step4 packing matcher)
+
+**Статус: ЗАВЕРШЁН** (09.09.2026, принято по контрольному прогону)
+
+| Параметр | Значение |
+|---|---|
+| Файл | `RFQ/tags_rfp_compare/step4/step4_packing_compare.py` |
+| Обвязка | `RFQ/tags_rfp_compare/step4_analyze_and_match.py` |
+| Зависит от | ничего (milestone `packing_lists`) |
+| Ожидание | `< 90 с` при идентичном результате |
+| Факт | **1008,6 с → 9,3 с (108,2×)** |
+| План | [ul_matcher_perf.plan.md](.cursor/plans/ul_matcher_perf.plan.md) |
+
+### Суть
+
+`compare_rfp_rows_with_packing` на боевых данных занимал **≈16,8 мин** из‑за квадратичных участков: полный пересчёт `remaining_qty()` на каждый забор слота, псевдо-`RowStd` (146 `CheckElement`) на каждый из ~1,23 млн слотов и полный скан всех строк при резервировании тегов.
+
+### Фазы: baseline → контроль (09.09.2026)
+
+Источник цифр — секция `PHASES (seconds):` в `ul_compare_report_*.txt` (надёжнее `timing_log.xlsx`). Полная таблица и COUNTERS — в плане.
+
+| Фаза | Baseline | Контроль |
+|---|---:|---:|
+| `a2_untagged` | 679,4 с | 1,1 с |
+| `fill_rows` | 162,9 с | 3,7 с |
+| `a3_mto_tags` | 108,2 с | 0,14 с |
+| `a4_blind` | 49,3 с | 0,10 с |
+| **ИТОГО шаг УЛ** | **1008,6 с** | **9,3 с (108,2×)** |
+
+### Три правки (все в `step4_packing_compare.py`)
+
+1. **Инкрементальный `delivered`.** У `_RowAllocationState` поле `delivered` и метод `take()`; `remaining_qty()` больше не суммирует весь `allocated`. Фаза `a2_untagged`: 679,4 с → 1,1 с.
+2. **Trace-merge без псевдо-`RowStd`.** `_merge_packing_units_trace` склеивает status/trace через `join_unique_units_text`, без `RowStd` на слот. Фаза `fill_rows`: 162,9 с → 3,7 с.
+3. **Группировка соседей для резервирования тегов.** `states_by_key` для проходов A3/A4 и `code_keys` / `by_code_key` в `_allocate_leftover_block`. Фазы `a3_mto_tags` 108,2 с → 0,14 с и `a4_blind` 49,3 с → 0,10 с.
+
+### Идентичность (контрольный прогон принят)
+
+- `RFQ/tags_rfp_compare/compare_step4_files.py`: `only_new=0` / `only_old=0` на 37 270 строках и 43 общих колонках.
+- Все `COUNTERS` совпали.
+- Комментарии как мультимножество 654/654.
+
+Инварианты матчера — `.cursor/rules/AI_rfp_step4_excel.mdc`. Тайминги и диагностические скрипты — `.cursor/rules/AI_performance.mdc`.
+
+---
+
+## Заметки и обнаруженные проблемы
+
+> Каждый чат добавляет сюда инсайты, edge cases, проблемы.
+> Формат: `- [дата] [этап] описание`
+
+- [26.02.2026] [baseline] save_match_result_to_excel в AI_performance.mdc указан как 12.6s, реально 46.3s. Расхождение из-за wb.save() который не тайминился. Добавить тайминг wb.save.
+- [26.02.2026] [baseline] Закон Амдала: при save=46s (33% step4) чистая параллелизация даёт только 1.6-1.8x. После оптимизации save (этап A) потенциал MP вырастает до 3x+.
+- [26.02.2026] [этап C] Балансировку делать по прогнозному весу TM (включая предикт раскрытий и влияние code_ban), затем LPT + dynamic scheduling; полное выравнивание не требуется.
+- [26.02.2026] [этап C] Подтверждена модель экспорта: many workers + single writer, запись TM-блоков по `as_completed` без глобального порядка TM (важен только локальный порядок внутри TM).
+- [26.02.2026] [этап A] Добавлен явный тайминг `save_match_result_to_excel::wb_save`; в прогоне 09:42 получено `wb.save=8.442s`, `save_total=26.002s`.
+- [26.02.2026] [этап A] Прогон завершился ошибкой вывода `✓` в cp1251 (`check_values_sum`), поэтому `step4_total` в этом запуске не зафиксирован.
+- [26.02.2026] [этап A] После фикса cp1251 (ASCII-статусы в `check_values_sum`) получен полный стабильный прогон 10:19: `save_total=12.798s`, `wb.save=3.714s`, `step4_total=98.632s`.
+- [26.02.2026] [этап A] Визуальная/структурная проверка Excel переносится на финальный интеграционный этап (после B/C), т.к. риск изменений в структуре появится именно там.
+- [26.02.2026] [этап B] Реализован sequential per-TM контур: `process_title_mark()` в `step4_worker.py`, цикл по TM в `step4_analyze_and_match.py`, collapse на уровне TM, post-merge `TAG_EFFECTIVE` сохранен глобальным; идентичность проверяется через multiset-режим в обновленном `compare_step4_files.py` (порядок строк не влияет).
+- [26.02.2026] [этап B] Реализован B.2: в `step1_load_rfp.py` добавлен `skip_split`, split RFP вынесен в `split_rfp_rows()` и перенесен в `process_title_mark()` при `split_rfp_in_worker=True`; кэш step1 теперь учитывает `skip_split` в `extra_key`.
+- [26.02.2026] [этап B] После полного прогона (11:09) compare baseline/new выявил 12 строк различий (все `Различаются значения`), т.е. идентичность результата пока не достигнута.
+- [26.02.2026] [этап B] Причина 12/9 «различий» — неуникальные ключи в старом compare (`Имя ДС`, `№ позиции`, `Теги RFP`), что давало ложные mismatches при дублях; сравнение переведено на мультимножество всех строк.
+- [26.02.2026] [этап B] `compare_step4_files_multiset.py` удален после интеграции логики в `compare_step4_files.py` (единая точка входа).
+- [26.02.2026] [этап B] Добавлен легковесный паспорт входов: `input_fingerprints.json` в `result_dir` с fingerprint для MTO/VO (relpath, size, mtime, md5) для контроля «same input set» в clean control pair.
+- [26.02.2026] [этап B] Для B.4 добавлен перенос `_orig_idx`/`_orig_split_seq` при split RFP в worker и сортировка merge по `(orig_idx, split_seq)`; ожидаемо устраняет потерю порядка split-копий в финальном result_rows.
+- [26.02.2026] [этап B] Контрольный прогон с `step4.timing_log=False` показал `elapsed_ms=666999` против `1027884`/`1707190` с включенным timing_log — логирование в `timing_log.xlsx` является значимым источником деградации, но не единственным.
+- [26.02.2026] [этап B] Валидация порядка после фикса `(orig_idx, split_seq)` показала `order_mismatch_rows=26706/27195` (new `14.48` vs baseline-like `10.19`) при полной идентичности данных по multiset (`only_new=0`, `only_old=0`).
+- [26.02.2026] [этап B] Clean control pair `14.24` vs `14.48`: multiset идентичен и fingerprints входов совпадают (`MTO/VO fingerprint_md5`), значит расхождение order не связано с дрейфом входных файлов.
+- [26.02.2026] [этап B] По `memory_log` run `14.48`: `peak rss=11545.8MB` (~11.275 GB), цель этапа B (`<10 GB`) пока не достигнута.
+- [26.02.2026] [этап B] B.4 переведён в минорное замечание: порядок строк отличается от baseline, но данные идентичны по multiset и fingerprints.
+- [26.02.2026] [этап C] Реализован базовый каркас parallel-by-title-mark (ProcessPoolExecutor + as_completed) с fallback в sequential и настройками в JSON+GUI.
+- [26.02.2026] [этап C] Устранена причина зависания MP-режима: console I/O contention от 197 TM × 4 workers (print, tqdm, Excel writes). Добавлен `defer_reports` — в workers подавляется консольный вывод и Excel; диагностика (Шаг4_Дублирующиеся_теги_MTO, Шаг4_Несовпадения_тегов_VALUES, Шаг4_Дублирующиеся_теги_VO) агрегируется и выводится единым файлом после merge.
+- [26.02.2026] [этап C] Первый успешный MP-прогон (run `16.28`): exit_code=0, elapsed=1449s, step4_total=1429s. Но **2.35x медленнее sequential** из-за pickle overhead.
+- [26.02.2026] [этап C] Причина деградации MP: worker возвращает POST-split MTO данные (1.58M rows, 23.7 GB) через pickle. Каждый TM → ~120 MB pickle payload → 197×7s=1379s. Workers суммарно использовали всего ~65s CPU, main process ~486s (на pickle/unpickle).
+- [26.02.2026] [этап C] Решение: не возвращать split mto_data_tm/vo_data_tm из worker. Вместо этого вычислять внутри worker лёгкие summary для check_values_sum и _save_code_ban_list (dict/set, ~1-2 KB per TM).
+- [26.02.2026] [этап C] Реализован pickle overhead fix: workers возвращают `mto_summary`/`vo_summary` (dict/set, ~1-2 KB) вместо полных post-split RowStd списков (~120 MB). `check_values_sum` и `_save_code_ban_list` переведены на pre-computed summaries.
+- [26.02.2026] [этап C] Добавлен `step1.skip_split` в config JSON + GUI (checkbox). Все MP-параметры (`parallel_by_title_mark`, `max_workers`, `skip_split`, `timing_log`) теперь доступны через GUI.
+- [26.02.2026] [этап C] Добавлен вывод прогресса в `as_completed` loop: каждые 10 TM печатается строка с кол-вом завершённых TM, временем и статистикой (rows, mto, vo).
+- [26.02.2026] [этап C] CPU utilization boost — 4 оптимизации реализованы: (1) max_workers test 4/6/8 → 4w оптимально (network I/O bound), (2) parallel step2+step3 ThreadPoolExecutor → -3s, (3) postmerge ops в worker → -1s из main, (4) xlsxwriter: 3.8s vs openpyxl 14s → -10s.
+- [26.02.2026] [этап C] Контрольный прогон `22.28` (4w + все оптимизации): total_runtime=205.9s, step4_total=196.1s, excel=3.8s. Compare vs baseline = ИДЕНТИЧНО. check_values_sum OK.
+- [26.02.2026] [этап C] timing_log bottleneck fix: `append_timing_log()` теперь буферизует записи в памяти (O(1) per call), `finalize_timing_log()` пишет всё одним openpyxl save. Убрано ~210 циклов load_workbook+wb.save.
+- [26.02.2026] [этап C] Worker duration: `process_title_mark()` теперь возвращает `worker_duration` (реальное время работы внутри worker), timing_log показывает per-TM cost вместо wall-clock-from-submit.
+- [26.02.2026] [этап C] ProcessPoolExecutor initializer: shared kwargs (replacement_table, lot_map, result_dir, debug flags, collapse_func etc.) передаются один раз через `initializer`/`initargs` вместо pickle per-TM submit.
+- [26.02.2026] [этап C] Контрольный прогон `23.03` (buffered timing + initializer + memory_log=off): total_runtime=180.8s, step4_total=171.6s, tm_loop=167.4s, excel=3.4s. Compare vs `22.04` = ИДЕНТИЧНО. check_values_sum OK. **-25s vs 22.28 (206→181s, -12%), -36s vs 22.04 (217→181s, -17%)**. vs sequential baseline (~640s): **3.5x speedup**.
+- [26.02.2026] [этап C] **gc.collect() bottleneck**: профилирование merge loop выявило, что 158s из 167s tm_loop тратились на `gc.collect()` (197 вызовов, ~0.8s каждый, растёт квадратично с ростом result_rows). `future.result()` и `_merge_tm_result()` занимали 0.0s. Fix: `gc.disable()` + один `gc.collect()` после цикла. Эффект: tm_loop 167→21.6s (8w), total 181→35.7s. **18x vs sequential baseline.**
+- [26.02.2026] [этап C] Worker count test с gc.disable(): 8w=35.7s, 4w=40.5s. 8 workers даёт -5s (tm_loop 21.6 vs 26.7). LPT балансировка идеальная (loads=[10.2,10.1,...,10.1]). max_workers обновлён до 8.
+- [27.02.2026] [этап C] Исправлена интерпретация `step4::parallel_by_title_mark::workers`: это метаданные (кол-во workers), а не duration. Лог изменён на `step4::parallel_by_title_mark::workers_count=<N>` без суффикса `s`, чтобы строка не попадала в топ «долгих» шагов.
+- [27.02.2026] [этап C] Добавлены GUI/config флаги для отключения лишних Excel-отчётов: `step2.export_load_results_excel` (файл `Шаг2_MTO_результаты_загрузки_*.xlsx`) и `step4.export_title_systems_comparison_excel` (файл `Шаг4_RFP_MTO_VO_сравнение_title_system_*.xlsx`). Проброс выполнен через `agregate_tags.py`; в текущем конфиге оба флага установлены в `false`.
+- [09.09.2026] [этап D] Шаг УЛ **1008,6 с → 9,3 с (108,2×)**; идентичность мультимножеством (`only_new=0` / `only_old=0`, COUNTERS, комментарии 654/654). Порядок строк Step4 нестабилен между прогонами (ведущий ДС ротируется ДС23 / ДС29 / ДС6 / ДС1_ГОСФИН) — **не регрессия** и не незакрытый B.4; сверка только через `compare_step4_files.py`. План: `.cursor/plans/ul_matcher_perf.plan.md`.
+
+---
+
+## Связанные документы
+
+- `.cursor/rules/AI_memory.mdc` — структура проекта, классы, колонки, _COPY_COLS
+- `.cursor/rules/AI_performance.mdc` — текущие оптимизации step4 (MP, batch_copy_light, pass_match_code)
+- `.cursor/plans/parallel_step4_by_title_mark_*.plan.md` — исходный план параллелизации
+- `.cursor/plans/eval_parallel_step4_plan_*.plan.md` — экспертная оценка плана с расчётами
+- `RFQ/tags_rfp_compare/compare_step4_files.py` — инструмент сравнения результатов разных запусков (только мультимножество; порядок строк Step4 нестабилен)
+- `.cursor/plans/ul_matcher_perf.plan.md` — план и контрольный прогон ускорения шага УЛ (этап D)
+
+---
+
+## История изменений
+
+- 26.02.2026: создан на основе экспертной оценки плана параллелизации. Baseline зафиксирован по данным запуска 25.02.2026 23:54.
+- 26.02.2026: этап A переведён в "В РАБОТЕ"; добавлен приоритет "openpyxl + явный wb.save timing" и внесены результаты прогона 09:42.
+- 26.02.2026: в этап C добавлен mini-дизайн incremental Excel: `as_completed` + single writer, без требования глобального порядка `title_mark`.
+- 26.02.2026: устранено падение cp1251 в `check_values_sum`, получен полный стабильный прогон; критерии этапа A уточнены с учётом перекрытия записи Excel на этапе C.
+- 26.02.2026: для перехода в новый чат этап A помечен как "ЗАВЕРШЁН", этап B — как "В РАБОТЕ", добавлен handoff-чеклист старта B.
+- 26.02.2026: начат фикс B.4 порядка строк (orig_idx + split_seq); требуется прогон и сверка порядка/метрик.
+- 26.02.2026: выполнен контрольный прогон после B.4 с отключенным `timing_log`; подтверждено ускорение, но runtime всё ещё значительно выше baseline — требуется отдельная диагностика медленных TM и/или переход к этапу C.
+- 26.02.2026: выполнена строгая валидация B.4 (order + multiset + fingerprints): данные идентичны, но baseline-order не восстановлен; зафиксирован peak RSS 11.275 GB на run `14.48`.
+- 26.02.2026: этап B завершён с минорным замечанием по порядку строк; стартован этап C и добавлен рабочий parallel/fallback контур с конфигурацией в JSON и GUI.
+- 26.02.2026: реализован pickle overhead fix — workers возвращают lightweight summaries вместо полных post-split MTO/VO данных; добавлен `step1.skip_split` в config/GUI; добавлен мониторинг прогресса в `as_completed` loop.
+- 26.02.2026: исправлен check_values_sum при skip_split=True (ложные ERROR из-за дробных VALUES в нераскрытых RFP); эмуляция split-логики в снимке.
+- 26.02.2026: реализована C.3 LPT балансировка (сортировка TMs по весу rfp+mto*2+vo descending); tm_loop ускорился на 15%.
+- 26.02.2026: контрольный MP-прогон `22.04`: total_runtime=217s, step4_total=206s, tm_loop=189s; compare vs baseline `18.32` = ИДЕНТИЧНО (only_new=0, only_old=0); check_values_sum OK.
+- 26.02.2026: CPU utilization boost: (1) max_workers test: 4w=206s, 6w=225s, 8w=210s → 4w optimal; (2) parallel step2||step3 → -3s; (3) 7 postmerge ops to worker → -1s; (4) xlsxwriter migration → -10s. Контрольный прогон `22.28`: total=206s, step4=196s, excel=3.8s. Compare = ИДЕНТИЧНО.
+- 26.02.2026: timing_log bottleneck fix (buffered append → single finalize write), worker_duration в timing_log, ProcessPoolExecutor initializer для shared kwargs, memory_log=false. Контрольный прогон `23.03`: total=181s, step4=172s, tm_loop=167s. Compare = ИДЕНТИЧНО. -25s vs 22.28, 3.5x vs sequential.
+- 26.02.2026: **gc.collect() bottleneck discovery**: профилирование merge loop показало `future.result()=0.0s`, `merge=0.0s`, **`gc.collect()=158.2s`** из 167s tm_loop. Fix: `gc.disable()` на время цикла, один `gc.collect()` после. Прогоны: 8w=35.7s, 4w=40.5s → max_workers=8. Compare = ИДЕНТИЧНО. **18x vs sequential baseline.**
+- 27.02.2026: исправлена запись тайминга `step4::parallel_by_title_mark::workers`: вместо псевдо-duration `8.000s` теперь пишется метаданные-строка `step4::parallel_by_title_mark::workers_count=<N>`, чтобы избежать ложной трактовки как «долгий этап».
+- 27.02.2026: добавлены флаги отключения Excel-отчётов в GUI/config: `step2.export_load_results_excel`, `step4.export_title_systems_comparison_excel`; проброшены в `step2_load_mto_data` и `step4_analyze_and_match`.
+- 09.09.2026: этап D (шаг УЛ) завершён и принят: 1008,6 с → 9,3 с (108,2×), идентичность подтверждена; план `.cursor/plans/ul_matcher_perf.plan.md`.

@@ -1,0 +1,426 @@
+{
+  "name": "Поля проекта AGCC (ГОСТ 21.1101)",
+  "entries": [
+    {
+      "id": "1_DOC_TITLE",
+      "label": "Обозначение документа (шифр)",
+      "short_num": 1,
+      "description": "",
+      "group": "main",
+      "default_clean": "doc_title",
+      "default_expected": "required",
+      "default_field_type": "data"
+    },
+    {
+      "id": "2_Facility_name",
+      "label": "Наименование объекта",
+      "short_num": 2,
+      "description": "",
+      "group": "main",
+      "default_clean": "facility_name",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "3_Unit_title_name",
+      "label": "Наименование установки/объекта",
+      "short_num": 3,
+      "description": "",
+      "group": "main",
+      "default_clean": "unit_title",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "4_Document_name",
+      "label": "Наименование документа",
+      "short_num": 4,
+      "description": "",
+      "group": "main",
+      "default_clean": "document_name",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "5_Documentation_type",
+      "label": "Вид документации",
+      "short_num": 5,
+      "description": "",
+      "group": "",
+      "default_clean": "documentation_type",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "6_1_Sheet_number",
+      "label": "Номер листа",
+      "short_num": 6,
+      "description": "",
+      "group": "main",
+      "default_clean": "sheet_number_6_1",
+      "default_expected": "required",
+      "default_field_type": "data"
+    },
+    {
+      "id": "6_2_Quantity_of_sheets",
+      "label": "Листов в документе",
+      "short_num": 62,
+      "description": "",
+      "group": "main",
+      "default_clean": "sheet_number_6_2",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "7_Total_number_of_sheets",
+      "label": "Всего листов",
+      "short_num": 7,
+      "description": "",
+      "group": "main",
+      "default_clean": "total_number_of_sheets",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "26_Document_Revision",
+      "label": "Текущая ревизия документа",
+      "short_num": 26,
+      "description": "",
+      "group": "main",
+      "default_clean": "revision",
+      "default_expected": "required",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Position_1",
+      "label": "Должность 1",
+      "short_num": 81,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Position_2",
+      "label": "Должность 2",
+      "short_num": 82,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Position_3",
+      "label": "Должность 3",
+      "short_num": 83,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Position_4",
+      "label": "Должность 4",
+      "short_num": 84,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Position_5",
+      "label": "Должность 5",
+      "short_num": 85,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Surname_1",
+      "label": "Фамилия 1",
+      "short_num": 91,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "label"
+    },
+    {
+      "id": "Surname_2",
+      "label": "Фамилия 2",
+      "short_num": 92,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Surname_3",
+      "label": "Фамилия 3",
+      "short_num": 93,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Surname_4",
+      "label": "Фамилия 4",
+      "short_num": 94,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "Surname_5",
+      "label": "Фамилия 5",
+      "short_num": 95,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "10_1_Signatures_Date",
+      "label": "Дата подписи 1",
+      "short_num": 101,
+      "description": "",
+      "group": "main",
+      "default_clean": "signatures_date_10",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "10_2_Signatures_Date",
+      "label": "Дата подписи 2",
+      "short_num": 102,
+      "description": "",
+      "group": "main",
+      "default_clean": "signatures_date_10",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "10_3_Signatures_Date",
+      "label": "Дата подписи 3",
+      "short_num": 103,
+      "description": "",
+      "group": "main",
+      "default_clean": "signatures_date_10",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "10_4_Signatures_Date",
+      "label": "Дата подписи 4",
+      "short_num": 104,
+      "description": "",
+      "group": "main",
+      "default_clean": "signatures_date_10",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "10_5_Signatures_Date",
+      "label": "Дата подписи 5",
+      "short_num": 105,
+      "description": "",
+      "group": "main",
+      "default_clean": "signatures_date_10",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_1_1_Current_Revision",
+      "label": "Текущая ревизия 18.1 строка 1",
+      "short_num": 181,
+      "description": "",
+      "group": "",
+      "default_clean": "current_revision_18_1",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_1_2_Current_Revision",
+      "label": "Текущая ревизия 18.1 строка 2",
+      "short_num": 182,
+      "description": "",
+      "group": "",
+      "default_clean": "current_revision_18_1",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_1_3_Current_Revision",
+      "label": "Текущая ревизия 18.1 строка 3",
+      "short_num": 183,
+      "description": "",
+      "group": "",
+      "default_clean": "current_revision_18_1",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_2_1_Revision_Date",
+      "label": "Дата ревизии 18.2 строка 1",
+      "short_num": 184,
+      "description": "",
+      "group": "",
+      "default_clean": "revision_date_18_2",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_2_2_Revision_Date",
+      "label": "Дата ревизии 18.2 строка 2",
+      "short_num": 185,
+      "description": "",
+      "group": "",
+      "default_clean": "revision_date_18_2",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_2_3_Revision_Date",
+      "label": "Дата ревизии 18.2 строка 3",
+      "short_num": 186,
+      "description": "",
+      "group": "",
+      "default_clean": "revision_date_18_2",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_3_1_Purpose_of_issue",
+      "label": "Назначение выпуска 18.3 строка 1",
+      "short_num": 187,
+      "description": "",
+      "group": "",
+      "default_clean": "purpose_of_issue_18_3",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_3_2_Purpose_of_issue",
+      "label": "Назначение выпуска 18.3 строка 2",
+      "short_num": 188,
+      "description": "",
+      "group": "",
+      "default_clean": "purpose_of_issue_18_3",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "18_3_3_Purpose_of_issue",
+      "label": "Назначение выпуска 18.3 строка 3",
+      "short_num": 189,
+      "description": "",
+      "group": "",
+      "default_clean": "purpose_of_issue_18_3",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "50_File_Name_Stamp",
+      "label": "Имя файла под штампом",
+      "short_num": 50,
+      "description": "",
+      "group": "",
+      "default_clean": "file_name_stamp",
+      "default_expected": "required",
+      "default_field_type": "data"
+    },
+    {
+      "id": "51_Page_Format",
+      "label": "Формат страницы",
+      "short_num": 51,
+      "description": "",
+      "group": "",
+      "default_clean": "page_format",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_razrabotal",
+      "label": "Статика: Разработал",
+      "short_num": 801,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_proveril",
+      "label": "Статика: Проверил",
+      "short_num": 802,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_n_kontrol",
+      "label": "Статика: Н. Контрол",
+      "short_num": 803,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_utverdil",
+      "label": "Статика: Утвердил",
+      "short_num": 804,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_izm",
+      "label": "Статика: Изм.",
+      "short_num": 805,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_kol_uch",
+      "label": "Статика: Кол.уч.",
+      "short_num": 806,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_list",
+      "label": "Статика: Лист",
+      "short_num": 807,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_n_doc",
+      "label": "Статика: № док.",
+      "short_num": 808,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    },
+    {
+      "id": "static_empty",
+      "label": "Пустое поле",
+      "short_num": 809,
+      "description": "",
+      "group": "",
+      "default_expected": "optional",
+      "default_field_type": "data"
+    }
+  ]
+}

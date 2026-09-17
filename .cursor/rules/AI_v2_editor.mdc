@@ -1,0 +1,175 @@
+---
+description: Редактор шаблонов v2 (PySide6) — текущие инварианты и канон слоёв панели «Границы». Обновлено 20.04.2026.
+globs: pdf_template_editor/**
+alwaysApply: false
+---
+
+# AI: редактор шаблонов v2 — компактно
+
+> История закрытых этапов и длинный backlog вынесены в архивы roadmap.
+> Движок и fitz-инварианты смотреть в `AI_v2_engine.mdc`.
+
+## Правила для чатов
+
+1. Для задач по editor читать это правило и `AI_v2_engine.mdc`.
+2. Для `grid_matcher` / wireframe / `adapt_debug` дополнительно читать `AI_v2_grid.mdc`.
+3. Перед крупными правками `main_window.py` посмотреть связанные модули `pdf_template_editor/`.
+4. Не ломать: zoom/pan, rubber band, highlight, общий Save/Load workflow.
+5. Панель **«Границы»**, `layer_id`, формулировки **«Слой (полное имя)»** — § **«Канон: Слои на canvas»** ниже; при изменении реестра слоёв обновлять и этот §.
+
+## Статус
+
+- Базовая инфраструктура редактора, grid lines, F5 parity, `document_property`, reset adaptation state -> готовы
+- Живые хвосты:
+  - `T5.3` `stamp_fill_gaps.py` -> не production
+  - `T9.5` тест на AGCC-шаблоне -> ещё не закрыт
+
+## Ключевые текущие инварианты
+
+### Editor = тот же production path
+
+- И pipeline, и editor используют один `adapt_by_cell_assignment()`.
+- F5 собирает временный `StampTemplate` из текущей сцены и передаёт `cfg`, `grid_lines`, `_pdf_path`, `_page_num`.
+- Старый `adapt_all_fields` в production/editor не должен возвращаться.
+
+### Состояние сессии адаптации
+
+- `_reset_adaptation_session_state()` обязателен при смене PDF/страницы, загрузке шаблона и `Новый`.
+- `_clear_detected_grid_overlay()` должен чистить и overlay, и таблицу PDF-линий.
+- Перед F5 / тест-адаптацией не должны накапливаться старые overlay.
+
+### `outside_stamp`
+
+- Вертикаль к рамке делает `snap_outside_stamp_vertical_to_frame`.
+- Для `outside_stamp` не применять глобальный `(sx, sy, dx, dy)` transform штампа.
+
+### `document_property`
+
+- Такие поля не рисуются на canvas как `FieldRectItem`.
+- Они должны добавляться через `ensure_document_property_field_defs`.
+- Save и F5 обязаны включать их в template payload.
+
+### Wireframe / detected grid
+
+- Каркас шаблона = `self._grid_lines`.
+- Каркас PDF приходит из `ca_info.detected_grid_lines`.
+- После тест-адаптации wireframe должен уметь перерисоваться по `snapped_line_positions`.
+- Вкладка Wireframe и панель **«Границы»** могут синхронизировать чекбоксы через **`GridLinesPanel.apply_external_visibility_checks`**; **«Скрыть поля»** в wireframe влияет **только** на прямоугольники полей штампа на canvas (не на adapt/consolidation overlay — их включает второе дерево панели «Границы»).
+
+### Панель «Границы» (prealign + рабочее поле) — 04.2026
+
+- **Назначение:** интерактивный разбор **`stamp_prealign_debug`** и смежной геометрии на том же canvas, что и шаблон; поэтапное включение слоёв без пересборки PNG **`adapt_debug`**.
+- **Где в UI:** по умолчанию скрыта; **тулбар «Границы»** рядом с **Wireframe**, пункт **«Вид»**; док внизу левой колонки (порядок сплиттера: проекты / prealign / каталог), **открепление** — плавающее немодальное окно (как каталог).
+- **Дерево 1 — prealign / adapt:** строки из **`PREALIGN_LAYER_SPECS`** (`prealign_overlay_layers.py`, сборка дерева в `prealign_overlay_panel.py`); видимость **`QSettings`** `prealign_overlay_visibility/<layer_id>`; кнопки «Все»/«Ни одного» для этой группы.
+- **Дерево 2 — «Рабочее поле (canvas)»:** константа **`CANVAS_LAYER_ROWS`** в `prealign_overlay_panel.py` (идентификаторы слоёв canvas: stamp fields, template wireframe, PDF grid, adapt overlay, consolidation, origin markers). Сигнал **`canvas_layer_visibility_changed`**. Персистенция **`canvas_layer_visibility/<id>`**.
+- **Связь с главным окном:** `main_window.py` — **`act_prealign_borders`**, **`_on_prealign_panel_toggle`**, **`_on_canvas_layer_visibility_changed`**, **`_apply_all_canvas_layers_from_panel`**, **`_apply_*_visibility`**, **`_canvas_stamp_fields_wanted_visible`** (в т.ч. выход из режима pick-line), применение видимости после построения сцены / adapt.
+- **Wireframe:** `wireframe_panel.py` — внешняя синхронизация чекбоксов с панелью «Границы».
+
+#### Сопровождение при доработках
+
+1. **Новый прямоугольник/линия только в PNG / `stamp_prealign_debug` / `adapt_debug` json** — добавить **`PrealignLayerSpec`** в **`prealign_overlay_layers.py`**; в **`prealign_overlay_model.py`** — разбор координат и отображение (учёт **displayed** space, `frame` как dict `x0,y0,x1,y1,page_width,page_height`); при необходимости обновить **`adapt_debug.py`** и **`AI_v2_grid_log.mdc`**. **Обязательно** синхронизировать таблицы в § **«Канон: Слои на canvas»** ниже с `PREALIGN_LAYER_SPECS`, иначе термины в чатах перестанут совпадать с колонкой **«Слой (полное имя)»** в UI.
+2. **Новый визуальный слой на QGraphicsScene** (не из prealign bundle) — добавить строку в **`CANVAS_LAYER_ROWS`**, обработать в **`_on_canvas_layer_visibility_changed`**, реализовать **`_apply_<layer>_visibility`** и вызов после соответствующего `build_*` / refresh; при дублировании с wireframe — расширить **`apply_external_visibility_checks`**; обновить таблицу **«Рабочее поле (canvas)»** в том же §.
+3. **Не сужать алгоритм** grid/prealign — панель только отображает и фильтрует уже вычисленные данные.
+
+## Канон: «Слои на canvas» и «Рабочее поле» (термины для чатов)
+
+Источник истины в коде: **`PREALIGN_LAYER_SPECS`** в `prealign_overlay_layers.py` (`layer_id`, `geometry`, **`label_full`**, `png_group`, `pipeline_order`, `depends_on`). В панели «Границы» первое дерево (**«Слои на canvas»**) показывает те же строки, что реестр; колонка UI **«Слой (полное имя)»** = **`label_full`**. В переписке удобно ссылаться парами **`layer_id`** + цитата **«Слой (полное имя)»** — они однозначны.
+
+Вложенность строк в `QTreeWidget` задаётся первым найденным родителем из **`depends_on`** (`prealign_overlay_panel.py`: `_resolve_parent_item`). Порядок сортировки в UI — по **`pipeline_order`**.
+
+### Этап 1 — рамка листа и bbox поиска (`png_group`: `frame_and_search_bbox`)
+
+Строки в порядке **`pipeline_order`** (внутри группы по смыслу: рамка → base → search; **detected union** — та же PNG-группа для PNG, порядок в пайплайне 17).
+
+| pipeline_order | `layer_id` | Тип | Слой (полное имя) |
+|----------------:|------------|-----|-------------------|
+| 1 | `frame` | rect | Рамка листа (find_frame): область формата страницы |
+| 2 | `base_bbox` | rect | Base bbox: объединение полей штампа в координатах PDF до расширения поиска |
+| 3 | `search_bbox` | rect | Search bbox: зона find_tables вокруг штампа (padding / overflow prealign) |
+| 17 | `detected_union_bbox` | rect | Detected union bbox: объединение detected-ячеек (probe/effective этап) |
+
+### Этап 1b — префильтр островов ячеек (`png_group`: `detected_prefilter_overlay`, только редактор / JSON)
+
+Слои **`detected_prefilter_overlay`** в PNG **`adapt_debug`** не рисуются; данные в **`prealign.detected_prefilter`** бандла **`stamp_prealign_debug`**.
+
+| pipeline_order | `layer_id` | Тип | Слой (полное имя) |
+|----------------:|------------|-----|-------------------|
+| 4 | `prefilter_y_anchor_band` | rect | Prefilter: якорная полоса по Y (расширенный stamp_bbox по высоте) |
+| 5 | `prefilter_prior_rect` | rect | Prefilter: union полей штампа (t_all) для приоритета острова |
+| 6 | `prefilter_dropped_bboxes` | multiline | Prefilter: отброшенные острова (контуры bbox компонент) |
+| 7 | `prefilter_kept_bbox` | rect | Prefilter: выбранный остров (union bbox оставшихся ячеек) |
+
+### Этап 2 — extent probe: пул линий и выбранные границы (`png_group`: `extent_probe_boundaries`)
+
+| pipeline_order | `layer_id` | Тип | Слой (полное имя) |
+|----------------:|------------|-----|-------------------|
+| 8 | `extent_probe_merged_grid` | multiline | Merged линии сетки внутри search (пул для extent_probe) |
+| 9 | `extent_boundary_top` | line | Extent: выбранная граница top (detected horizontal boundary) |
+| 10 | `extent_boundary_left` | line | Extent: выбранная граница left (detected vertical boundary) |
+| 11 | `extent_boundary_bottom` | line | Extent: выбранная граница bottom |
+| 12 | `extent_boundary_right` | line | Extent: выбранная граница right |
+| 13 | `virtual_top` | line | Virtual top: виртуальная горизонталь (inferred edge) по ширине search_bbox |
+| 14 | `virtual_left` | line | Virtual left: виртуальная вертикаль (inferred edge) по высоте search_bbox |
+
+### Этап 3 — proposed и effective bbox (`png_group`: `proposed_vs_effective_bbox`)
+
+| pipeline_order | `layer_id` | Тип | Слой (полное имя) |
+|----------------:|------------|-----|-------------------|
+| 15 | `proposed_bbox` | rect | Proposed bbox: результат extent_probe (расширение/сужение до inferred границ) |
+| 16 | `effective_bbox` | rect | Effective bbox: итоговый клип ячеек после proposed (фильтр matching) |
+
+### Этап 4 — ordered alignment (`png_group`: `ordered_alignment_overlay`)
+
+| pipeline_order | `layer_id` | Тип | Слой (полное имя) |
+|----------------:|------------|-----|-------------------|
+| 18 | `alignment_matched_detected_boundary` | multiline | Ordered alignment: matched PDF-линии для boundary шаблона (magenta в PNG) |
+| 19 | `alignment_template_boundary` | multiline | Ordered alignment: boundary линии шаблона в snapped позициях (green в PNG) |
+
+Колонка UI **«PNG-группа»** для каждой строки совпадает с **`png_group`** в `PrealignLayerSpec` (имена групп при сборке PNG **`adapt_debug`**, кроме группы **`detected_prefilter_overlay`** — только редактор и JSON).
+
+### Второе дерево панели: «Рабочее поле (canvas)»
+
+Не из `stamp_prealign_debug`; реестр в **`CANVAS_LAYER_ROWS`** (`prealign_overlay_panel.py`). Колонка **«Слой»** = краткое имя в UI; **«Примечание»** — подсказка по типам графики.
+
+| `layer_id` | Тип | Слой (колонка UI) | Примечание (колонка UI) |
+|------------|-----|-------------------|-------------------------|
+| `stamp_fields` | rect | Поля штампа (прямоугольники) | FieldRectItem |
+| `template_grid` | line | Каркас шаблона (линии wireframe) | GridLineGraphicsItem |
+| `pdf_grid` | line | Каркас PDF (find_tables, merged) | DetectedGridLineItem |
+| `adapt_overlay` | mix | Оверлей «Тест-адаптация» | рамки, подписи, matched cells |
+| `consolidation_overlay` | line | Оверлей консолидации сетки | линии кластеров |
+| `origin_markers` | marker | Маркеры начала координат | кресты углов + линия к полю |
+
+### Поддержка актуальности этого §
+
+При любых новых **тестовых / адаптационных** рамках, линиях или overlay в движке, в **`stamp_prealign_debug`**, в PNG/json **`adapt_debug`**, или в отрисовке редактора нужно: (1) обновить **`PREALIGN_LAYER_SPECS`** / **`CANVAS_LAYER_ROWS`** и код модели; (2) **обновить таблицы выше** в этом файле правил в том же PR или сразу следом — иначе обсуждение с другим чатом по формулировкам **«Слой (полное имя)»** и **`layer_id`** уйдёт в рассинхрон с реальным деревом «Границы».
+
+## Что важно по UI
+
+- В `main_window.py` не использовать `sceneBoundingRect()` для геометрии полей; брать `scenePos() + rect()` или `_item_scene_rect(...)`.
+- Логирование через `self._log`, не `print`.
+- Qt-операции только в GUI thread.
+- `self._cfg["templates_dir"]` остаётся основным источником путей.
+
+## Архитектура редактора
+
+- Главное окно -> `TemplateEditorWindow` (`main_window.py`)
+- Сцена / view -> `graphics_view.py`, `cell_items.py`
+- Правая панель -> `cells_panel.py`, `properties_panel.py`, `template_meta_panel.py`
+- Wireframe -> `wireframe_panel.py`, `grid_line_items.py`
+- Шаблоны / каталог -> `templates_browser.py`, `catalog_editor.py`
+- Prealign / canvas overlays -> `prealign_overlay_panel.py`, `prealign_overlay_model.py`, `prealign_overlay_layers.py`
+
+## Практические напоминания
+
+- Тип документа на тулбаре должен соответствовать pipeline (`getDocTypeFromFile(...)`).
+- `recent/pdf_paths` хранится в `QSettings`; не ломать список последних PDF.
+- Каркас PDF в editor нужен для ручной диагностики, а не как отдельный algorithm branch.
+
+## См. также
+
+- `AI_v2.mdc`
+- `AI_v2_engine.mdc`
+- `AI_v2_grid.mdc`
+- `AI_v2_grid_log.mdc`
+- `AI_v2_monitor.mdc` (control center; пункт меню «Открыть в редакторе шаблонов» — subprocess, без UI редактора)

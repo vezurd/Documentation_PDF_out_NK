@@ -1,0 +1,49 @@
+{
+  "template_id": "dwg_big",
+  "description": "Основная надпись чертежа, первый лист (шаблонный метод, без распознавания таблиц)",
+  "base_point": "bottom_right",
+  "scale_mm_to_pdf": 2.83444,
+  "cells": [
+    {
+      "id": "1_DOC_TITLE",
+      "bbox_mm": [84.96, 0, 354.24, 14.16],
+      "description": "Наименование документа"
+    },
+    {
+      "id": "2_Facility_name",
+      "bbox_mm": [84.96, 14.16, 354.24, 28.44],
+      "description": "Наименование объекта"
+    },
+    {
+      "id": "3_Unit_title_name",
+      "bbox_mm": [84.96, 28.44, 354.24, 42.6],
+      "description": "Наименование узла"
+    },
+    {
+      "id": "4_Document_name",
+      "bbox_mm": [84.96, 42.6, 354.24, 70.92],
+      "description": "Наименование документа"
+    },
+    {
+      "id": "26_Document_Revision",
+      "bbox_mm": [0, 255.12, 28.32, 269.28],
+      "description": "Литера документа"
+    },
+    {
+      "id": "6_1_Sheet_number",
+      "bbox_mm": [28.32, 255.12, 56.64, 269.28],
+      "description": "Номер листа"
+    },
+    {
+      "id": "6_2_Quantity_of_sheets",
+      "bbox_mm": [28.32, 269.28, 56.64, 283.44],
+      "description": "Количество листов"
+    },
+    {
+      "id": "7_Total_number_of_sheets",
+      "bbox_mm": [0, 269.28, 28.32, 283.44],
+      "description": "Всего листов"
+    }
+  ],
+  "ascii_preview": "Упрощённая схема: ячейки основной надписи, координаты в мм от левого верхнего угла штампа"
+}

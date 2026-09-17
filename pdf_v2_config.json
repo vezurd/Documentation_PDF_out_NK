@@ -1,0 +1,125 @@
+{
+  "enabled": true,
+  "templates_dir": "pdf_parsing_v2_engine/templates",
+  "project": "agcc_287",
+  "parallel": true,
+  "max_workers": 0,
+  "per_page": {
+    "enabled": true,
+    "min_pages": 4,
+    "max_workers": 0,
+    "chunk_size_pages": 0,
+    "doc_types": {
+      "DW": true,
+      "WIR": true,
+      "LAY": true,
+      "CAE": true,
+      "GA": true,
+      "PL": true,
+      "NI": true,
+      "MTO": false,
+      "BOE": false,
+      "BOM": false,
+      "BOQ": false,
+      "OD": false,
+      "CJ": false,
+      "VO": false
+    }
+  },
+  "tags_max_workers": 2,
+  "tags_text_backend": "pdfminer",
+  "find_frame_border_band_left_mm": 20.0,
+  "find_frame_border_band_right_mm": 50.0,
+  "find_frame_border_band_top_mm": 20.0,
+  "find_frame_border_band_bottom_mm": 20.0,
+  "find_tables_snap_x_tolerance": 3.0,
+  "find_tables_snap_y_tolerance": 2.0,
+  "grid_detected_prefilter_enabled": true,
+  "grid_detected_prefilter_min_cells": 8,
+  "grid_detected_prefilter_y_pad_frac": 0.18,
+  "grid_detected_prefilter_y_pad_floor_pt": 8.0,
+  "grid_detected_prefilter_max_removal_frac": 0.58,
+  "grid_detected_prefilter_min_component_cells": 4,
+  "grid_detected_prefilter_min_component_area_frac": 0.08,
+  "grid_detected_prefilter_adjacency_tol_floor_pt": 5.0,
+  "grid_tolerance_detected_mm": 0.5,
+  "snap_max_distance_mm": 5.0,
+  "export_debug_excel": false,
+  "debug_visual": false,
+  "debug_visual_dir": "debug/v2_visual",
+  "debug_visual_overlay": false,
+  "debug_verbose_log": false,
+  "timing_log": true,
+  "text_extraction_mode": "char_center",
+  "mto_regression_after_run": false,
+  "mto_regression_pdf_dir": "",
+  "mto_regression_template": "",
+  "mto_regression_strict": false,
+  "mto_regression_max_nl_rot90": 280,
+  "monitor_window_width": 1732,
+  "monitor_window_height": 1060,
+  "monitor_grid_mismatch_ok_max": 10000,
+  "monitor_grid_mismatch_warn_max": 20000,
+  "monitor_grid_mismatch_weight_global": 100000.0,
+  "monitor_grid_mismatch_weight_walk_pt": 50.0,
+  "monitor_grid_mismatch_weight_no_match": 25000.0,
+  "monitor_ui_theme": "light_high_contrast",
+  "monitor_ui": {
+    "tag_analysis": {
+      "split_vertical": [
+        519,
+        385
+      ],
+      "split_horizontal": [
+        367,
+        1317
+      ],
+      "detail_column_widths": {
+        "cyrillic": [
+          201,
+          196,
+          1123
+        ],
+        "amur_94s": [
+          100,
+          100,
+          100,
+          1085
+        ],
+        "mto_duplicates": [
+          240,
+          1168
+        ],
+        "extra_in_sheets": [
+          240,
+          359,
+          100,
+          237,
+          100,
+          635
+        ],
+        "high_frequency": [
+          240,
+          90,
+          232,
+          808
+        ],
+        "missing_in_mto": [
+          240,
+          182,
+          100,
+          858
+        ]
+      },
+      "invalid_column_widths": [
+        120,
+        180,
+        200,
+        280
+      ]
+    }
+  },
+  "excel": {
+    "sanitize_illegal_chars": true
+  }
+}

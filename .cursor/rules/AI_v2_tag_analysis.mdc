@@ -1,0 +1,76 @@
+---
+description: "PDF v2 — анализ тегов (MTO diff, 94S, кириллица): TagClass, payload, legacy txt, pipeline, вкладка монитора."
+globs:
+  - "tags/**"
+  - "pdf_parsing_v2_tags/**"
+  - "pdf_parsing_v2/v2_pipeline.py"
+  - "pdf_v2_monitor/monitor_window.py"
+alwaysApply: false
+---
+
+# PDF v2 — анализ тегов (tag analysis)
+
+Сравнение тегов с эталоном **МТО**, проверки **94S** / кириллицы, отчёт **`*_tag_analyze.txt`** и структурированный payload для **`summary["tag_analysis"]`** и вкладки **«Анализ тегов»** в control center. Логика разбора строк тега — **`tags/tag_classes.py`**; сбор тегов из PDF в pipeline — **`pdf_parsing_v2_tags`** (отдельно от этого правила).
+
+## Когда читать это правило
+
+- правки в **`tags/tag_parser.py`**, **`tags/tag_analysis_payload.py`**, **`tags/tag_classes.py`**
+- стадия pipeline **`tag_analyze`**, ключи **`artifacts["tag_analysis"]`** / **`summary["tag_analysis"]`**
+- вкладка **«Анализ тегов»** в **`pdf_v2_monitor`**
+- смена контракта **`TagClass`**, **`analyze`**, **`build_tag_analysis_payload`**
+
+**Связанные правила:** оркестрация и постпроцесс — **`AI_v2_engine.mdc`**; GUI и вкладки — **`AI_v2_monitor.mdc`**; индекс v2 — **`AI_v2.mdc`**. Сбор текста тегов из страниц — пакет **`pdf_parsing_v2_tags/`** (контекст ключей **`source_dict`** совпадает с **`add_context`** в **`tags/tag_parser.py`**). Скрипты **RFQ** (`RFQ_compare.py`, `R_compare.py` и др.), вызывающие **`tag_parser.analyze`**, получают теперь **`dict`** (файл по-прежнему пишется); детали домена RFQ — **`AI_rfq_context.mdc`**.
+
+---
+
+## Точки входа (код)
+
+| Символ | Файл | Назначение |
+|--------|------|------------|
+| `TagClass` | `tags/tag_classes.py` | Разбор строки тега. **`TagClass(tag, *, strict=True)`** по умолчанию — битый ввод **`ValueError`**. Для массового сканирования и payload — **`strict=False`**: **`is_valid`**, **`parse_error`**, **`_apply_parse_failure_defaults`**. **`category_name`** (маппинг **`out_row`** 0–3), **`is_hidden()`** → **`hide_tag(equipment)`**. |
+| `hide_tag` | `tags/tag_classes.py` | Сейчас только **`XT`**. **`None`** / пустая **`equipment`** → **`False`**. В анализе тегов **не исключает** строку: extra-ряд помечается **`hidden_by_rule`**, но тег есть в payload, GUI и txt. |
+| `check_system_code_94s_4_1`, `check_tag_94s_4_2`, `check_tag_94s_4_4_additional_code` | `tags/tag_classes.py` | Аргумент **`str \| TagClass`**. Уже распарсенный **`TagClass`** с **`not is_valid`** → **`False`** без жёсткого повторного парса. |
+| `diff_lists_MTO_B` | `tags/tag_parser.py` | Теги МТО, которых нет на листах. **`hide_tag` не отсекает** (XT тоже в **`missing_in_mto`**). **`TagClass(..., strict=False)`**: невалидные теги из diff не попадают (без падения пайплайна). |
+| `build_tag_analysis_payload` | `tags/tag_analysis_payload.py` | Чистый **`dict`** для GUI / summary: **`status`**, **`mto_wbs`**, **`checks`**, **`invalid_tags`**, **`warnings`**, **`sheet_to_pdf`**, порог **`high_frequency_threshold`**, и т.д. |
+| `render_tag_analysis_text_from_payload` | `tags/tag_analysis_payload.py` | Текст legacy-отчёта для файла. Таблица «нет в МТО» включает **все** extra-ряды, в том числе **`hidden_by_rule`** (XT). |
+| `analyze` | `tags/tag_parser.py` | **`build_tag_analysis_payload`** → рендер → **`save_tags_to_file`** → **`text_report_path`** в payload; **возвращает `dict`**, не скаляр. |
+| `add_context`, `reset`, `source_dict` | `tags/tag_parser.py` | Накопление тегов по ключу **`(doc_name, page_num, short_name)`** (как при сборе из v2). |
+
+Интеграция: **`run_v2_postprocess`** в **`pdf_parsing_v2/v2_pipeline.py`** после ОД вызывает **`tag_parser.analyze(..., source_dict_override=tag_dict)`**, кладёт результат в **`artifacts["tag_analysis"]`**; при исключении — payload со **`status: "error"`** и пустыми списками, остальной постпроцесс не рвётся. **`run_v2_pipeline`** выносит **`summary["tag_analysis"]`** ( **`artifacts.pop("tag_analysis", {})`** ).
+
+---
+
+## Payload `summary["tag_analysis"]` (сжато)
+
+- **`status`:** **`ok`** \| **`no_mto`** \| **`error`**
+- **`mto_sheet_name`**, **`mto_wbs`** (мажоритарный WBS по валидным тегам МТО; при ничьей / пусто — **`warnings`**)
+- **`text_report_path`**: абсолютный путь к сохранённому **`*_tag_analyze.txt`**
+- **`invalid_tags`**: **`{ sheet, tag, error, pdf_path?, page_num? }`**, дедуп по **`(sheet, tag)`**
+- **`sheet_to_pdf`**: индекс лист → список **`{ pdf_path, page_num }`**
+- **`checks`**: список объектов с **`id`**, **`title`**, **`severity`** (`info` / `warning` / `error`), **`columns`**, **`column_keys`**, **`rows`** (строки — **`dict`** с англ. ключами; у **`extra_in_sheets`**, **`missing_in_mto`**, **`high_frequency`** в строках есть **`pdf_path`** / **`page_num`** для навигации)
+
+**Стабильные `checks[].id`:** `cyrillic`, `amur_94s`, `mto_duplicates`, `extra_in_sheets`, `missing_in_mto`, `high_frequency`. У **`high_frequency`** в **`meta.threshold`** — порог с сервера; локальная фильтрация в GUI — см. **`AI_v2_monitor.mdc`** (вкладка «Анализ тегов»).
+
+---
+
+## Control Center (вкладка «Анализ тегов»)
+
+Кратко: **`_build_tag_analysis_tab`**, **`_populate_tag_analysis_from_summary`**, **`_clear_tag_analysis_tab`** в **`pdf_v2_monitor/monitor_window.py`**. Данные после pipeline из **`summary["tag_analysis"]`**. Индекс вкладки **`_TAB_INDEX_TAG_ANALYSIS`**, **`--tab tags`** / **`tag_analysis`**. Подробности UX (фильтры **`extra_in_sheets`**, spin **`high_frequency`**, двойной клик → PDF, свойства тега) — в **`AI_v2_monitor.mdc`** (секция вкладки + запуск).
+
+---
+
+## Ловушки
+
+- Внешние вызовы **`analyze`** (тесты, RFQ): ожидать **`dict`**, не **`1`**.
+- **`analyze`** импортирует **`tag_analysis_payload`** внутри функции — избежать циклических импортов при рефакторинге верхнего уровня **`tag_parser`**.
+- Доменная логика (Excel, CJ, сравнение RFQ) должна по-прежнему использовать **`TagClass(..., strict=True)`** по умолчанию.
+
+---
+
+## См. также
+
+- `AI_v2.mdc`
+- `AI_v2_engine.mdc` (постпроцесс, **`run_v2_postprocess`**)
+- `AI_v2_monitor.mdc` (вкладки, **`--tab`**, стадии UI)
+- `pdf_parsing_v2/INTERFACES.md` (общий контракт v2, при расширении summary)
+- `AI_rfq_context.mdc` (RFQ / вызовы `tag_parser` вне v2 monitor)

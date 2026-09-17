@@ -1,0 +1,622 @@
+{
+  "schema_version": 2,
+  "name": "OD_CJ_page_1",
+  "doc_types": [
+    "WIR",
+    "LAY",
+    "CAE",
+    "GA",
+    "PL",
+    "DW",
+    "NI"
+  ],
+  "page_selector": "rest",
+  "priority": 10,
+  "origin": "frame_bottom_right",
+  "padding_mm": 0.5,
+  "grid_adapt": true,
+  "grid_tolerance_template_mm": 0.1,
+  "grid_tolerance_detected_mm": 0.5,
+  "snap_max_distance_mm": 5.0,
+  "max_shape_change_ratio": 2.5,
+  "cascade_score_threshold": 0.4,
+  "fields": [
+    {
+      "id": "11_imz_label_rev",
+      "bbox_mm": [
+        184.70316157578748,
+        0.4022010162280733,
+        175.19865930858478,
+        4.9427356710011505
+      ],
+      "clean": null,
+      "expected": "required",
+      "expected_text": "Изм.",
+      "bound_top": "h_5.01",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_left",
+      "bound_right": "v_174.98"
+    },
+    {
+      "id": "15_imz_label_signature",
+      "bbox_mm": [
+        144.69520709999153,
+        0.4022010162280733,
+        130.19504004208062,
+        4.9427356710011505
+      ],
+      "clean": null,
+      "expected": "required",
+      "expected_text": "подпись",
+      "bound_top": "h_5.01",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_new_1",
+      "bound_right": "v_129.97"
+    },
+    {
+      "id": "14_imz_label_doc_no",
+      "bbox_mm": [
+        154.68662281504461,
+        0.4022010162280733,
+        145.2244121634256,
+        4.9427356710011505
+      ],
+      "clean": null,
+      "expected": "required",
+      "expected_text": "док.",
+      "bound_top": "h_5.01",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_154.99",
+      "bound_right": "v_new_1"
+    },
+    {
+      "id": "13_imz_label_sheet",
+      "bbox_mm": [
+        164.67803853009767,
+        0.4022010162280733,
+        155.21582787847865,
+        4.9427356710011505
+      ],
+      "clean": null,
+      "expected": "required",
+      "expected_text": "Лист",
+      "bound_top": "h_5.01",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_164.98",
+      "bound_right": "v_154.99"
+    },
+    {
+      "id": "12_imz_label_area_no",
+      "bbox_mm": [
+        174.66945424515072,
+        0.4022010162280733,
+        165.2072435935317,
+        4.9427356710011505
+      ],
+      "clean": null,
+      "expected": "required",
+      "expected_text": "Кол. уч.",
+      "bound_top": "h_5.01",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_174.98",
+      "bound_right": "v_164.98"
+    },
+    {
+      "id": "6_Sheet_number_lable",
+      "bbox_mm": [
+        9.684435434115734,
+        9.112881332673645,
+        0.3552889462794088,
+        14.934151386054213
+      ],
+      "clean": null,
+      "expected": "required",
+      "expected_text": "Лист",
+      "bound_top": "h_top",
+      "bound_bottom": "h_new_3",
+      "bound_left": "v_24.98",
+      "bound_right": "v_right"
+    },
+    {
+      "id": "16_2_date",
+      "bbox_mm": [
+        129.6658349786466,
+        9.112881332673645,
+        120.20362432702757,
+        14.934151386054213
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_top",
+      "bound_bottom": "h_10.01",
+      "bound_left": "v_129.97",
+      "bound_right": "v_119.92"
+    },
+    {
+      "id": "15_2_signature",
+      "bbox_mm": [
+        144.69520709999153,
+        9.112881332673645,
+        130.19504004208062,
+        14.934151386054213
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_top",
+      "bound_bottom": "h_10.01",
+      "bound_left": "v_new_1",
+      "bound_right": "v_129.97"
+    },
+    {
+      "id": "14_2_doc_no",
+      "bbox_mm": [
+        154.68662281504461,
+        9.112881332673645,
+        145.2244121634256,
+        14.934151386054213
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_top",
+      "bound_bottom": "h_10.01",
+      "bound_left": "v_154.99",
+      "bound_right": "v_new_1"
+    },
+    {
+      "id": "13_2_sheet",
+      "bbox_mm": [
+        164.67803853009767,
+        9.112881332673645,
+        155.21582787847865,
+        14.934151386054213
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_top",
+      "bound_bottom": "h_10.01",
+      "bound_left": "v_164.98",
+      "bound_right": "v_154.99"
+    },
+    {
+      "id": "13_1_sheet",
+      "bbox_mm": [
+        164.67803853009767,
+        5.471940734435197,
+        155.21582787847865,
+        8.583676269239518
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_10.01",
+      "bound_bottom": "h_5.01",
+      "bound_left": "v_164.98",
+      "bound_right": "v_154.99"
+    },
+    {
+      "id": "12_2_area_no",
+      "bbox_mm": [
+        174.66945424515072,
+        9.112881332673645,
+        165.2072435935317,
+        14.934151386054213
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_top",
+      "bound_bottom": "h_10.01",
+      "bound_left": "v_174.98",
+      "bound_right": "v_164.98"
+    },
+    {
+      "id": "11_2_rev",
+      "bbox_mm": [
+        184.70316157578748,
+        9.112881332673645,
+        175.19865930858478,
+        14.934151386054213
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_top",
+      "bound_bottom": "h_10.01",
+      "bound_left": "v_left",
+      "bound_right": "v_174.98"
+    },
+    {
+      "id": "14_1_doc_no",
+      "bbox_mm": [
+        154.68662281504461,
+        5.471940734435197,
+        145.2244121634256,
+        8.583676269239518
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_10.01",
+      "bound_bottom": "h_5.01",
+      "bound_left": "v_154.99",
+      "bound_right": "v_new_1"
+    },
+    {
+      "id": "15_1_signature",
+      "bbox_mm": [
+        144.69520709999153,
+        5.471940734435197,
+        130.19504004208062,
+        8.583676269239518
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_10.01",
+      "bound_bottom": "h_5.01",
+      "bound_left": "v_new_1",
+      "bound_right": "v_129.97"
+    },
+    {
+      "id": "12_1_area_no",
+      "bbox_mm": [
+        174.66945424515072,
+        5.471940734435197,
+        165.2072435935317,
+        8.583676269239518
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_10.01",
+      "bound_bottom": "h_5.01",
+      "bound_left": "v_174.98",
+      "bound_right": "v_164.98"
+    },
+    {
+      "id": "1_DOC_TITLE",
+      "bbox_mm": [
+        119.67441926359352,
+        0.4022010162280733,
+        20.205056212602845,
+        14.934151386054213
+      ],
+      "clean": "doc_title",
+      "expected": "required",
+      "bound_top": "h_top",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_119.92",
+      "bound_right": "v_new_4"
+    },
+    {
+      "id": "6_1_Sheet_number",
+      "bbox_mm": [
+        9.684435434115734,
+        0.40219024952349497,
+        0.3552889462794088,
+        8.583676269239518
+      ],
+      "clean": "sheet_number_6_1",
+      "expected": "required",
+      "bound_top": "h_new_3",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_24.98",
+      "bound_right": "v_right"
+    },
+    {
+      "id": "26_Document_Revision",
+      "bbox_mm": [
+        19.675851149168796,
+        0.40219024952349497,
+        10.213640497549942,
+        8.583676269239518
+      ],
+      "clean": "revision",
+      "expected": "required",
+      "bound_top": "h_new_3",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_new_4",
+      "bound_right": "v_24.98"
+    },
+    {
+      "id": "50_File_Name_Stamp",
+      "bbox_mm": [
+        202.45547635181023,
+        -4.784034445516575,
+        73.63805769393602,
+        0.0
+      ],
+      "clean": "file_name_stamp",
+      "expected": "required",
+      "outside_stamp": true,
+      "stretch_to_page": [
+        "bottom"
+      ]
+    },
+    {
+      "id": "51_Page_Format",
+      "bbox_mm": [
+        81.82282038074541,
+        -4.784034445516575,
+        -4.678090072465814,
+        0.0
+      ],
+      "clean": "page_format",
+      "expected": "required",
+      "outside_stamp": true,
+      "stretch_to_page": [
+        "bottom"
+      ]
+    },
+    {
+      "id": "16_imz_label_date",
+      "bbox_mm": [
+        129.6658349786466,
+        0.4022010162280733,
+        120.20362432702757,
+        4.9427356710011505
+      ],
+      "clean": null,
+      "expected": "required",
+      "expected_text": "Дата",
+      "bound_top": "h_5.01",
+      "bound_bottom": "h_bottom",
+      "bound_left": "v_129.97",
+      "bound_right": "v_119.92"
+    },
+    {
+      "id": "26_Document_Revision_lable",
+      "bbox_mm": [
+        19.675851149168796,
+        9.112881332673645,
+        10.213640497549942,
+        14.934151386054213
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_top",
+      "bound_bottom": "h_new_3",
+      "bound_left": "v_new_4",
+      "bound_right": "v_24.98"
+    },
+    {
+      "id": "16_1_date",
+      "bbox_mm": [
+        129.6658349786466,
+        5.471940734435197,
+        120.20362432702757,
+        8.583676269239518
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_10.01",
+      "bound_bottom": "h_5.01",
+      "bound_left": "v_129.97",
+      "bound_right": "v_119.92"
+    },
+    {
+      "id": "11_1_rev",
+      "bbox_mm": [
+        184.70316157578748,
+        5.471940734435197,
+        175.19865930858478,
+        8.583676269239518
+      ],
+      "clean": null,
+      "expected": "optional",
+      "bound_top": "h_10.01",
+      "bound_bottom": "h_5.01",
+      "bound_left": "v_left",
+      "bound_right": "v_174.98"
+    },
+    {
+      "id": "61_Page_Layers",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "61_Page_Layers"
+    },
+    {
+      "id": "62_Page_Bookmarks",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "62_Page_Bookmarks"
+    },
+    {
+      "id": "63_Page_Width",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "63_Page_Width"
+    },
+    {
+      "id": "64_Page_Height",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "64_Page_Height"
+    },
+    {
+      "id": "65_Page_Real_Format",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "65_Page_Real_Format"
+    },
+    {
+      "id": "file_name",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "file_name"
+    }
+  ],
+  "find_tables_snap_x_tolerance": 2.0,
+  "find_tables_snap_y_tolerance": 6.0,
+  "grid_lines": [
+    {
+      "id": "h_bottom",
+      "orientation": "h",
+      "pos_mm": -0.054,
+      "start_mm": -0.072,
+      "end_mm": 185.262,
+      "boundary": "bottom",
+      "start_line_id": "v_right",
+      "end_line_id": "v_left"
+    },
+    {
+      "id": "h_5.01",
+      "orientation": "h",
+      "pos_mm": 5.153,
+      "start_mm": 120.019,
+      "end_mm": 185.262,
+      "start_line_id": "v_119.92",
+      "end_line_id": "v_left"
+    },
+    {
+      "id": "h_10.01",
+      "orientation": "h",
+      "pos_mm": 10.186,
+      "start_mm": 120.019,
+      "end_mm": 185.262,
+      "start_line_id": "v_119.92",
+      "end_line_id": "v_left"
+    },
+    {
+      "id": "h_top",
+      "orientation": "h",
+      "pos_mm": 15.244,
+      "start_mm": -0.072,
+      "end_mm": 185.262,
+      "boundary": "top",
+      "start_line_id": "v_right",
+      "end_line_id": "v_left"
+    },
+    {
+      "id": "v_right",
+      "orientation": "v",
+      "pos_mm": -0.072,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "boundary": "right",
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_24.98",
+      "orientation": "v",
+      "pos_mm": 10.025,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_119.92",
+      "orientation": "v",
+      "pos_mm": 120.019,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_129.97",
+      "orientation": "v",
+      "pos_mm": 130.15,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_154.99",
+      "orientation": "v",
+      "pos_mm": 155.126,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_164.98",
+      "orientation": "v",
+      "pos_mm": 165.208,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_174.98",
+      "orientation": "v",
+      "pos_mm": 175.266,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_left",
+      "orientation": "v",
+      "pos_mm": 185.262,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "boundary": "left",
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "h_new_3",
+      "orientation": "h",
+      "pos_mm": 8.168,
+      "start_mm": -0.072,
+      "end_mm": 20.292,
+      "start_line_id": "v_right",
+      "end_line_id": "v_new_4"
+    },
+    {
+      "id": "v_new_4",
+      "orientation": "v",
+      "pos_mm": 20.292,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_new_1",
+      "orientation": "v",
+      "pos_mm": 145.259,
+      "start_mm": -0.054,
+      "end_mm": 15.244,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    }
+  ]
+}

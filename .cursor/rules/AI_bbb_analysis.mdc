@@ -1,0 +1,323 @@
+# AI BBB Analysis — план и статус реализации
+
+> **Правило**: каждый чат, работающий с BBB-модулем, ОБЯЗАН обновлять статус и добавлять
+> новые факты в этот файл по итогу работы.
+
+---
+
+## 1. Назначение
+
+Модуль анализа файлов BOM, BOE, BOQ (обобщённо «BBB»).
+Аналог flow из `google_sheets.py`: поиск файлов, загрузка в `RowStd`,
+проверка по `code_base`, вывод с подсветкой и комментариями.
+
+Тестовый путь: `C:\YandexDisk\темп\BBB\DWG`
+
+---
+
+## 2. Структура модуля
+
+```
+base/
+  bbb_analysis.py              -- точка входа: start_bbb_analysis(dir_path)
+  bbb_load.py                  -- поиск/загрузка BBB+MTO файлов из папки
+  bbb_checks.py                -- проверки: bbb_vs_code_base() + bbb_vs_mto_combined()
+  bbb_config.py                -- конфигурация флагов (JSON load/save/defaults); section_types — НЕ здесь
+  bbb_section_types_excel.py   -- I/O Excel файла типов секций MTO на сетевом диске
+  section_type_info.py         -- add_section_type_info() — заполнение SECTION_TYPE по section_row
+  bbb_settings_gui.py          -- GUI настроек (customtkinter) + кнопка открытия Excel секций
+  bbb_output_config.py         -- конфигурация столбцов вывода (ColumnDef, ширины, заголовки)
+  bbb_excel_out.py             -- вывод результатов в Excel (xlsxwriter)
+  bbb_analysis_config.json     -- JSON конфиг флагов (без section_types)
+  get_row_type_variants/
+    BOE.py                   -- row_type для BOE
+    BOM.py                   -- row_type для BOM
+    BOQ.py                   -- row_type для BOQ
+  tables_columns.py          -- ColNames.BOE / .BOM / .BOQ + BBB_ константы
+  t_comm_initial_classes.py  -- классы BOE, BOM, BOQ
+  base_classes.py            -- ветки BOE/BOM/BOQ в RowType.get_row_type()
+main.py                      -- GUI: секция "ПРОВЕРКА BBB" + кнопка настроек
+help_descriptions.py         -- справка: ключ "open_bbb_folder"
+.vscode/launch.json          -- конфигурация "Python: bbb_analysis"
+```
+
+---
+
+## 3. Маппинг столбцов
+
+### BBB-специфичные константы (tables_columns.py)
+
+BBB_MARKA, BBB_SPEC_NUMBER, BBB_REVISION, BBB_OBJECT_NAME,
+BBB_MTR_TYPE, BBB_MTR_GROUP, BBB_WORK_CODE_LIST, BBB_SUPPLY_ZONE, BBB_WORK_CODE,
+BBB_POSITION, BBB_CONSUMPTION_RATE, BBB_UNIT_PRICE, BBB_TOTAL_PRICE,
+BBB_ASSEMBLY, BBB_WORK_NAME, BBB_LABOR_UNIT, BBB_LABOR_TOTAL,
+BBB_EQUIPMENT_UNIT, BBB_EQUIPMENT_TOTAL, BBB_LABOR_RATE,
+BBB_EQUIPMENT_RATE, BBB_DIRECT_COST_RATE, BBB_DIRECT_COST_TOTAL.
+
+### ColNames.BOE (22 колонки, лист "BOE")
+col 10=TAGS, 11=NAME, 12=TYPE_MARK, 13=CODE, 14=VENDOR, 15=UNITS, 16=VALUES
+
+### ColNames.BOM (23 колонки, лист "BOM")
+col 10=TAGS, 11=NAME, 12=TYPE_MARK, 13=CODE, 14=VENDOR, 15=UNITS, 16=VALUES, 17=BBB_CONSUMPTION_RATE
+
+### ColNames.BOQ (18 колонок, лист "BOQ")
+Нет CODE/NAME/TYPE_MARK — только работы, расценки, трудозатраты.
+
+---
+
+## 4. Статус реализации
+
+### Этап 1 (загрузка + проверка по code_base + вывод)
+
+| Задача | Статус |
+|--------|--------|
+| tables_columns.py: BBB_ константы + ColNames.BOE/BOM/BOQ | done |
+| t_comm_initial_classes.py: BOE/BOM/BOQ классы | done |
+| get_row_type_variants/BOE.py, BOM.py, BOQ.py | done |
+| base_classes.py: ветки BOE/BOM/BOQ в get_row_type() | done |
+| bbb_load.py: поиск + загрузка файлов | done |
+| bbb_analysis.py: точка входа + проверки code_base | done |
+| bbb_checks.py: bbb_vs_code_base() | done |
+| .vscode/launch.json: конфигурация запуска | done |
+| AI_bbb_analysis.mdc: этот файл | done |
+| Тестовый запуск загрузки | done |
+| Тестирование Этапа 1 | done |
+
+### Этап 2 (сравнение BBB с MTO)
+
+| Задача | Статус |
+|--------|--------|
+| bbb_checks.py: `bbb_vs_mto_combined()` — сравнение BOE+BOM ↔ MTO (теги, кол-во, описания) | done |
+| Интеграция в bbb_analysis.py | done |
+| Тестирование Этапа 2 | done |
+
+### Доработки (07.03.2026)
+
+| Задача | Статус |
+|--------|--------|
+| bbb_output_config.py: конфигурация столбцов вывода (ColumnDef, ширины, заголовки) | done |
+| bbb_excel_out.py: вывод через xlsxwriter с заголовками/ширинами из конфига | done |
+| Исправлен row_type: строка с номерами столбцов (1,2,3...) → other_row | done |
+| BOQ: head_row для строки заголовков ("Единица измерения", "Количество", ...) | done |
+| Интеграция bbb_excel_out в bbb_analysis.py (заменил check_color_out) | done |
+| Тестирование | done |
+
+### Баг-фиксы (07.03.2026)
+
+| Задача | Статус |
+|--------|--------|
+| Float precision: "0,03" → "0.030000000000000027" в выходном Excel | done |
+| Ложные расхождения тегов BOE↔MTO из-за скобок Python-списка | done |
+
+**Float precision** — исходный Excel содержит формулы, результат которых — float
+с IEEE 754 артефактами (0.030000000000000027 вместо 0.03). `get_strike_unstruck()`
+конвертировал через `str(cell.value)`, сохраняя полную точность как строку.
+xlsxwriter писал строку, а не число.
+Затронутые колонки: BBB_CONSUMPTION_RATE (0.03→0.030000000000000027, 0.02→0.020000000000000018).
+Исправление:
+- `base_xlsx_load.py`: `round(val, 10)` перед `str()` для float значений
+- `bbb_excel_out.py`: `_NUMERIC_COLS` + `_to_numeric()` — числовые колонки пишутся как числа
+
+**Ложные расхождения тегов** — `_get_tags_set()` вызывал `str(tags_val)` на Python list,
+получая `"['tag1', 'tag2']"`. Split по запятой давал теги со скобками `'], ['`.
+MTO теги (строки) не совпадали → ложные расхождения (BCC0002753, BCC0000805).
+Исправление: `bbb_checks.py::_get_tags_set()` — проверка `isinstance(tags_val, list)`
+и прямое использование списка без `str()` конвертации.
+
+### GUI и настройки (07.03.2026)
+
+| Задача | Статус |
+|--------|--------|
+| bbb_config.py: JSON конфиг (load/save/defaults) | done |
+| bbb_settings_gui.py: окно настроек (customtkinter) | done |
+| main.py: секция "ПРОВЕРКА BBB" + кнопка "Открыть папку BBB (MTO)" + настройки | done |
+| help_descriptions.py: справка "open_bbb_folder" | done |
+| bbb_checks.py: флаги cfg для bbb_vs_code_base и bbb_vs_mto | done |
+| bbb_analysis.py: загрузка конфига и передача в checks | done |
+
+### GUI интеграция с MTO (08.03.2026)
+
+| Задача | Статус |
+|--------|--------|
+| Удалена отдельная секция GUI "ПРОВЕРКА BBB" | done |
+| Запуск BBB объединён с кнопкой "Открыть папку DWG с MTO" через флаги конфига | done |
+| `bbb_settings_gui.py` обновлён до окна "Проверка MTO + BBB" | done |
+| `start_bbb_analysis()` поддерживает `out_dir` для единой папки результата | done |
+| Добавлена секция `mto_vs_code_base` (этапы/подэтапы MTO) в `bbb_config.py` | done |
+| Добавлена секция `mto_vs_code_base_correction` для `base_vs_base_correction` | done |
+| `bbb_settings_gui.py` расширен блоком детальных MTO-флагов (аналог BBB) | done |
+| Кнопка `Открыть файл MTO` читает тот же конфиг и те же MTO-подэтапы, что и проверка папки | done |
+| Добавлены флаги чтения Excel-кэша формул: отдельно для MTO и отдельно для BBB | done |
+
+---
+
+## 5. Флаги конфигурации (bbb_analysis_config.json)
+
+> **ПРАВИЛО**: при добавлении новой проверки в `bbb_checks.py` — ОБЯЗАТЕЛЬНО добавить
+> соответствующий флаг в конфиг (default в `bbb_config.py::get_default_config()`),
+> checkbox в `bbb_settings_gui.py`, и `if cfg.get(...)` guard в коде проверки.
+
+### folder_rules
+
+| Флаг | По умолчанию | Описание |
+|------|-------------|----------|
+| `search_only_in_dwg` | true | Для кнопки папки MTO+BBB: запуск только если выбранная папка называется `DWG` |
+
+### bbb_vs_code_base
+
+| Флаг | По умолчанию | Описание |
+|------|-------------|----------|
+| `enabled` | true | Включить весь блок bbb_vs_code_base |
+| `check_by_code` | true | Сравнение NAME/TYPE_MARK/UNITS/VENDOR/CODE с code_base |
+| `check_equipment_codes` | true | Проверка кодов оборудования |
+| `check_tags_value` | true | Проверка тегов и значений |
+| `check_value` | true | Проверка количеств (VALUES) |
+| `check_duplicate_tags` | true | Проверка дублей тегов |
+| `check_mass` | true | Проверка массы |
+| `check_prohibition` | false | Проверка запрещённых кодов |
+| `check_work_code_and_mtr_group` | true | Проверка `BBB_WORK_CODE` и `BBB_MTR_GROUP` по данным GoogleBase (`BBB_WORK_CODE_LIST` + `Группа МТР`) |
+
+### bbb_vs_mto
+
+| Флаг | По умолчанию | Описание |
+|------|-------------|----------|
+| `enabled` | true | Включить весь блок bbb_vs_mto |
+| `compare_fields` | true | Сравнение NAME/TYPE_MARK/VENDOR/UNITS с MTO |
+| `compare_values` | true | Сравнение сумм VALUES BBB↔MTO |
+| `compare_tags` | true | Сравнение тегов BOE+BOM↔MTO |
+| `compare_title_marka_revision` | true | Сравнение `TITLE`/`BBB_MARKA`/`BBB_REVISION` со значениями из имени файла MTO (`doc_Title_4d`/`doc_Marka`/`doc_Revision`) |
+| `compare_bom_annotation_with_mto` | true | Для BOM: сравнение `ANNOTATION` с набором слагаемых из MTO по `CODE` (порядок не важен) |
+
+---
+
+## 6. Заметки
+
+- BOE col 10 = TAGS; с 10.03.2026 BOM col 10 тоже = TAGS. Колонка `Позиция` в BOM теперь проходит ту же нормализацию `get_tag()`, что и в BOE.
+- BOQ не содержит CODE — проверки code_base для него не выполняются.
+- doc_Type (BOE/BOM/BOQ/MTO) уже поддерживается в `doc_ATTRIBUTES`.
+- Проверки code_base вынесены в `bbb_checks.py::bbb_vs_code_base()`:
+  `check_by_code`, `check_tags_value`, `check_value`, `check_duplicate_tags`,
+  `check_prohibition`, `check_equipment_codes`, `check_mass` (аналог `base_vs_base_std`).
+- Сравнение с MTO:
+  - `bbb_checks.py::bbb_vs_mto_combined()` — основной режим, сравнивает объединённую картину `BOE+BOM` с `MTO`;
+    поля NAME/TYPE_MARK/VENDOR/UNITS проверяются построчно, а `VALUES` и `TAGS` — по объединённой агрегации двух документов.
+- Для MTO-проверки (google_sheets/base_cheks) используется конфиг `mto_vs_code_base`
+  с подэтапами: `check_by_code`, `check_equipment_codes`, `check_tags_value`,
+  `check_value`, `check_duplicate_tags`, `check_mass`, `check_prohibition`,
+  `check_tags_4_2_4_4`, `check_position_numeration`.
+- Для correction-отчёта MTO используется отдельный конфиг `mto_vs_code_base_correction`
+  (включение/выключение блока и его подэтапов независимо от основного отчёта).
+- Чтение Excel в `base/base_xlsx_load.py` всегда использует `data_only=True` —
+  формулы читаются как кэшированные значения (результат последнего пересчёта в Excel).
+- Тестовые данные: BOE=51 строк, BOM=60, BOQ=34, MTO=218 строк.
+- Row type распределение (тест, после исправления):
+  BOE: 48 position, 1 head, 2 other;
+  BOM: 58 position, 1 head, 1 other;
+  BOQ: 30 position, 1 head, 1 other, 2 empty.
+- В каждом BBB документе под строкой заголовков есть строка с номерами столбцов (1-22/23/18).
+  Эта строка определяется как `other_row` через `_is_column_numbers_row()` в каждом
+  get_row_type_variants файле. Признак: NUMBERS="1" и CODE/NAME (или UNITS/VALUES для BOQ)
+  содержат маленькие целые числа (номера колонок).
+- Вывод в Excel реализован через `bbb_excel_out.py::save_bbb_to_excel()` (xlsxwriter),
+  использует конфигурацию из `bbb_output_config.py` (BOE_COLUMNS_CONFIG, BOM_COLUMNS_CONFIG,
+  BOQ_COLUMNS_CONFIG). Каждый `ColumnDef` определяет: col_name, header_label, output, width.
+  Ширины взяты из реальных исходных файлов BBB.
+- [10.03.2026] В `bbb_checks.py::bbb_vs_mto_combined()` сравнение тегов BBB↔MTO сделано точечным по `(CODE, TAG)`:
+  - если тег строки не найден в MTO, `TAGS` красится в `Color.red` и в комментарий пишется конкретный тег;
+  - если все теги строки найдены в MTO, `TAGS` получает `Color.green`.
+- [10.03.2026] В `bbb_checks.py::bbb_vs_mto_combined()` для `VALUES` добавлена позитивная подсветка:
+  - если сумма `BOE+BOM` по `CODE` равна сумме `MTO` (с допуском `0.001`), `VALUES` красится в `Color.green`;
+  - если не равна — остаётся `Color.red` и комментарий с breakdown `BOE/BOM/MTO`.
+- [10.03.2026] В `bbb_checks.py::bbb_vs_mto_combined()` добавлена опциональная проверка
+  `TITLE` / `BBB_MARKA` / `BBB_REVISION` для BOE/BOM position-строк:
+  - эталон берётся из имени MTO-файла через `doc_ATTRIBUTES`:
+    `doc_Title_4d`, `doc_Marka`, `doc_Revision`;
+  - совпадение → `Color.green`;
+  - расхождение → `Color.red` + комментарий с фактическим значением из MTO.
+  Флаг в конфиге: `bbb_vs_mto.compare_title_marka_revision` (default `true`).
+- [10.03.2026] Для объединённой кнопки `MTO+BBB` добавлена корректная обработка отсутствия MTO:
+  - `main.py::open_mto_dwg_with_optional_bbb()` предварительно проверяет наличие файла MTO в выбранной папке;
+  - если MTO не найден, MTO-этап пропускается с сообщением, BBB-этап может продолжить работу;
+  - `base/base_mto.py::get_mto_std_from_file()` при отсутствии MTO возвращает `None` без падения
+    в `openpyxl.load_workbook` (защита от `'int' object has no attribute 'strip'`).
+- [10.03.2026] Добавлен `bbb_checks.py::bbb_vs_mto_combined()` и интеграция в `bbb_analysis.py::start_bbb_analysis()`:
+  - `VALUES` сравниваются по сумме `BOE+BOM` vs `MTO`;
+  - `TAGS` сравниваются по объединению тегов `BOE ∪ BOM`;
+  - field-checks (`NAME/TYPE_MARK/VENDOR/UNITS`) остаются построчными для каждой строки BOE/BOM.
+- [10.03.2026] Для `MTO-only` тегов (есть в MTO, нет в BBB) diff-строка добавляется ровно в один лист по правилу:
+  - `CODE` только в `BOE` -> строка идёт в `BOE`
+  - `CODE` только в `BOM` -> строка идёт в `BOM`
+  - `CODE` и в `BOE`, и в `BOM` -> строка идёт в `BOE`
+  Строка заполняет общие поля (`CODE`, `TAGS`, `NAME`, `TYPE_MARK`, `VENDOR`, `UNITS`, `VALUES`) и подсвечивается `Color.match_added_mto`.
+- [10.03.2026] Валидация нового combined-режима:
+  - реальный прогон `start_bbb_analysis("C:\\YandexDisk\\темп\\BBB\\DWG")` завершился успешно, выгружены `BOE`, `BOM`, `BOQ`;
+  - на этом наборе после remap `BOM -> TAGS` у `BOM` обнаружено 6 position-строк с тегами, теги корректно парсятся в list[str];
+  - синтетический тест подтвердил: split-код, разделённый между `BOE` и `BOM`, сравнивается по сумме без ложного mismatch; `MTO-only` теги маршрутизируются в правильный лист (`BOE`/`BOM`) по правилу выше.
+  Для добавленных diff-строк поле `№ п/п` (`NUMBERS`) принудительно очищается.
+- [10.03.2026] `bbb_checks.py` рефакторен для читаемости:
+  - основной combined-режим собран в `bbb_vs_mto_combined()`;
+  - детали вынесены в helper-функции агрегации, row-check и построения `MTO-only` diff-строк.
+- [10.03.2026] После перевода анализа на combined-режим неиспользуемый одиночный `bbb_vs_mto()` и связанные helper-функции удалены из `bbb_checks.py`, чтобы не поддерживать мёртвый код.
+- [10.03.2026] Исправлена ошибка объединённой проверки `MTO + BBB`: `'int' object has no attribute 'strip'`.
+  Причина: в `check_prohibition` код замены из `REPLACEMENT` читался как `value.strip()`, при числовом
+  значении в Excel падало исключение. Фикс: безопасное приведение `str(value).strip()` в
+  `base/base_cheks.py` и `RFQ/ds_compare/mto_check.py`.
+- [10.03.2026] В `bbb_checks.py::bbb_vs_code_base()` добавлена опциональная проверка
+  `BBB_WORK_CODE` и `BBB_MTR_GROUP` для BOE/BOM position-строк:
+  - источник Google: `ColNames.GoogleBase.column_dict[26] -> BBB_WORK_CODE_LIST`,
+    `ColNames.GoogleBase.column_dict[27] -> BBB_MTR_GROUP`;
+  - `BBB_WORK_CODE_LIST` парсится через `tags/tag_parser.py::get_bbb_work_code`;
+  - 3 статуса на каждую колонку:
+    - green: совпадение с Google;
+    - red: в Google есть значение, но строка BBB не совпала;
+    - yellow: в Google поле пустое (комментарий с просьбой заполнить Google-таблицу).
+  Флаг в конфиге: `bbb_vs_code_base.check_work_code_and_mtr_group` (default `true`).
+- [11.03.2026] В `bbb_checks.py::bbb_vs_mto_combined()` добавлена и расширена опциональная проверка
+  `BOM.ANNOTATION` по MTO (`bbb_vs_mto.compare_bom_annotation_with_mto`, default `true`):
+  - проверка идёт по `CODE` с учётом всех строк BOM данного кода;
+  - сначала из суммы MTO вычитается `BOE_total` по этому же `CODE` в режиме sum-only
+    (без сопоставления по тегам/позициям), затем остаточный пул MTO распределяется по строкам BOM;
+  - для каждой строки BOM выбирается набор остаточных MTO-слагаемых под её `VALUES`,
+    после чего `ANNOTATION` сравнивается по мультимножеству целых чисел (порядок не важен);
+  - mismatch -> `Color.red`, комментарий с корректной последовательностью вида `75(поз. 5.1)+...`,
+    а в ячейку `ANNOTATION` дописывается блок `Сумма из МТО` с суммой **без** позиций (`75+...`);
+  - если для строки ожидается одно слагаемое: пустой `ANNOTATION` допустим, а корректное единственное число
+    помечается `Color.yellow` + `Не требуется, позиция встречается единично.`
+- [11.03.2026] Для `BOM.ANNOTATION` исправлен кейс split одной MTO-позиции на несколько BOM-строк:
+  если после учёта BOE в residual-пуле есть один терм (например `30`), а BOM содержит несколько строк
+  по `6`, проверка должна поддерживать частичное расходование терма (`30 -> 6+6+6+6+6`) между строками BOM.
+  Ранее требовалось точное целое подмножество без деления и это давало ложные `red` на строках 31..35
+  для `CODE=BCC0000665`.
+- [13.03.2026] Добавлена колонка `SECTION_TYPE` и проверка покрытия MTO кодов в BBB:
+  - `base/tables_columns.py`: константа `SECTION_TYPE = "section_type"` + в `ColNames.column_list`.
+  - `base/section_type_info.py`: `add_section_type_info(table_std, source_file)` — заполняет
+    `SECTION_TYPE` каждой `position_row` по ближайшему `section_row`. Вызывается из
+    `get_std_from_excel_file` после `add_cabinet_composition_info`. Новые секции авто-добавляются
+    в Excel файл через `bbb_section_types_excel.add_new_sections_if_missing()`.
+  - `base/google_sheets.py`: `column_dict[101] = SECTION_TYPE`.
+  - `base/bbb_config.py`: флаг `bbb_vs_mto.check_missing_mto_codes` (default True);
+    `get_section_target(section_types_cfg, name)` → "BOE" если секция не найдена.
+    **section_types в JSON больше не хранятся** — только в Excel на сетевом диске.
+  - `base/bbb_checks.py`: `_build_missing_code_diff_rows` — коды MTO без BOE/BOM строк →
+    diff-строки цвета `Color.match_added_mto`, routing по `SECTION_TYPE` + `section_types` конфиг.
+  - `base/bbb_output_config.py`: `SECTION_TYPE` добавлен в `BOE_COLUMNS_CONFIG` и `BOM_COLUMNS_CONFIG`
+    (заголовок «Секция MTO», width=35, output=True).
+  - `base/bbb_settings_gui.py`: чекбокс `check_missing_mto_codes`; кнопка «Открыть типы секций MTO»
+    рядом с заголовком секции «Сравнение с MTO» — открывает Excel через `os.startfile`.
+
+### Конфиг секций MTO — Excel файл на сетевом диске
+
+**Модуль:** `base/bbb_section_types_excel.py`
+**Файл:** `\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\РД\Таблички_графики\08_НК\11_BBB\BBB_типы_секций_MTO.xlsx`
+**Лист:** «Секции»
+
+Колонки: Название секции | Документ (BOE/BOM) | Проверено (Да/Нет) | Источник файла | Дата добавления.
+Verified-строки — зелёные (сверху, алфавит); новые авто-добавленные — жёлтые (снизу).
+
+Ключевые функции:
+- `load_section_types()` → dict — читает Excel (read_only, не блокирует). При недоступности → 13 базовых секций + warning.
+- `save_section_types(dict)` → bool — перезаписывает файл. `PermissionError` → предупреждение, возвращает False (некритично).
+- `add_new_sections_if_missing(dict)` → bool — читает, мёрджит, пишет.
+- `get_excel_path()` → str — путь к файлу.
+- Базовые 13 секций захардкожены в `_BASE_SECTION_TYPES` (fallback при недоступности сети).
+- `get_section_target(section_types_cfg, name)` в `bbb_config.py` — helper для чтения target из dict.

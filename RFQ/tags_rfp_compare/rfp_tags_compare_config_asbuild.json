@@ -1,0 +1,155 @@
+{
+  "memory_log": false,
+  "paths": {
+    "rfp_path": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\Сводная RFP_asbuild.xlsx",
+    "rfp_registr_lot_path": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\registr_lot.xlsx",
+    "mto_path": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\РД\\as-build\\MTO as-build",
+    "vo_path": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\РКД\\Материалы шкафов из РКД для робота",
+    "code_ban_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\code_ban_asbuild.txt",
+    "units_convert_matrix": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\матрица_ед_изм.xlsx",
+    "ds_manager_matrix": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\Список ДС - Фамилии МП.xlsx",
+    "gem_supply_codes": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\Коды_Поставок_ГЭМ_8950.xlsx",
+    "replacement_table_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\РД\\Таблички_графики\\14_сравнение с ДС\\_замены кодов\\Code_Replacement_Table.xlsx",
+    "result_dir_base": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\РД\\as-build\\MTO as-build_результат проверки роботом"
+  },
+  "rfp_parts": {
+            "auto_update_checklist": false,
+            "use_latest_net": false,
+    "summary_path": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\Сводная таблица ДС по вед.договорам.xlsx",
+    "checklist_path": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\ДС_увеличение_уменьшение.xlsx",
+    "increase_dir": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\RFP на увеличение",
+    "decrease_dir": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\RFP на уменьшение"
+  },
+  "step1": {
+    "debug": false,
+    "skip_split": false,
+    "use_rfp_code_ban": true,
+    "rfp_pipeline_mode": "standard"
+  },
+  "step2": {
+    "debug": false,
+    "export_load_results_excel": false,
+    "export_positions_database_excel": false,
+    "flat_mto_structure": true
+  },
+  "step3": {
+    "debug": false,
+    "export_to_excel": false
+  },
+  "step4": {
+    "debug": false,
+    "debug_step4_1": false,
+    "debug_step4_2": false,
+    "debug_step4_3": false,
+    "debug_step4_4": false,
+    "collapse_debug": false,
+    "unified_debug": false,
+    "timing_log": false,
+    "parallel_by_title_mark": true,
+    "max_workers": 2,
+    "verbose_progress_messages": false,
+    "memory_top_stats": false,
+    "memory_top_n": 15,
+    "debug_tag": [],
+    "debug_code": [],
+    "debug_title_system": [],
+    "print_title_systems_table": false,
+    "export_title_systems_comparison_excel": false,
+    "assign_rfp_mto_code_compare_colors": false,
+    "filter_to_mto_titles": true,
+    "include_mto_vo_without_rfp_anchor": false,
+    "include_packing_lists": false,
+    "export_bcc_accum_matrix": true,
+    "use_multiprocessing": true
+  },
+  "rfp_tags_utils": {
+    "finalize_timing_top_n": 5,
+    "save_input_fingerprints": false
+  },
+  "column_optimization": {
+    "rfp": {
+      "DS_NAME": {
+        "load": true,
+        "truncate": 50
+      },
+      "DS_NUMBER": {
+        "load": true
+      },
+      "DS_TITLE": {
+        "load": true,
+        "truncate": 100
+      },
+      "DS_SPECIFICATION": {
+        "load": true
+      },
+      "tags": {
+        "load": true
+      },
+      "DS_CODE_1C": {
+        "load": false
+      },
+      "code": {
+        "load": true
+      },
+      "name": {
+        "load": true,
+        "truncate": 400
+      },
+      "type_mark": {
+        "load": true,
+        "truncate": 400
+      },
+      "values": {
+        "load": true
+      },
+      "units": {
+        "load": true,
+        "truncate": 20
+      },
+      "name_2": {
+        "load": false
+      },
+      "rfp_supply_status": {
+        "load": true
+      },
+      "values_2": {
+        "load": false
+      }
+    },
+    "mto": {
+      "tags": {
+        "load": true
+      },
+      "numbers": {
+        "load": true
+      },
+      "name": {
+        "load": true,
+        "truncate": 400
+      },
+      "type_mark": {
+        "load": true,
+        "truncate": 400
+      },
+      "code": {
+        "load": true,
+        "truncate": 50
+      },
+      "vendor": {
+        "load": false
+      },
+      "units": {
+        "load": false
+      },
+      "values": {
+        "load": true
+      },
+      "mass": {
+        "load": false
+      },
+      "annotation": {
+        "load": false
+      }
+    }
+  }
+}

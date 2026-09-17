@@ -1,0 +1,288 @@
+---
+description: Оптимизация производительности step4 — multiprocessing, batch_copy_light, результаты замеров.
+alwaysApply: false
+globs:
+  - RFQ/tags_rfp_compare/step4/**
+  - RFQ/tags_rfp_compare/step4_analyze_and_match.py
+  - base/base_classes.py
+---
+
+# AI Performance — Оптимизация step4
+
+> Создан 25.02.2026. Снимок конфигурации обновлён 2026-07-29.
+
+---
+
+## 1. Multiprocessing (ProcessPoolExecutor)
+
+### Где применяется
+
+| Функция | Файл | MP | Результат |
+|---|---|---|---|
+| `match_added_vo_rows_with_mto_by_code` | `step4_4_add_unmatched_mto_rows.py` | Да | 72s → 18s (4x) |
+| `match_rows_with_vo_and_rfp_code_missing_mto` | `step4_4_add_unmatched_mto_rows.py` | **Нет** (отключён) | 67s → 0.24s (shared index) |
+
+### Конфигурация
+
+- Флаг: `step4.use_multiprocessing` в `rfp_tags_compare_config.json`
+- Code default в `get_default_config()` — **`false`**. Рабочий пользовательский
+  JSON может осознанно перекрывать его на `true`; наличие `true` в JSON не
+  означает смену default.
+- Основной GUI: native `ds_compare_center/rfp_settings_panel.py`; legacy CTk
+  `rfp_tags_settings_gui.py` остаётся для старых entry points.
+- Передаётся через `agregate_tags.py` → `step4_analyze_and_match()` → функции в step4_4
+- Минимальный порог: `_MULTIPROCESSING_MIN_TITLES = 4` (если title_mark < 4, MP не запускается)
+
+**Не путать:** `step4.parallel_by_title_mark` — отдельный верхнеуровневый
+ProcessPool по независимым title/mark. `use_multiprocessing` включает
+дополнительный MP внутри отдельных match-функций. `max_workers` относится к
+parallel-by-title/mark (`0` = auto); настройки и зависимости подробнее в
+`RFQ/tags_rfp_compare/SETTINGS_REFERENCE.md`.
+
+### Архитектура MP в step4_4
+
+```
+Главный процесс:
+  1. Строит shared index: mto_by_title, mto_remaining_qty (_build_mto_index_for_code_match)
+  2. Потребляет уже использованные qty: _consume_mto_qty_from_rfp_rows
+  3. Группирует строки по title_mark → chunks
+  4. ProcessPoolExecutor.map(_mp_fill_vo, chunks)
+  5. Мержит результаты: _copy_mto_el_to_row + обновление mto_remaining_qty
+
+Worker (отдельный процесс):
+  - Получает: (title_mark, [(idx, row)...], mto_rows, qtys)
+  - Возвращает: ([(idx, modified_row)...], [(mto_idx, consumed_qty)...])
+  - НЕ модифицирует оригинальные объекты (работает с копиями после pickle)
+```
+
+### Важные ограничения MP
+
+1. **Pickling**: все данные сериализуются через pickle. RowStd/CheckElement пиклятся стандартно.
+2. **Lambda нельзя**: `ProcessPoolExecutor.map()` требует module-level функции.
+   Обёртки: `_mp_fill_vo()`, `_mp_fill_rfp_vo()` (module-level).
+3. **Mutable state**: `mto_remaining_qty` — shared между title_marks.
+   Workers возвращают consumed qty, главный процесс обновляет dict.
+4. **Fallback**: `try/except` вокруг MP — при ошибке pickle автоматически sequential.
+5. **Overhead**: MP не выгоден для малых объёмов данных (match_rfp_vo_missing_mto: 0.24s seq → 4.9s MP).
+
+### Shared Index (ключевая оптимизация)
+
+`match_added_vo_rows_with_mto_by_code` строит `mto_by_title` и `mto_remaining_qty`,
+возвращает их в `step4_analyze_and_match`, который передаёт их в
+`match_rows_with_vo_and_rfp_code_missing_mto`. Это устранило повторное построение индекса
+(67s → 0.3s без MP).
+
+---
+
+## 2. batch_copy_light (оптимизация split_no_tags)
+
+### Проблема
+
+`check_mto_data::split_no_tags` для строк без тегов с VALUES > 1 создаёт VALUES копий.
+При VALUES=500 → 500 вызовов `get_row_copy_light`, каждый итерирует ~30 колонок.
+
+### Решение
+
+`RowStd.batch_copy_light(in_row, count, values_override=1)` в `base/base_classes.py`:
+
+1. **1 раз**: разделяет колонки на `shared` (ссылки) и `copy_sources` (_COPY_COLS со значениями)
+2. **Shared empty CE**: для _COPY_COLS где `value is None` и `struck_value` пуст —
+   создаётся **один** CheckElement(None) на столбец, разделяемый всеми копиями.
+   Безопасно, т.к. batch_copy_light используется только для split MTO/VO строк,
+   чьи CheckElement'ы не перезаписываются в pipeline (matching пишет в RFP rows,
+   `add_unmatched_mto_rows` создаёт новые RowStd через `create_rfp_row_from_mto`).
+3. **N раз**: `dict(shared)` (C-level) + создание CheckElement только для copy_sources (~2-3 колонки)
+
+Ускорение за счёт:
+- Сокращения CheckElement с ~27 на копию до ~2-3 (89% reduction)
+- `_COPY_COLS` = `frozenset` для O(1) lookup
+- `dict(shared)` вместо поэлементной итерации
+- Локальные ссылки `_new`, `_CE` вместо attribute lookups
+
+### Где используется
+
+- `step4_1_check_mto_data.py::check_mto_data` — split MTO строк без тегов
+- `step4_1_check_mto_data.py::check_vo_data` — split VO строк без тегов
+
+**Важно**: `batch_copy_light` содержит тот же `_COPY_COLS` что и `get_row_copy_light`.
+При изменении `_COPY_COLS` — обновлять ОБА метода.
+
+---
+
+## 3. pass_match_code: pointer per key (step4_2)
+
+### Проблема
+
+`pass_match_code` в `step4_2_match_rfp_with_mto.py` сопоставляет RFP строки с MTO
+по коду. После split_no_tags количество MTO кандидатов резко растёт (например, 500 копий
+с одним кодом). Исходная схема (None-marking + enumerate) давала O(N*K):
+каждая RFP строка сканировала все кандидаты, пропуская уже matched через `if mto_row is None`.
+
+Регрессия: 0.26s → 27-38s (после увеличения MTO данных из-за split).
+
+### Решение
+
+Заменён None-marking на **pointer per key** (`code_ptr: Dict[tuple, int]`):
+
+```python
+code_ptr: Dict[tuple, int] = {}
+for rfp_row, ..., rfp_code_raw, ... in rfp_precomputed:
+    key = (title_mark, str(rfp_code_raw))
+    start = code_ptr.get(key, 0)
+    for i in range(start, len(avail)):
+        mto_row = avail[i]
+        if _is_mto_exceeds_rfp(...):
+            continue       # НЕ двигаем pointer — кандидат может подойти следующей RFP
+        # match
+        code_ptr[key] = i + 1  # двигаем pointer ТОЛЬКО при match
+        break
+```
+
+- При match: pointer продвигается за matched элемент
+- При skip (`_is_mto_exceeds_rfp`): pointer остаётся — кандидат доступен для следующей RFP
+- Суммарная работа O(N) amortized вместо O(N*K)
+
+Ожидаемый эффект: pass_match_code с 27-38s обратно до ~0.3s.
+
+---
+
+## 4. Другие оптимизации step4
+
+### _sort_candidates_by_in_cabinet (step4_2)
+
+Заменён двойной list comprehension (O(N^2)) на `sorted()` с key-функцией (O(N log N)).
+Skip для len <= 1 и пустого rfp_ic.
+
+### _normalize_code_cached (step4_4)
+
+Кэш нормализованных кодов (Dict) — избегает повторных вычислений для одинаковых кодов.
+
+### Pre-filter (step4_4)
+
+`vo_rows_to_fill` и `rfp_vo_rows_missing_mto` фильтруются ДО основного цикла
+(list comprehension вместо `if` внутри цикла).
+
+---
+
+## 5. Результаты замеров (25.02.2026)
+
+| Этап | Оригинал | После оптимизации | Метод |
+|---|---|---|---|
+| `split_no_tags` | 32.7s* | 30.9s → shared CE | batch_copy_light + shared empty CE |
+| `pass_match_code` | 0.26s → 27-38s** | → pointer per key | code_ptr dict |
+| `match_added_vo` | 71.9s | 18.0s | MP + shared index |
+| `match_rfp_vo_missing` | 67.0s | 0.24s | shared index (MP off) |
+| **step4_total** | **249.8s** | **105.3s** | **2.4x** |
+
+*split_no_tags колебался 32-91s между запусками из-за нагрузки системы.
+**pass_match_code регрессия вызвана увеличением MTO данных после split_no_tags (O(N^2) → O(N) fix).
+
+### Потенциальные цели дальнейшей оптимизации
+
+1. `save_match_result_to_excel` (26.0s в прогоне 26.02.2026 09:42; ранее в baseline было 46.3s) — основной вклад стили + сериализация
+2. `match_rfp_with_vo` (9.1s) — потенциальный кандидат для MP
+
+---
+
+## 6. Excel save timing (уточнение)
+
+- **18.08.2026 (УЛ-блок):** при `include_packing_lists` ~56k Step4 + ~26k «Только в УЛ» (~80k строк). Комментарии xlsxwriter на нескольких ячейках каждой строки доминировали `wb.close` на UNC (минуты «тишины»). Сейчас комментарий только на колонке «Статус УЛ»; с 2026-08-28 Excel-облачко УЛ ещё сужено: недопоставка / проблема данных / fallback (`should_write_excel_comment`); `strings_to_urls=False`; печать прогресса каждые 10k. **xlsxwriter zip пишется локально, затем `copyfile` на UNC** — иначе `ZipFile(\\\\bcc\\...)` жмёт sheet/comments XML прямо в SMB. Подробности и ловушка `allocated=0`: `AI_rfq_context.mdc` § RFP Step4 vs УЛ.
+
+- В `RFQ/tags_rfp_compare/step4/step4_6_save_match_result_to_excel.py` добавлен явный замер:
+  `save_match_result_to_excel::wb_save`.
+- Прогон 26.02.2026 09:42 (последний запуск):
+  - `save_match_result_to_excel::write = 2.092s`
+  - `save_match_result_to_excel::styles_total = 13.716s`
+  - `save_match_result_to_excel::wb_save = 8.442s`
+  - `step4::save_match_result_to_excel = 26.002s`
+- Примечание: этот запуск оборвался после save на `check_values_sum` из-за `UnicodeEncodeError` в cp1251 при печати `✓`; на замер save это не влияет.
+
+### Полный стабильный прогон (26.02.2026 10:19)
+
+- После замены не-ASCII индикаторов в `step4_5_check_values_sum.py` (`✓/✗/⚠️` -> `OK/ERROR/WARN`) прогон завершился без ошибок кодировки.
+- Метрики:
+  - `save_match_result_to_excel::write = 1.039s`
+  - `save_match_result_to_excel::styles_total = 7.066s`
+  - `save_match_result_to_excel::wb_save = 3.714s`
+  - `step4::save_match_result_to_excel = 12.798s`
+  - `step4_total = 98.632s`
+  - `total_runtime = 118.018s`
+
+---
+
+## 7. Контрольные прогоны этапа B (26.02.2026)
+
+### Run `14.48` (`step1.skip_split=True`, `step4.timing_log=False`)
+
+- `elapsed_ms = 666999` (~11.1 мин), `exit_code=0`.
+- По `memory_log.txt`: `peak rss=11545.8MB` (~`11.275 GB`), что выше целевого порога этапа B (`<10 GB`).
+- `after_step4_analyze_and_match`: `rss=5188.8MB` (пик возникает внутри TM-loop, затем частично освобождается).
+
+### Проверка идентичности и порядка
+
+- `14.48` vs `10.19`:
+  - multiset: `only_new=0`, `only_old=0` (данные идентичны),
+  - order: `26706/27195` строк в другом порядке.
+- `14.48` vs `14.24`:
+  - multiset: `only_new=0`, `only_old=0`,
+  - fingerprints входов совпадают:
+    - `MTO fingerprint_md5 = 91f197f3563b2b40df63b79246c910d4`
+    - `VO fingerprint_md5 = 20799afa4d4e80e0313d197e39bb7fc0`
+
+Вывод на дату этапа B: данные идентичны, пик памяти внутри per-TM цикла выше цели; расхождение порядка строк тогда ещё трактовалось как незакрытый B.4.
+Уточнение 09.09.2026: порядок строк Step4 нестабилен между прогонами и **не считается регрессией** — проверено по 25 архивным прогонам, в т.ч. парам с одинаковым числом строк до любых оптимизаций. Причина не устанавливалась (ведущий ДС ротируется между прогонами, похоже на порядок завершения обработки ДС). Сверка только мультимножеством, см. §9 и `.cursor/rules/AI_rfp_step4_excel.mdc`.
+
+---
+
+## 8. Verification конфигурации/UI (2026-07-29)
+
+```powershell
+python tmp/test_rfp_native_settings_smoke.py
+python tmp/test_rfp_progress_markers_smoke.py
+python tmp/test_rfp_packing_compare_smoke.py
+```
+
+Packing smoke остаётся существующей проверкой интеграции Step4/УЛ; два первых
+smoke проверяют новый native editor, defaults/as-build merge и milestone parser.
+
+---
+
+## 9. Шаг УЛ (`compare_rfp_rows_with_packing`)
+
+Контрольный прогон 09.09.2026: **1008,6 с → 9,3 с (108,2×)**. Код:
+`RFQ/tags_rfp_compare/step4/step4_packing_compare.py`. Подробности:
+`.cursor/plans/ul_matcher_perf.plan.md`, этап D в `.cursor/rules/AI_optimization_roadmap.mdc`.
+
+### До / после по главным фазам
+
+| Фаза | Baseline | Контроль |
+|---|---:|---:|
+| `a2_untagged` | 679,4 с | 1,1 с |
+| `fill_rows` | 162,9 с | 3,7 с |
+| `a3_mto_tags` | 108,2 с | 0,14 с |
+| `a4_blind` | 49,3 с | 0,10 с |
+
+Три правки: инкрементальный `delivered` (`take()`), trace-merge без псевдо-`RowStd`,
+группировка соседей для резервирования тегов. Инварианты — `.cursor/rules/AI_rfp_step4_excel.mdc`.
+
+### Где смотреть тайминги
+
+- **Всегда:** секция `PHASES (seconds):` в `ul_compare_report_*.txt` в папке результата
+  (`RfpPackingAudit.phase_timings`, контекст `_phase` в матчере, печать в
+  `save_rfp_packing_report`). Этот канал работает независимо от флагов логов.
+- **Только при `step4.timing_log=true`:** записи `step4::ul::<фаза>` в `timing_log.xlsx`.
+
+Отчёт надёжнее `timing_log.xlsx`: в baseline-прогоне `step4.timing_log` был выключен,
+и секция `PHASES` всё равно дала полную картину.
+
+### Счётчики масштаба (baseline)
+
+`packing_units` / `allocated_units` / `queue_keys` / `max_queue_len`:
+**1 234 072 / 1 229 400 / 14 691 / 23 532**.
+
+### Диагностические скрипты
+
+- `tmp/diag_ul_matcher_cost.py` — статистика датасета и микробенчмарки
+- `tmp/diag_ul_matcher_hot.py` — посадка и trace-merge по размерам
+- `tmp/diag_ul_matcher_gc.py` — вклад GC
+- `tmp/read_run_ul_timings.py` — дифф фаз и счётчиков между двумя папками прогонов

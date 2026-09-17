@@ -1,0 +1,109 @@
+---
+description: PDF v2 — движок извлечения штампа, pipeline и fitz-инварианты.
+globs:
+  - "pdf_parsing_v2/**"
+  - "pdf_parsing_v2_engine/**"
+alwaysApply: false
+---
+
+# PDF v2 — движок (engine)
+
+> UI редактора не дублировать здесь: `AI_v2_editor.mdc`
+> Grid alignment и `adapt_debug`: `AI_v2_grid.mdc`
+> Сигнатуры и side effects: `pdf_parsing_v2/INTERFACES.md`
+> Анализ тегов (TagClass, `analyze`, payload): **`AI_v2_tag_analysis.mdc`**
+
+## Правила для чатов
+
+1. Для задач по engine сначала читать это правило.
+2. Для `grid_matcher` / `adapt_debug` дополнительно читать `AI_v2_grid.mdc`.
+3. v1 `pdf_parsing/` удалён из репозитория; доработки только в v2-пакетах.
+
+## Публичный API
+
+Из `pdf_parsing_v2`:
+
+- `run_v2_pipeline`
+- `extract_page`, `select_templates`
+- `load_v2_config`, `get_v2_config_path`
+- `load_all_templates`, `load_project_templates`, `load_projects`
+- `FieldDef`, `StampTemplate`, `V2PageResult`
+- `V2Document`, `V2PageData`
+
+## Архитектура
+
+- Оркестратор -> `pdf_parsing_v2/`
+- Движок -> `pdf_parsing_v2_engine/`
+- Сателлиты -> `pdf_parsing_v2_od/`, `pdf_parsing_v2_tags/`, `pdf_parsing_v2_rules/`
+- Редактор -> `pdf_template_editor/`
+- Control center -> `pdf_v2_monitor/`
+
+`V2Document` / `V2PageData` живут в `pdf_parsing_v2_engine/document.py` и заменяют v1-типы только внутри v2.
+
+## Ключевые инварианты
+
+- `get_drawings()` -> unrotated
+- `find_tables()` -> displayed
+- `get_textbox()` -> unrotated
+- Перед `get_textbox` rect переводится через `fitz_displayed_to_unrotated(rect, fitz_page)`
+- Для overlay и char-order используется `fitz_unrotated_to_displayed(...)`
+- Не использовать общую ручную формулу для 90° и 270°; только матрицы страницы MuPDF
+
+## Текущий production path
+
+`adapt_by_cell_assignment()` работает так:
+
+1. `search_bbox` вокруг template stamp bbox
+2. `find_tables()` внутри search clip
+3. merged detected lines
+4. `extent_probe` -> `virtual_outer_top/left` -> `proposed_bbox`
+5. `effective_bbox` для `d_all` и line filtering
+6. adaptive scale threshold
+7. matching + ordered alignment
+
+## Актуальные engine-факты
+
+- `find_tables` clip уже ограничен bbox штампа и обрезается по `page.rect`.
+- `find_frame` использует cached candidates; для больших листов есть border-band filter.
+- Tags по умолчанию читаются через `fitz`; `pdfminer` остаётся опцией.
+- Per-page PPE допустим только селективно для тяжёлых DW; не включать его глобально.
+- DWG-шаблоны (`dwg_page1` / `dwg_page_rest`) покрывают **`WIR, LAY, CAE, GA, PL, DW, NI`**. Тип PDF, которого нет ни в одном загруженном шаблоне, даёт предупреждение в control center после **`load_templates`** (`AI_v2_monitor.mdc`).
+
+## Актуально по `proposed_bbox`
+
+- Adaptive threshold уже production-default после successful proposed-bbox path.
+- `CellAssignmentInfo` хранит `scale_threshold`, `prealign_confidence_*`, `extent_probe`, bbox-решения и detected counts.
+- `adapt_debug` пишет single-run snapshot с `json + txt + png`; это production debug path, не benchmark-only. Интерактивный оверлей по тем же слоям в редакторе — панель **«Границы»** (`AI_v2_editor.mdc`, § «Канон: Слои на canvas»); при добавлении новых прямоугольников/групп в snapshot синхронизировать **`prealign_overlay_layers.py`** / **`prealign_overlay_model.py`** и таблицы канона в том же правиле редактора.
+- После успешного `adapt_by_cell_assignment` для выбранного шаблона в **`V2PageResult.metadata`** (наряду с document properties) пишутся ключи **`stamp_effective_bbox`**, **`stamp_proposed_bbox_applied`**, опционально **`stamp_search_bbox`** — см. `pdf_parsing_v2/INTERFACES.md` (displayed / `find_tables` space).
+- **ОД (vedomost):** тот же **`stamp_effective_bbox`** + `FrameInfo` из `extract_page` питает **`build_manifest_clip_frame_minus_stamp`**; далее pdfplumber в `pdf_parsing_v2_od` обрезает страницу по этому clip (см. **`AI_v2_od.mdc`**). Согласованы с `find_tables` (displayed space).
+
+## Подтверждённый A4 OD-кейс (17.04.2026)
+
+Для `AGCC.287-2815-SKUD.OD-0001_01-AN02_RU.pdf` с `od_page1.json`:
+
+- `virtual_left` должен браться не из коротких боковых вертикалей, а из full-height boundary carrier
+- candidate pool для `virtual_left` теперь сначала предпочитает вертикали, покрывающие диапазон между detected `top` и `bottom`
+- подтверждённый результат: `virtual_left = 56.7` от `PDF:v_3`, `proposed_bbox.x0 = effective_bbox.x0 = 56.7`, `outside_effective_bbox_filtered = 6`, `VERDICT = OK`
+
+## Excel (openpyxl) и `pdf_v2_config`
+
+- В **`pdf_v2_config.json`** — вложенная секция **`excel`** с полем **`sanitize_illegal_chars`** (по умолчанию **`true`**). Нормализация: **`get_default_excel_config`**, **`_normalize_excel_config`**, чтение флага — **`excel_sanitize_illegal_chars_enabled(cfg)`** в `pdf_parsing_v2/v2_config.py`.
+- **`utils/excel.py`**: **`sanitize_cell_value_for_openpyxl(value, *, enabled)`** — для строк убирает символы по тому же правилу, что **`openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE`** (иначе `IllegalCharacterError` при сохранении). Не числа / не строки не меняет.
+- Где применяется при **`sanitize_illegal_chars: true`**: запись **`*_результат_проверки.xlsx`** и **`save_review_state_to_workbook`** (`pdf_parsing_v2_rules/output.py`); экспорт **`TimingCollector.to_excel`** (`pdf_parsing_v2/v2_timing.py`). Проброс из **`run_v2_pipeline`** → **`rules_check_start_v2`** / **`excel_check_list_out`** и **`timing.to_excel`** (`pdf_parsing_v2/v2_pipeline.py`). В **`rules_check_start_v2`** после постпроцесса передаются **`od_warnings`** и **`od_pdf_path`** из **`artifacts["od_table"]`**; строки НК из ОД — **`pdf_parsing_v2_rules/od_table_checks.py`** (коды **3001** / **3002** / **3099**), см. **`AI_v2_od.mdc`**.
+- При **`false`** поведение как раньше: «грязные» строки из PDF/штампа могут снова ломать сохранение xlsx.
+- Отчёт **debug** через **xlsxwriter** (`save_v2_debug_report`) этим флагом **не** санитизируется — отдельный стек.
+
+## Ловушки
+
+- `utils/path.py` не должен импортировать v2 на уровне модуля.
+- `FieldDef.document_property` и `outside_stamp` не участвуют в stamp geometry union.
+- Для Windows/xlsx закрывать workbook явно.
+- Не пытаться делить один `fitz.Document` между process workers.
+
+## См. также
+
+- `AI_v2.mdc`
+- `AI_v2_grid.mdc`
+- `AI_v2_monitor.mdc`
+- `AI_v2_tag_analysis.mdc`
+- `pdf_parsing_v2/INTERFACES.md`

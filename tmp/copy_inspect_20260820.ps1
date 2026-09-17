@@ -1,0 +1,27 @@
+﻿$ErrorActionPreference = 'Stop'
+$src = '\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_РЕЗУЛЬТАТА_ПРОВЕРКИ\_результат_проверки_2026.08.20.12.51'
+$dst = 'c:\Users\ydruzev\PycharmProjects\Documentation_PDF_out_NK\tmp\inspect_20260820'
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Get-ChildItem -LiteralPath $src | ForEach-Object {
+    Write-Output ('SRC ' + $_.Name + ' ' + $_.Length)
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $dst $_.Name) -Force
+}
+$reports = '\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\RFP сводный файл'
+Write-Output '--- reports dirs ---'
+Get-ChildItem -LiteralPath $reports -Directory | Sort-Object Name -Descending | Select-Object -First 12 | ForEach-Object {
+    $net = Join-Path $_.FullName 'rfp_parts_net.xlsx'
+    $netExists = Test-Path -LiteralPath $net
+    $netLen = if ($netExists) { (Get-Item -LiteralPath $net).Length } else { 0 }
+    $mtime = if ($netExists) { (Get-Item -LiteralPath $net).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '-' }
+    Write-Output ($_.Name + ' net=' + $netExists + ' size=' + $netLen + ' mtime=' + $mtime)
+}
+Get-ChildItem -LiteralPath $reports -Directory | Where-Object { $_.Name -like '2026.08.20*' } | ForEach-Object {
+    $net = Join-Path $_.FullName 'rfp_parts_net.xlsx'
+    if (Test-Path -LiteralPath $net) {
+        $name = 'rfp_parts_net__' + $_.Name + '.xlsx'
+        Copy-Item -LiteralPath $net -Destination (Join-Path $dst $name) -Force
+        Write-Output ('copied dated net ' + $name)
+    }
+}
+Write-Output '--- dst ---'
+Get-ChildItem -LiteralPath $dst | ForEach-Object { Write-Output ($_.Name + ' ' + $_.Length) }

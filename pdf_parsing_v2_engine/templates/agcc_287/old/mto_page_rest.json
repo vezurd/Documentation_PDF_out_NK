@@ -1,0 +1,319 @@
+{
+  "schema_version": 2,
+  "name": "MTO_BBB_REST_UNION_FRAME",
+  "doc_types": [
+    "BOE",
+    "BOM",
+    "BOQ",
+    "MTO"
+  ],
+  "page_selector": "rest",
+  "priority": 10,
+  "origin": "frame_bottom_right",
+  "padding_mm": 0.5,
+  "grid_adapt": true,
+  "grid_tolerance_template_mm": 0.1,
+  "grid_tolerance_detected_mm": 0.5,
+  "snap_max_distance_mm": 5.0,
+  "max_shape_change_ratio": 2.5,
+  "cascade_score_threshold": 0.4,
+  "fields": [
+    {
+      "id": "1_DOC_TITLE",
+      "bbox_mm": [
+        110.39317538252706,
+        -4.995707857526531,
+        -4.925164409129317,
+        0.0
+      ],
+      "clean": "doc_title",
+      "expected": "optional",
+      "outside_stamp": true,
+      "origin": "frame_top_right",
+      "stretch_to_page": [
+        "top",
+        "right"
+      ]
+    },
+    {
+      "id": "51_Page_Format",
+      "bbox_mm": [
+        79.11757818839436,
+        -4.784034445516575,
+        -4.925164409129317,
+        0.0
+      ],
+      "clean": "page_format",
+      "expected": "required",
+      "outside_stamp": true,
+      "stretch_to_page": [
+        "bottom",
+        "right"
+      ]
+    },
+    {
+      "id": "50_File_Name_Stamp",
+      "bbox_mm": [
+        589.195720139494,
+        -4.784034445516575,
+        70.93281550158497,
+        0.0
+      ],
+      "clean": "file_name_stamp",
+      "expected": "required",
+      "outside_stamp": true,
+      "stretch_to_page": [
+        "bottom",
+        "left"
+      ]
+    },
+    {
+      "id": "6_1_Sheet_number",
+      "bbox_mm": [
+        116.52274643260662,
+        -4.995707857526531,
+        -4.925164409129317,
+        0.0
+      ],
+      "clean": "sheet_number_6_1",
+      "expected": "optional",
+      "outside_stamp": true,
+      "origin": "frame_top_right",
+      "stretch_to_page": [
+        "top",
+        "right"
+      ]
+    },
+    {
+      "id": "6_2_Quantity_of_sheets",
+      "bbox_mm": [
+        123.2600333559054,
+        -4.995707857526531,
+        -4.925164409129317,
+        0.0
+      ],
+      "clean": "sheet_number_6_2",
+      "expected": "optional",
+      "outside_stamp": true,
+      "origin": "frame_top_right",
+      "stretch_to_page": [
+        "top",
+        "right"
+      ]
+    },
+    {
+      "id": "61_Page_Layers",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "61_Page_Layers"
+    },
+    {
+      "id": "62_Page_Bookmarks",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "62_Page_Bookmarks"
+    },
+    {
+      "id": "63_Page_Width",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "63_Page_Width"
+    },
+    {
+      "id": "64_Page_Height",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "64_Page_Height"
+    },
+    {
+      "id": "65_Page_Real_Format",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "65_Page_Real_Format"
+    },
+    {
+      "id": "file_name",
+      "bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clean": null,
+      "expected": "optional",
+      "document_property": "file_name"
+    }
+  ],
+  "frame_mode": "drawing_union",
+  "grid_lines": [
+    {
+      "id": "h_bottom",
+      "orientation": "h",
+      "pos_mm": -0.054,
+      "start_mm": -0.072,
+      "end_mm": 182.841,
+      "boundary": "bottom",
+      "start_line_id": "v_right",
+      "end_line_id": "v_left"
+    },
+    {
+      "id": "h_5.01",
+      "orientation": "h",
+      "pos_mm": 5.007,
+      "start_mm": 116.919,
+      "end_mm": 182.841,
+      "start_line_id": "v_119.92",
+      "end_line_id": "v_left"
+    },
+    {
+      "id": "h_10.01",
+      "orientation": "h",
+      "pos_mm": 10.623,
+      "start_mm": 116.919,
+      "end_mm": 182.841,
+      "start_line_id": "v_119.92",
+      "end_line_id": "v_left"
+    },
+    {
+      "id": "h_top",
+      "orientation": "h",
+      "pos_mm": 15.782,
+      "start_mm": -0.072,
+      "end_mm": 182.841,
+      "boundary": "top",
+      "start_line_id": "v_right",
+      "end_line_id": "v_left"
+    },
+    {
+      "id": "v_right",
+      "orientation": "v",
+      "pos_mm": -0.072,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "boundary": "right",
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_24.98",
+      "orientation": "v",
+      "pos_mm": 10.025,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_119.92",
+      "orientation": "v",
+      "pos_mm": 116.919,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_129.97",
+      "orientation": "v",
+      "pos_mm": 127.271,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_154.99",
+      "orientation": "v",
+      "pos_mm": 152.318,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_164.98",
+      "orientation": "v",
+      "pos_mm": 162.4,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_174.98",
+      "orientation": "v",
+      "pos_mm": 172.361,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_left",
+      "orientation": "v",
+      "pos_mm": 182.841,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "boundary": "left",
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "h_new_3",
+      "orientation": "h",
+      "pos_mm": 10.479,
+      "start_mm": -0.072,
+      "end_mm": 21.21,
+      "start_line_id": "v_right",
+      "end_line_id": "v_new_4"
+    },
+    {
+      "id": "v_new_4",
+      "orientation": "v",
+      "pos_mm": 21.21,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    },
+    {
+      "id": "v_new_1",
+      "orientation": "v",
+      "pos_mm": 142.325,
+      "start_mm": -0.054,
+      "end_mm": 15.782,
+      "start_line_id": "h_bottom",
+      "end_line_id": "h_top"
+    }
+  ]
+}

@@ -1,0 +1,2078 @@
+C:\Users\ydruzev\PycharmProjects\Documentation_PDF_out_NK
+Цель: сжатый контекст для другого чата (структура, API, автономность).
+Обновление: python _gen_project_context.py
+Связи пакетов (импорты между base, RFQ, pdf_parsing_v2, …): см. PROJECT_MODULE_LINKS.txt
+
+Подписи к символам: docstring (первый абзац); иначе — эвристика по имени для «толстых» функций (>2 stmt); у классов Qt/Enum — краткая метка. Мелкие хелперы без docstring не помечаются.
+
+=== ДЕРЕВО (пропуск: .git __pycache__ .venv venv node_modules .pytest_cache .cursor) ===
+├── .idea/  [содержимое опущено (кэш/IDE/релизы); ~10 files]
+├── .vscode/
+│   └── launch.json
+├── _release/  [содержимое опущено (кэш/IDE/релизы); ~4 files]
+├── base/
+│   ├── get_row_type_variants/
+│   │   ├── BOE.py
+│   │   ├── BOM.py
+│   │   ├── BOQ.py
+│   │   ├── ds_specification.py
+│   │   ├── DsVsMto.py
+│   │   ├── GoogleBase.py
+│   │   ├── MTO.py
+│   │   ├── RFP.py
+│   │   ├── RFP_AGGREGATED.py
+│   │   ├── RFQ.py
+│   │   └── VO_MTO.py
+│   ├── AVEVA.py
+│   ├── base_cheks.py
+│   ├── base_class_std_table.py
+│   ├── base_classes.py
+│   ├── base_excel_out.py
+│   ├── base_google.py
+│   ├── base_mto.py
+│   ├── base_utils.py
+│   ├── base_xlsx_load.py
+│   ├── bbb_analysis.py
+│   ├── bbb_analysis_config.json
+│   ├── bbb_checks.py
+│   ├── bbb_config.py
+│   ├── bbb_excel_out.py
+│   ├── bbb_load.py
+│   ├── bbb_output_config.py
+│   ├── bbb_section_types_excel.py
+│   ├── bbb_settings_gui.py
+│   ├── boot.py
+│   ├── cabinet_composition_info.py
+│   ├── excel_recalc_xlwings.py
+│   ├── google_sheets.py
+│   ├── output.py
+│   ├── section_type_info.py
+│   ├── t_comm_initial_classes.py
+│   └── tables_columns.py
+├── base_check/
+│   ├── 2025.08.14_base_check.zip
+│   ├── agcc-codes-73ced3426a29.json
+│   ├── client_secret.json
+│   ├── code_base_data.json
+│   ├── code_base_meta.json
+│   ├── google_code_base_data.json.xlsx
+│   ├── json_open_laying.json
+│   ├── mapping_base_data.json
+│   ├── mapping_base_meta.json
+│   └── no_out_cables.json
+├── cable_mapping/
+│   ├── cj_check/
+│   │   └── cj_check_main.py
+│   ├── cm_clss/
+│   │   ├── cls_cable_lable.py
+│   │   ├── cls_CableTerminal.py
+│   │   ├── cm_CableLayingTypes.py
+│   │   ├── cm_CableTable.py
+│   │   ├── cm_CableTableRow.py
+│   │   ├── cm_ColumnsCableTable.py
+│   │   ├── cm_ElementCT.py
+│   │   └── cm_TableCommentsCabMap.py
+│   ├── cm_functions/
+│   │   ├── cm_from_where_terminal.py
+│   │   ├── cm_get_cable_numbers.py
+│   │   └── cm_renumber_tpk_cables.py
+│   ├── mapping/
+│   │   ├── get_cj.py
+│   │   ├── get_summary.py
+│   │   ├── load_map_from_google.py
+│   │   ├── map_calsses.py
+│   │   └── summary_cables.py
+│   ├── cab_mapping.py
+│   ├── constants.py
+│   ├── load_tpk.py
+│   ├── lolad_docx_cj.py
+│   ├── map_excel_out.py
+│   └── utils_cm.py
+├── cache/  [содержимое опущено (кэш/IDE/релизы); ~142 files]
+├── configurator/
+├── debug/
+│   ├── _dbg_att.xlsx
+│   └── ~$_dbg_att.xlsx
+├── debug_output/
+│   └── ds_mto_debug_20250925_122300.xlsx
+├── GUI/
+│   ├── test/  [демо CustomTkinter (виджеты/темы); ~14 files; перечисление опущено]
+│   ├── gui_app.py
+│   ├── gui_constants.py
+│   └── treeviewdata.json
+├── nano_cad/
+│   ├── fields_tables/
+│   │   └── tables_fields.py
+│   ├── fields_in_tables.py
+│   ├── import_db.py
+│   ├── nc_start.py
+│   ├── test_db.py
+│   └── write_db.py
+├── pdf_parsing/
+│   ├── camelot_stamp_debug.py
+│   ├── cell_lists.py
+│   ├── compare_pdf_pipeline_outputs.py
+│   ├── console_out_Cur_Proj.py
+│   ├── elements_coordinates.py
+│   ├── files_att_collector.py
+│   ├── files_att_collector_excel_att_parsing_output.py
+│   ├── find_function_MTO_BBB.py
+│   ├── find_functions.py
+│   ├── find_tags.py
+│   ├── get_pdf_files_list.py
+│   ├── od_raw_read_file.py
+│   ├── OD_tab_parsing.py
+│   ├── pdf_config.py
+│   ├── pdf_parsing_utils.py
+│   ├── pdf_perf_benchmark.py
+│   ├── pdf_pickle_diagnostic.py
+│   ├── pdf_pipeline_main.py
+│   ├── pdf_settings_gui.py
+│   ├── pdf_timing_log.py
+│   ├── pdf_worker.py
+│   ├── README_stamp_parser.md
+│   ├── rules_check.py
+│   ├── shtamp_extract_classes.py
+│   ├── stamp_config.json
+│   ├── stamp_config_editor.py
+│   ├── stamp_config_manager.py
+│   ├── stamp_parser.py
+│   ├── stamp_parser_example.py
+│   └── template_stamp_extractor_test.py
+├── pdf_parsing_v2/
+│   ├── grid_diagnostic_output/  [выход grid diagnostic: PNG-оверлеи и вложенные отчёты; ~213 files; дерево опущено]
+│   ├── template_editor/
+│   │   ├── __init__.py
+│   │   ├── __main__.py
+│   │   ├── _save_dialog.py
+│   │   ├── adapt_debug.py
+│   │   ├── auto_detect.py
+│   │   ├── catalog_editor.py
+│   │   ├── CATALOG_TEMPLATE_ROLES.md
+│   │   ├── cell_items.py
+│   │   ├── cells_panel.py
+│   │   ├── graphics_view.py
+│   │   ├── grid_line_items.py
+│   │   ├── main_window.py
+│   │   ├── properties_panel.py
+│   │   ├── set_editor.py
+│   │   ├── template_meta_panel.py
+│   │   ├── templates_browser.py
+│   │   └── wireframe_panel.py
+│   ├── templates/
+│   │   ├── agcc_287/  [JSON шаблоны проекта agcc_287; ~8 files; перечисление опущено]
+│   │   ├── catalogs/  [каталоги полей fields_*.json; ~1 files; перечисление опущено]
+│   │   ├── sets/  [legacy TemplateSet *.json; ~1 files; перечисление опущено]
+│   │   ├── test_pdf/  [тестовые PDF v2 (BBB/CJ/DWG/MTO/OD); ~104 files; перечисление опущено]
+│   │   ├── bbb_mto_page1.json
+│   │   ├── bbb_mto_page2.json
+│   │   ├── cj_page1.json
+│   │   ├── dwg_page1.json
+│   │   ├── dwg_page1_full_grid.json
+│   │   ├── dwg_page2.json
+│   │   └── od_page1.json
+│   ├── __init__.py
+│   ├── _build_dwg_page1_json.py
+│   ├── _build_stamp_templates.py
+│   ├── char_text_extractor.py
+│   ├── compare_v1_v2.py
+│   ├── compat.py
+│   ├── coord_transform.py
+│   ├── debug_visual.py
+│   ├── field_cleaners.py
+│   ├── find_tables_settings.py
+│   ├── frame_detector.py
+│   ├── grid_diagnostic.py
+│   ├── grid_lines_utils.py
+│   ├── grid_matcher.py
+│   ├── migrate_to_project_folders.py
+│   ├── models.py
+│   ├── mto_grid_diagnostic.py
+│   ├── pdf_v2_settings_gui.py
+│   ├── PLAN_cascade_adaptation.md
+│   ├── stamp_extractor.py
+│   ├── stamp_fill_gaps.py
+│   ├── template_loader.py
+│   ├── test_progressive_interp.py
+│   ├── v2_config.py
+│   ├── v2_pipeline.py
+│   └── v2_report.py
+├── RFQ/
+│   ├── .idea/  [содержимое опущено (кэш/IDE/релизы); ~8 files]
+│   ├── ds_compare/
+│   │   ├── cache/  [содержимое опущено (кэш/IDE/релизы); ~62 files]
+│   │   ├── static/
+│   │   │   └── Code_Replacement_Table.xlsx
+│   │   ├── templates/  [xlsx-шаблоны сравнения ДС↔MTO; ~2 files; перечисление опущено]
+│   │   ├── aggregate_mto_positions.py
+│   │   ├── ds_classes.py
+│   │   ├── ds_compare_config.json
+│   │   ├── ds_compare_config.py
+│   │   ├── ds_merge_folder.py
+│   │   ├── ds_start_init.py
+│   │   ├── DsMtoTable.py
+│   │   ├── get_mto_list_from_ds.py
+│   │   ├── load_mto.py
+│   │   ├── mto_check.py
+│   │   ├── mto_ds_compare.py
+│   │   ├── report.py
+│   │   ├── support_finctions.py
+│   │   └── шаблон столбцов ДС.xlsx
+│   ├── pre_Address/
+│   │   └── start_pre_address.py
+│   ├── R_R/
+│   │   └── R_compare.py
+│   ├── resourse/
+│   │   └── 2025.09.2025_Сводная по ДС13_46.xlsx
+│   ├── tags_rfp_compare/
+│   │   ├── cache/  [содержимое опущено (кэш/IDE/релизы); ~858 files]
+│   │   ├── input/
+│   │   │   ├── code_ban.txt
+│   │   │   ├── registr_lot.xlsx
+│   │   │   ├── КСБ. Сверка TAG-номеров БЫЛОСТАЛО..msg
+│   │   │   └── Сводная RFP.xlsx
+│   │   ├── step4/
+│   │   │   ├── __init__.py
+│   │   │   ├── step4_1_check_mto_data.py
+│   │   │   ├── step4_2_match_rfp_with_mto.py
+│   │   │   ├── step4_3_assign_position_status.py
+│   │   │   ├── step4_4_add_unmatched_mto_rows.py
+│   │   │   ├── step4_5_check_values_sum.py
+│   │   │   ├── step4_6_cell_colors.py
+│   │   │   ├── step4_6_save_match_result_to_excel.py
+│   │   │   ├── step4_postmerge_ops.py
+│   │   │   └── step4_worker.py
+│   │   ├── tamplates/
+│   │   │   └── RFP_проверка_тегов_ошибки_Сводная RFP_шаблон.xlsx
+│   │   ├── agregate_tags.py
+│   │   ├── column_optimization.py
+│   │   ├── column_optimization_default.json
+│   │   ├── compare_step4_files.py
+│   │   ├── mto_file_filter.py
+│   │   ├── rfp_tags_compare_config.json
+│   │   ├── rfp_tags_compare_config_asbuild.json
+│   │   ├── rfp_tags_settings_gui.py
+│   │   ├── rfp_tags_utils.py
+│   │   ├── run_compare_step4.bat
+│   │   ├── SETTINGS_REFERENCE.md
+│   │   ├── step1_load_rfp.py
+│   │   ├── step2_load_mto.py
+│   │   ├── step3_load_vo.py
+│   │   ├── step4_analyze_and_match.py
+│   │   └── ОТЧЕТ_ПО_РАБОТЕ_ПРОГРАММЫ.md
+│   ├── ZIP/
+│   │   ├── zip_code_rules.py
+│   │   └── zip_start.py
+│   ├── cls_MtoCompareRow.py
+│   ├── DS_compare_functions.py
+│   ├── DS_compare_MTO.py
+│   ├── func_get_unique_row_list.py
+│   ├── mto_compare.py
+│   ├── RFQ_compare.py
+│   └── Value_Compare.py
+├── static/
+│   ├── css/
+│   │   └── style.css
+│   ├── js/
+│   │   └── script.js
+│   └── AGCC.0091-04-0000-ИОС7.12.2_0_RU-УЛ.DOCX
+├── tags/
+│   ├── decimal_format.py
+│   ├── equipment_codes.py
+│   ├── tag_classes.py
+│   └── tag_parser.py
+├── templates/  [шаблоны выгрузок Excel, JSON штампов, HTML, примеры имён документов; ~25 files; перечисление опущено]
+├── tmp_step4_compare/
+│   ├── b4_validation_20260226.json
+│   ├── order_compare.json
+│   ├── row_multiset_compare.json
+│   ├── Шаг4_Различия_20260226_121709.xlsx
+│   ├── Шаг4_Сопоставление_RFP_MTO_20260226_102143.xlsx
+│   └── Шаг4_Сопоставление_RFP_MTO_20260226_112947.xlsx
+├── tmp_step4_compare_v2/
+│   ├── order_compare_latest.json
+│   ├── row_multiset_compare_latest.json
+│   ├── Шаг4_Различия_20260226_134936.xlsx
+│   ├── Шаг4_Сопоставление_RFP_MTO_20260226_102143.xlsx
+│   └── Шаг4_Сопоставление_RFP_MTO_20260226_131234.xlsx
+├── uploads/
+├── utils/
+│   ├── bbox/
+│   │   ├── __init__.py
+│   │   ├── bbox2d.py
+│   │   ├── bbox2d_list.py
+│   │   ├── box_modes.py
+│   │   ├── geometry.py
+│   │   ├── metrics.py
+│   │   └── utils.py
+│   ├── PD/
+│   │   ├── pd_start.py
+│   │   └── подсчет листов.py
+│   ├── Scaner_XLSX/
+│   │   ├── 01_scaner_xlsx.py
+│   │   ├── 02_scaner_xlsx_cleaner.py
+│   │   ├── 03_filter_file_path.py
+│   │   ├── 05_clear_code.py
+│   │   ├── analyze_xlsx.py
+│   │   ├── f04_00_process_valid_paths.py
+│   │   ├── f04_01_analyze_mto.py
+│   │   ├── f04_02_functions.py
+│   │   └── f_04_000_in_one.py
+│   ├── cache_manager_cli.py
+│   ├── cache_utils.py
+│   ├── colors.py
+│   ├── error_log.py
+│   ├── excel.py
+│   ├── file_name_converts.py
+│   ├── folder_select.py
+│   ├── formats_A.py
+│   ├── integer_converse.py
+│   ├── md5.py
+│   ├── path.py
+│   ├── prints_to_console.py
+│   ├── release_zip.py
+│   ├── save_to_file.py
+│   ├── string_parsing.py
+│   └── time_cls.py
+├── XML/
+│   └── xml_read.py
+├── .release_zipignore
+├── _gen_project_context.py
+├── build_release_zip.bat
+├── gui_subprocess_job.py
+├── help_descriptions.py
+├── inspect_bbb_excel.py
+├── main.py
+├── pdf_pipeline_config.json
+├── pdf_v2_config.json
+├── PROJECT_CONTEXT_FOR_CHAT.txt
+├── test — копия.py
+├── test.py
+└── test_2.py
+
+=== PYTHON: классы и публичные функции (верхний уровень; _private пропущены) ===
+--- base/AVEVA.py ---
+  def aveva_get_std_from_file()
+  def equipment_get_std_from_file()
+
+--- base/base_cheks.py ---
+  def base_vs_base_std()
+  def base_vs_base_correction()
+  def check_by_code()
+    # mode: "comment" - Только комментирование "correction" - Корректирование значений по code_base_std enable_comment: если True (по умолчанию) — добавлять комментарии к ячейкам enable_soft_compare_color: если True (по умолчанию) — красить в жёлтый при soft_compare, если False — красить в бледно-зелёный
+  def check_long_tag_list()
+    # Проверяем кол-во тегов в строчке Если больше tag_max_count разбиваем на несколько строк добавляя к нумерации дополнительный индекс :param base: list of RowCheck()
+  def tag_vs_value_sub_check()
+  def check_equipment_codes()
+    # Проверка Кодов оборудования. Для позиций для которых требуется тегирование ARK, BZ и т.п. проверяем что есть тег и он корректный :param google_base_std: :param base:
+  def check_tags_value()
+    # Сравнение количества тегов у позиции с количеством материала :param base: list of RowCheck()
+  def check_value()
+    # Проверка на дробные значения в поле value - если шт. и дробное значение - ошибка :param base: list of RowCheck()
+  def check_duplicate_tags()
+    # Проверка на дублирование тегов в списке тегов по всем строкам base :param base: list of RowCheck()
+  def check_prohibition()
+    # Проверка на запрещенные к применению коды оборудования (столбец K в ГуглТаблице - Группа) :param google_base_std: :param base:
+  def check_mass()
+    # Проверка совпадения массы с ГуглТаблицей :param google_base_std: :param base:
+  def check_tags_4_2_4_4()
+    # Проверка тегов на приложения 4.2 и 4.4 :param base:
+  def soft_compare()
+  def check_position_row()
+  def check_position_numeration()
+    # Проверка нумерации во втором столбце
+
+--- base/base_class_std_table.py ---
+  class STDTable
+    # Контейнер данных / логики модуля.
+
+--- base/base_classes.py ---
+  [файл] RowStd, CheckElement, RowType; копии строк для split (_COPY_COLS, batch_copy_light).
+  class TableComments
+    # Метаданные файла/листа для веток MTO/VO/RFP в парсере.
+  class RowStd
+    # Строка таблицы: dict колонка → CheckElement, тип строки, комментарии.
+  class CheckElement
+    # Ячейка: value, struck_value, color.
+  class RowType
+    # Категория строки (секция, позиция, пустая, заголовок, …).
+
+--- base/base_excel_out.py ---
+  [файл] Выгрузка таблиц RowStd в Excel (общие утилиты).
+  def excel_base_out()
+    # Формирование или запись Excel.
+  def check_color_out()
+    # Проверка данных или условий.
+
+--- base/base_google.py ---
+  [файл] Code base с Google Drive / локальный кэш (meta + json).
+  def load_base()
+    # Загрузка Google-базы с автоматической проверкой актуальности кэша.
+  def google_base_vs_base()
+  def google_get_data()
+  def google_get_worksheet()
+  def google_update_cell()
+  def load_json()
+  def code_base_formating()
+  def base_raw_to_std()
+
+--- base/base_mto.py ---
+  def trim_empty_rows_from_end()
+    # Обрезает пустые строки в конце массива для оптимизации последующей работы. Args: input_base_std: Список строк RowStd max_empty_rows: Максимальное количество пустых строк в конце, при превышении которых происходит обрезка Returns: Обрезанный список строк
+  def get_mto_std_from_file()
+    # Получение значения, пути или конфига.
+  def get_std_from_excel_file()
+    # Получение значения, пути или конфига.
+
+--- base/base_utils.py ---
+  def check_code()
+    # Проверка данных или условий.
+  def str_remove_junk()
+  def str_remove_n_x000D_()
+  def tags_to_str()
+
+--- base/base_xlsx_load.py ---
+  [файл] Загрузка xlsx в RowStd, кэш формул, снятие зачёркивания, подготовка к 1С.
+  class FormulaCacheMissingError -> RuntimeError
+    # В xlsx у ячейки с формулой нет кэшированного значения (data_only → None).
+  def load_from_xlsx_file()
+    # Загрузка данных или конфигурации.
+  def list_raw_to_std_old()
+  def list_raw_to_std()
+  def get_strike_unstruck()
+    # Получение значения, пути или конфига.
+  def backup_xlsx_to_old_subfolder()
+    # Копия xlsx в подпапку old_backup_<timestamp> рядом с файлом (как у снятия зачёркивания).
+  def remove_strikethrough_from_xlsx()
+    # Создаёт резервную копию Excel-файла и удаляет зачёркнутый текст из ячеек, сохраняя остальное форматирование (шрифт, размер, цвет, границы и т.д.).
+  def replace_formulas_with_cached_values()
+    # Заменяет в книге формулы на кэшированные значения из файла (режим data_only).
+  def remove_hidden_sheets_for_1c()
+    # Удаляет все скрытые и очень скрытые листы (экспорт «Для 1C»). Должен вызываться после замены формул на значения на основном листе.
+
+--- base/bbb_analysis.py ---
+  [файл] Конвейер анализа BBB-спецификаций.
+  def start_bbb_analysis()
+    # Запуск сценария или подсистемы.
+
+--- base/bbb_checks.py ---
+  [файл] Правила проверок строк/секций BBB.
+  def bbb_vs_code_base()
+    # Этап 1: проверка BBB данных по code_base (аналог base_vs_base_std). cfg — секция bbb_vs_code_base из bbb_config.
+  def bbb_vs_mto_combined()
+    # Этап 2: объединённое сравнение BOE+BOM с MTO по CODE. VALUES и TAGS проверяются по суммарной картине двух BBB документов, при этом построчные field-checks сохраняются отдельно для каждой строки.
+
+--- base/bbb_config.py ---
+  [файл] Загрузка JSON конфигурации BBB.
+  def get_default_config()
+  def get_section_target()
+    # Возвращает целевой документ (BOE/BOM) для секции MTO.
+  def load_config()
+    # Загрузка данных или конфигурации.
+  def save_config()
+    # Сохранение/запись результата.
+
+--- base/bbb_excel_out.py ---
+  [файл] Формирование отчётных Excel по BBB.
+  def save_bbb_to_excel()
+    # Сохраняет результат проверки BBB в Excel с заголовками и ширинами из конфигурации.
+
+--- base/bbb_load.py ---
+  [файл] Поиск файлов BBB по конфигу.
+  def find_bbb_files()
+    # Ищет в dir_path файлы .xlsx и классифицирует их по doc_Type. Возвращает dict вида {"BOE": doc_ATTRIBUTES, "BOM": doc_ATTRIBUTES, ...}
+  def load_bbb_file()
+    # Загружает BBB файл (BOE/BOM/BOQ) в list[RowStd].
+  def load_mto_file()
+    # Загружает MTO файл из найденного doc_ATTRIBUTES объекта.
+  def load_all_from_dir()
+    # Ищет и загружает все BBB и MTO файлы из dir_path. Возвращает dict: {"BOE": list[RowStd], "BOM": list[RowStd], "BOQ": list[RowStd], "MTO": list[RowStd]}
+
+--- base/bbb_output_config.py ---
+  [модуль] Конфигурация столбцов вывода для BBB (BOE, BOM, BOQ). По аналогии с OUTPUT_COLUMNS_CONFIG из step4_6_save_match_result_to_excel.py.
+  class ColumnDef
+  def get_bbb_output_config()
+
+--- base/bbb_section_types_excel.py ---
+  [модуль] Хранение конфигурации section_types в общем Excel файле на сетевом диске.
+  def get_excel_path()
+  def load_section_types()
+    # Загружает section_types из Excel файла на сетевом диске. При недоступности файла возвращает базовые секции с предупреждением.
+  def save_section_types()
+    # Сохраняет section_types в Excel на сетевом диске. При блокировке файла другим пользователем выводит предупреждение и возвращает False.
+  def add_new_sections_if_missing()
+    # Добавляет новые секции в Excel, если их там нет (читает → мёрджит → пишет). Возвращает True если запись прошла успешно.
+
+--- base/bbb_settings_gui.py ---
+  [модуль] Окно объединённых настроек MTO + BBB. Позволяет управлять запуском MTO/BBB и детальными проверками MTO/BBB.
+  def show_bbb_settings()
+    # Показ UI или открытие диалога/папки.
+
+--- base/boot.py ---
+  def base_co_get_std_from_file()
+
+--- base/cabinet_composition_info.py ---
+  def add_cabinet_composition_info()
+    # Добавляет информацию о составе шкафов в столбец IN_CABINET. Определяет какие позиции относятся к каждому шкафу на основе иерархической нумерации.
+  def get_cabinet_tag_simple()
+    # Упрощенная логика получения тега шкафа: 1. Особый случай: если в NAME есть "Оборудование в шкафу" — извлекаем тег через get_tag 2. Ищем в следующих строках position_row (пропуская empty_row) 3. Берем из заголовка шкафа 4. Генерируем дефолтный тег если не нашли
+  def is_position_part_of_cabinet()
+    # Проверяет, относится ли позиция к шкафу с учетом возможных ошибок нумерации.
+  def is_hierarchically_related()
+    # Проверяет иерархическую связь с учетом возможных ошибок нумерации.
+  def is_contextually_related()
+    # Проверяет принадлежность к шкафу по контексту для строк без номера.
+  def mark_cabinet_positions()
+    # Помечает все позиции, относящиеся к данному шкафу с учетом ошибок нумерации.
+
+--- base/excel_recalc_xlwings.py ---
+  [модуль] Полный пересчёт книги в Microsoft Excel (COM) для записи актуального кэша формул в xlsx.
+  def recalculate_workbook_save()
+    # Открывает xlsx в Excel, выполняет CalculateFullRebuild, сохраняет и закрывает книгу.
+
+--- base/get_row_type_variants/BOE.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/BOM.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/BOQ.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/ds_specification.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/DsVsMto.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/GoogleBase.py ---
+  def get_row_type()
+
+--- base/get_row_type_variants/MTO.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/RFP.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/RFP_AGGREGATED.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/RFQ.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/get_row_type_variants/VO_MTO.py ---
+  def get_row_type()
+    # Получение значения, пути или конфига.
+
+--- base/google_sheets.py ---
+  def start()
+    # 01. Открытие МТО Ищем МТО в папке mto_path Заносим путь к найденному МТО в mto_file_path
+
+--- base/output.py ---
+  def output_get_std_from_file()
+
+--- base/section_type_info.py ---
+  [модуль] Заполнение колонки SECTION_TYPE для position_row строк.
+  def add_section_type_info()
+    # Проходит по таблице и записывает в SECTION_TYPE каждой position_row название ближайшей предшествующей section_row.
+
+--- base/t_comm_initial_classes.py ---
+  class DSZin
+  class DsSpecification
+  class ListDsSpecification
+  class ListDsSpecificationVsMto
+  class MTO
+  class OUTPUT
+  class ZIP
+  class ZipCompare
+  class BOOT_CO
+  class AVEVA
+  class RFQ
+  class RFP
+  class RFP_AGGREGATED
+  class VO_MTO
+  class GoogleBase
+  class EQUIPMENT
+  class BOE
+  class BOM
+  class BOQ
+
+--- base/tables_columns.py ---
+  [файл] Имена колонок Excel и статусов матчинга; общие константы таблиц.
+  class ColNames
+    # Это основной список атрибутов для класса RowStd (стандартный ряд таблиц) Все столбцы используемые в работе должны быть занесены сюда
+
+--- cable_mapping/cab_mapping.py ---
+  [файл] Старт конвейера кабельных карт / сводок.
+  def cab_mapping_start()
+
+--- cable_mapping/cj_check/cj_check_main.py ---
+  [модуль] Функция проверки кабельного журнала существующего. Проверяем: 1. Код кабеля (CJ_CABLE_CODE) 2. Дополнительный код (CJ_ADDITIONAL_CODE)
+  def cj_check()
+
+--- cable_mapping/cm_clss/cls_cable_lable.py ---
+  [модуль] CableLabelCls Принимает на вход строку с коротким тегом кабеля. Разбивает на 3 части: cable_code : I, C, P и т.п. additional_code : EX или Is cable_number : децимальный номер
+  class CableLabelCls
+
+--- cable_mapping/cm_clss/cls_CableTerminal.py ---
+  class CableTerminal
+
+--- cable_mapping/cm_clss/cm_CableLayingTypes.py ---
+  class CableLayingTypes
+
+--- cable_mapping/cm_clss/cm_CableTable.py ---
+  class CableTable
+    # Контейнер данных / логики модуля.
+
+--- cable_mapping/cm_clss/cm_CableTableRow.py ---
+  class CableTableRow
+    # Контейнер данных / логики модуля.
+
+--- cable_mapping/cm_clss/cm_ColumnsCableTable.py ---
+  class ColumnsCableTable
+
+--- cable_mapping/cm_clss/cm_ElementCT.py ---
+  class ElementCT
+
+--- cable_mapping/cm_clss/cm_TableCommentsCabMap.py ---
+  class TableCommentsCabMap
+  class DocumentCabMap
+
+--- cable_mapping/cm_functions/cm_from_where_terminal.py ---
+  def replace_regular_from_where()
+  def regular_compare()
+  def get_clean_terminal_from_where_no_reg()
+    # Получение значения, пути или конфига.
+
+--- cable_mapping/cm_functions/cm_get_cable_numbers.py ---
+  def get_cable_numbers_from_cj()
+    # Получение значения, пути или конфига.
+
+--- cable_mapping/cm_functions/cm_renumber_tpk_cables.py ---
+  [модуль] Перебираем номера строк которые не нашлись в старом КЖ и обновляем номера кабелей
+  def renumber_tpk_cables()
+
+--- cable_mapping/load_tpk.py ---
+  def load_from_xlsx_file()
+    # Загрузка данных или конфигурации.
+  def tpk_raw_to_std()
+  def tpk_normalize_laying_types()
+  def tpk_normalize_column_from()
+  def tpk_normalize()
+
+--- cable_mapping/lolad_docx_cj.py ---
+  def load_cj_from_docx()
+    # Загрузка данных или конфигурации.
+  def check_row_type()
+    # Проверка данных или условий.
+
+--- cable_mapping/map_excel_out.py ---
+  def check_color_out_map()
+    # Проверка данных или условий.
+
+--- cable_mapping/mapping/get_cj.py ---
+  def get_map_table_temp_row()
+    # Ищем в MapTable сочетание для row и записываем: CJ_CABLE_CODE CJ_ADDITIONAL_CODE CJ_FROM_TERMINAL CJ_WHERE_TERMINAL
+  def get_cj()
+    # Получение значения, пути или конфига.
+  def print_err_duplicates()
+  def print_err_no_found_combination()
+
+--- cable_mapping/mapping/get_summary.py ---
+  def get_summary_from_cj_table()
+    # Получение значения, пути или конфига.
+
+--- cable_mapping/mapping/load_map_from_google.py ---
+  [файл] Загрузка mapping с Google + локальный кэш.
+  def load_map_google_base()
+    # Загрузка данных или конфигурации.
+  def load_no_out_cables_google_base()
+    # Загрузка данных или конфигурации.
+  def open_laying_google_base()
+    # Показ UI или открытие диалога/папки.
+
+--- cable_mapping/mapping/map_calsses.py ---
+  class MapTable
+    # Контейнер данных / логики модуля.
+
+--- cable_mapping/mapping/summary_cables.py ---
+  class SummaryRow
+    # Контейнер данных / логики модуля.
+  class CableSummary
+    # Контейнер данных / логики модуля.
+
+--- cable_mapping/utils_cm.py ---
+  def get_files_list()
+    # Получение значения, пути или конфига.
+  def print_list_std_row_func()
+  def print_file_list_to_console_cab_map()
+
+--- GUI/gui_app.py ---
+  class App -> TKMT.ThemedTKinterFrame
+    # Контейнер данных / логики модуля.
+
+--- GUI/gui_constants.py ---
+  class GuiConst
+
+--- gui_subprocess_job.py ---
+  [файл] Паттерн фоновой работы: threading, статус на кнопке, результат subprocess.
+  def run_subprocess_job_on_button()
+    # Старт задачи: блокирует кнопку, тикер времени, по завершении — цвет/текст и сброс через reset_after_ms. Если is_running() уже True — кратко показать «Уже выполняется…» (тикер это подхватит).
+  def attach_busy_aware_command()
+
+--- help_descriptions.py ---
+  [файл] Тексты подсказок для кнопок GUI.
+  def get_help_description()
+    # Возвращает описание функции по ключу
+  def get_all_keys()
+    # Возвращает список всех доступных ключей
+
+--- main.py ---
+  [файл] Главное GUI (CustomTkinter): PDF v1/v2, сравнение тегов RFP↔MTO↔VO, BBB, DS/MTO, кабельные карты, nano_cad, zip; subprocess + busy-кнопки.
+  def start()
+    # Основная функция запуска чтения и анализа PDF файлов На вход принимает путь к файлам PDF: pdf_path: str
+  def open_nanocad_db()
+    # Показ UI или открытие диалога/папки.
+  def open_rfq_folder()
+    # Показ UI или открытие диалога/папки.
+  def open_mto_mto_folder()
+    # Показ UI или открытие диалога/папки.
+  def open_ds_mto_file()
+    # Показ UI или открытие диалога/папки.
+  def open_ds_mto_folder()
+    # Показ UI или открытие диалога/папки.
+  def open_remove_strikethrough()
+    # Выбрать файл MTO и убрать зачёркнутый текст из листа 'Спецификация'.
+  def open_remove_strikethrough_bbb()
+    # Выбрать папку с BOE/BOM/BOQ файлами и убрать зачёркнутый текст.
+  def open_prepare_bbb_for_1c()
+    # Папка с BOE/BOM/BOQ: резервная копия, снятие зачёркивания, пересчёт в Excel (кэш формул), замена формул на значения, удаление скрытых листов, снова пересчёт в Excel (кэш для последующих роботов). Требуются Windows, Excel, xlwings.
+  def open_project_release_zip()
+    # Собрать ZIP проекта без локального кэша/временных файлов.
+  def wire_agregate_tags_button()
+    # Связывание кнопки/виджета с фоновой задачей или командой.
+  def wire_agregate_tags_asbuild_button()
+    # Связывание кнопки/виджета с фоновой задачей или командой.
+  def wire_pdf_button()
+    # Связывание кнопки/виджета с фоновой задачей или командой.
+  def wire_pdf_v2_button()
+    # Связывание кнопки/виджета с фоновой задачей или командой.
+  def open_latest_step4_result()
+    # Открывает последний по дате/времени файл Шаг4_Сопоставление_RFP_MTO_*.xlsx в Excel.
+  def open_bbb_folder()
+    # Выбрать папку с BBB (BOE/BOM/BOQ) и MTO файлами и запустить анализ.
+  def open_mto_dwg_with_optional_bbb()
+    # Выбрать папку DWG с MTO и запустить MTO/BBB проверки по флагам в настройках.
+  def open_merge_ds_folder()
+    # Показ UI или открытие диалога/папки.
+  def open_mto_ds_file()
+    # Показ UI или открытие диалога/папки.
+  def open_mto_mto_multi_folder()
+    # Показ UI или открытие диалога/папки.
+  def open_pdf_folder()
+    # Показ UI или открытие диалога/папки.
+  def button_open_cj_dir()
+  def open_file_att()
+    # Показ UI или открытие диалога/папки.
+  def open_dir_att()
+    # Показ UI или открытие диалога/папки.
+  def check_tags_button()
+    # Проверка данных или условий.
+  def show_help()
+    # Показывает справку по функции
+  class SetButton -> customtkinter.CTkButton
+    # Контейнер данных / логики модуля.
+  class ButtonWithHelp
+    # Класс для создания кнопки с иконкой справки (или альтернативной вторичной кнопкой).
+  class SetLabel -> customtkinter.CTkLabel
+    # Контейнер данных / логики модуля.
+
+--- nano_cad/fields_in_tables.py ---
+  class TableFields
+    # Контейнер данных / логики модуля.
+
+--- nano_cad/fields_tables/tables_fields.py ---
+  class Dbf
+
+--- nano_cad/import_db.py ---
+  def get_list_from_db()
+    # Получение значения, пути или конфига.
+  def import_db()
+
+--- nano_cad/nc_start.py ---
+  [файл] Точка входа подсистемы экспорта полей в NanoCAD.
+  def load_db()
+    # Загрузка данных или конфигурации.
+
+--- nano_cad/test_db.py ---
+  def search_in_all_tables()
+    # Поиск строки во всех таблицах SQLite базы
+
+--- nano_cad/write_db.py ---
+  def write_db()
+    # Сохранение/запись результата.
+
+--- pdf_parsing/camelot_stamp_debug.py ---
+  [модуль] Вспомогательный скрипт для тестирования извлечения штампов с помощью Camelot.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing/cell_lists.py ---
+  class CellListsFF
+    # Контейнер данных / логики модуля.
+
+--- pdf_parsing/compare_pdf_pipeline_outputs.py ---
+  [модуль] D.1 (roadmap): сравнение результатов PDF pipeline sequential vs parallel.
+  def compare_result_directories()
+    # Сравнение сущностей или результатов.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing/console_out_Cur_Proj.py ---
+  def console_output()
+
+--- pdf_parsing/elements_coordinates.py ---
+  class Element_Shtamp
+  class File_Name_Shtamp_50
+    # Контейнер данных / логики модуля.
+  class Page_Format_51
+    # Контейнер данных / логики модуля.
+  class DOC_TITLE_1
+  class Construction_facility_name_2
+  class Unit_title_name_3
+  class Document_name_4
+  class Designation_of_documentation_type_5
+  class Sheet_number_Current_sheet_number_6_1
+  class Sheet_number_Current_sheet_number_6_2
+  class Total_number_of_sheets_7
+  class Signatures_Date_10
+  class Current_Revision_18_1
+  class Revision_Date_18_2
+  class Purpose_of_issue_18_3
+  class Current_Document_Revision_26
+  def baese_point_diff_calc()
+
+--- pdf_parsing/files_att_collector.py ---
+  [файл] Основной обход PDF v1: страницы, штампы, вызов извлечения атрибутов.
+  def files_attribute_collector_f()
+
+--- pdf_parsing/files_att_collector_excel_att_parsing_output.py ---
+  def excel_curr_proj_output_f()
+    # Формирование или запись Excel.
+
+--- pdf_parsing/find_function_MTO_BBB.py ---
+  class BiggestElement
+  def check_element_position()
+  def get_cur_page_MTO_BBB()
+    # Получение значения, пути или конфига.
+
+--- pdf_parsing/find_functions.py ---
+  def check_color_out()
+    # Проверка данных или условий.
+  def get_biggest_bbox()
+    # Получение значения, пути или конфига.
+  def baese_point_diff_calc()
+  def draw_pdf()
+  def draw_point()
+  def get_cur_page_1()
+    # Получение значения, пути или конфига.
+
+--- pdf_parsing/find_tags.py ---
+  [файл] parse_tags → tag_parser для списка документов.
+  def parse_tags()
+    # Извлекает теги из PDF документов.
+
+--- pdf_parsing/get_pdf_files_list.py ---
+  def read_pdf_files_from_folder()
+  def get_files_multi()
+    # Получение значения, пути или конфига.
+  def scan_folder()
+
+--- pdf_parsing/od_raw_read_file.py ---
+  def table_converter()
+  def od_read_raw_f()
+
+--- pdf_parsing/OD_tab_parsing.py ---
+  class DocOdAttributes
+  def string_to_att_list()
+  def od_table_parsing_f()
+  def OD_table_from_file()
+  def console_print_OD_list()
+  def get_page_count()
+    # Получение значения, пути или конфига.
+
+--- pdf_parsing/pdf_config.py ---
+  [файл] JSON настроек parallel/timing PDF v1.
+  def get_pdf_config_path()
+  def get_default_pdf_config()
+  def load_pdf_config()
+    # Загрузка данных или конфигурации.
+  def save_pdf_config()
+    # Сохранение/запись результата.
+  def effective_max_workers()
+    # max_workers==0 → os.cpu_count()-1 (минимум 1).
+
+--- pdf_parsing/pdf_parsing_utils.py ---
+  def get_multilayer_fitz()
+  def get_annotation_fitz()
+    # Получение значения, пути или конфига.
+
+--- pdf_parsing/pdf_perf_benchmark.py ---
+  [модуль] D.2 (roadmap): замер wall-clock sequential vs parallel и оценка pickle-overhead.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing/pdf_pickle_diagnostic.py ---
+  [модуль] Диагностика pickle для doc_ATTRIBUTES / PageStampAttributes (этап B.4 roadmap).
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing/pdf_pipeline_main.py ---
+  [файл] Точка входа subprocess для parallel/sequential PDF pipeline v1.
+  def run_pdf_pipeline()
+    # Основной pipeline: чтение PDF, теги, ОД, нормоконтроль.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing/pdf_settings_gui.py ---
+  [модуль] Окно настроек PDF pipeline (параллелизм).
+  def show_pdf_settings()
+    # Показ UI или открытие диалога/папки.
+
+--- pdf_parsing/pdf_timing_log.py ---
+  [модуль] Timing log для PDF pipeline — буферизация замеров времени по этапам, запись в pdf_timing_log.xlsx в папку результатов.
+  def set_timing_log_enabled()
+    # Включает/выключает запись timing_log (глобально для текущего процесса).
+  def append_timing_log()
+    # Буферизует запись: метка, время в секундах, опциональные заметки.
+  def finalize_timing_log()
+    # Сбрасывает буфер в pdf_timing_log.xlsx: лист «timing» + лист «top_longest».
+
+--- pdf_parsing/pdf_worker.py ---
+  [файл] Обработка одного PDF в worker-процессе (v1 parallel).
+  def worker_init()
+    # Вызывается один раз в каждом worker-процессе через initializer.
+  def process_single_pdf_parallel()
+    # Обёртка для ProcessPoolExecutor: shared kwargs из initializer globals.
+  def process_single_pdf()
+    # Обрабатывает один PDF файл: атрибуты страниц + теги (параллельно).
+
+--- pdf_parsing/rules_check.py ---
+  def rules_check_start()
+  def rules_check()
+  def check_row()
+    # Проверка данных или условий.
+  def print_check_list()
+  def formats_convolution()
+  def excel_check_list_out_f()
+    # Формирование или запись Excel.
+
+--- pdf_parsing/shtamp_extract_classes.py ---
+  class Current_Project
+  class doc_ATTRIBUTES
+  class PageStampAttributes
+    # Контейнер данных / логики модуля.
+  def map_stamp_col_15_to_13()
+    # Индекс столбца после remove(4) и второго remove (7 по умолчанию; 8 — вариант SOT, когда в col7 есть «Р»).
+  def get_att_coordinate()
+  def check_att_coordinate()
+  def check_att_coordinate_small()
+  def normalize_att_value()
+
+--- pdf_parsing/stamp_config_editor.py ---
+  [модуль] Простой CLI редактор конфигурации штампов основной надписи. Позволяет просматривать, редактировать и управлять конфигурацией через командную строку.
+  class StampConfigEditor
+    # CLI редактор для конфигурации штампов.
+  def main()
+    # Точка входа для CLI редактора.
+
+--- pdf_parsing/stamp_config_manager.py ---
+  [модуль] Менеджер конфигурации для парсинга основной надписи чертежа. Позволяет загружать, редактировать и сохранять конфигурацию координат ячеек.
+  class StampConfigManager
+    # Класс для управления конфигурацией штампов основной надписи.
+
+--- pdf_parsing/stamp_parser.py ---
+  [модуль] Улучшенный парсер основной надписи чертежа, использующий конфигурацию. Поддерживает гибкое задание координат ячеек через конфигурационный файл.
+  class StampParser
+    # Парсер основной надписи чертежа с использованием конфигурации.
+
+--- pdf_parsing/stamp_parser_example.py ---
+  [модуль] Пример использования нового парсера штампов с конфигурацией.
+  def example_parse_document()
+    # Пример парсинга документа с использованием нового парсера. Args: file_path: Путь к PDF файлу config_path: Путь к файлу конфигурации (опционально)
+  def example_edit_config()
+    # Пример редактирования конфигурации.
+  def print_stamp_table()
+    # Выводит атрибуты основной надписи в виде таблицы. Для первой страницы - большая таблица, для последующих - маленькая. Args: cur_page: Объект страницы с атрибутами page_number: Номер страницы
+  def example_validate_and_fix_config()
+    # Пример валидации и исправления конфигурации.
+
+--- pdf_parsing/template_stamp_extractor_test.py ---
+  [модуль] ТЕСТОВЫЙ МОДУЛЬ: Шаблонный метод извлечения основной надписи из PDF.
+  def load_template()
+    # Загружает шаблон из JSON.
+  def get_base_point_from_pdf()
+    # Определяет базовую точку (правый нижний угол рамки) через pdfminer. Не использует find_tables.
+  def cells_to_pdf_bbox()
+    # Преобразует координаты ячеек из шаблона в координаты PDF. Логика как в CellListsFF.do_normalization: base_point = правый нижний угол рамки. Координаты в шаблоне в тех же единицах, что и cell_lists (не мм, а те же значения).
+  def extract_text_from_bbox()
+    # Извлекает текст из области bbox через pdfplumber.within_bbox. Не использует распознавание таблиц.
+  def extract_stamp_by_template()
+    # Извлекает атрибуты основной надписи по шаблону. Возвращает словарь {cell_id: извлечённый_текст}.
+  def run_test()
+    # Запускает тест на указанной папке или файле.
+
+--- pdf_parsing_v2/_build_dwg_page1_json.py ---
+  [модуль] Legacy: только dwg_page1. Полный набор шаблонов — pdf_parsing_v2/_build_stamp_templates.py.
+  def bb()
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing_v2/_build_stamp_templates.py ---
+  [модуль] Генерация JSON шаблонов этапа C (dwg_page1/2, bbb_mto_page1/2) из правил v1.
+  def bb_cell()
+  def add_field()
+  def split18()
+  def build_dwg_page1_fields()
+    # Сборка структуры или объекта.
+  def build_bbb_page1_fields()
+    # Те же поля, что DWG стр.1, но блоки 18.x и даты подписей — ветки list_of_BBB из elements_coordinates.py.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing_v2/char_text_extractor.py ---
+  [файл] Индекс символов страницы для точного извлечения текста в bbox.
+  class PageCharIndex
+    # Per-page character index for precise cell-level text extraction.
+
+--- pdf_parsing_v2/compare_v1_v2.py ---
+  [модуль] E.1 (roadmap): сравнение результатов PDF pipeline v1 vs v2.
+  def compare_result_directories()
+    # Сравнение сущностей или результатов.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing_v2/compat.py ---
+  [модуль] Конвертация V2PageResult → PageStampAttributes для rules_check (v1).
+  def to_page_stamp_attributes()
+
+--- pdf_parsing_v2/coord_transform.py ---
+  [файл] Мм ↔ fitz pts, bbox полей, линии сетки, учёт rotation.
+  def get_origin_points()
+    # 4 угла рамки в абсолютных pdfminer-координатах (x вправо, y вверх).
+  def resolve_field_bbox()
+    # Раскрыть параметризацию: origin + stretch_to_page → абсолютные pdfminer коорд.
+  def field_bbox_to_absolute()
+    # Convert template bbox_mm → absolute pdfminer coords (pts).
+  def absolute_to_field_bbox_mm()
+    # Reverse of resolve_field_bbox (without stretch): absolute pdfminer → bbox_mm.
+  def pdfminer_to_fitz()
+    # Convert a pdfminer-displayed rect (y-up) → fitz **displayed** Rect (y-down).
+  def fitz_displayed_to_unrotated()
+    # Convert a *displayed* fitz rect → *unrotated* fitz rect (for rotation=90/270).
+  def fitz_unrotated_to_displayed()
+    # Convert an *unrotated* fitz rect → *displayed* fitz rect (for rotation=90/270).
+  def grid_line_to_fitz_pts()
+    # Convert a TemplateGridLine to fitz displayed-coordinate values.
+  def fitz_pts_to_grid_line_mm()
+    # Reverse of grid_line_to_fitz_pts: fitz displayed coords → (pos_mm, start_mm, end_mm).
+  def field_to_fitz_rect()
+    # Template field → fitz Rect in **displayed** coordinates.
+
+--- pdf_parsing_v2/debug_visual.py ---
+  [модуль] E.2: PNG-оверлей — рамка, bbox полей, подписи, цветовая индикация.
+  def render_debug_page()
+    # Render annotated PNG for a single page.
+  def render_debug_page_overlay()
+    # Render overlay PNG showing bbox from ALL candidate templates.
+  def render_debug_for_file()
+    # Render debug PNGs for all pages of one file.
+
+--- pdf_parsing_v2/field_cleaners.py ---
+  [модуль] Функции очистки текста полей штампа — порт Clean_Text из pdf_parsing/elements_coordinates.py.
+  def clean_doc_title()
+  def clean_facility_name()
+  def clean_unit_title()
+  def clean_document_name()
+  def clean_documentation_type()
+  def clean_sheet_number_6_1()
+  def clean_sheet_number_6_2()
+  def clean_total_number_of_sheets()
+  def clean_revision()
+  def clean_file_name_stamp()
+  def clean_page_format()
+  def clean_current_revision_18_1()
+  def clean_revision_date_18_2()
+  def clean_purpose_of_issue_18_3()
+  def clean_signatures_date_10()
+    # Как в Signatures_Date_10.Clean_Text (колонка 10 в разборе 18_2).
+
+--- pdf_parsing_v2/find_tables_settings.py ---
+  [модуль] Shared settings for PyMuPDF find_tables() in v2.
+  def get_find_tables_kwargs()
+    # Build find_tables kwargs from v2 config.
+  def call_find_tables()
+    # Call fitz_page.find_tables with config kwargs and safe fallback.
+
+--- pdf_parsing_v2/frame_detector.py ---
+  [файл] Поиск границ штампа (рамки) на странице.
+  def find_frame()
+    # Detect the drawing frame (рамка) on *fitz_page* via ``get_drawings()``.
+
+--- pdf_parsing_v2/grid_diagnostic.py ---
+  [модуль] Phase 0 diagnostic for stamp grid stability across document types.
+  class Cell
+    # Контейнер данных / логики модуля.
+  class FileDiag
+  class AnchorCandidate
+  def cluster_lines()
+  def run_grid_diagnostic()
+    # Запуск сценария или подсистемы.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing_v2/grid_lines_utils.py ---
+  [файл] Генерация grid lines из полей, refs, snap bindings, схлопывание дублей.
+  def generate_grid_lines_from_fields()
+    # Create TemplateGridLine objects from field bounding-box edges.
+  def auto_bind_fields_to_lines()
+    # Assign bound_top/bottom/left/right IDs to each field by nearest line.
+  def snap_fields_to_bindings()
+    # Resize field bbox_mm edges to match bound grid-line positions.
+  def sanitize_grid_line_refs()
+    # Clear ``start_line_id`` / ``end_line_id`` that reference missing line IDs.
+  def sanitize_field_line_bindings()
+    # Clear ``bound_*`` that reference grid line IDs not in *valid_line_ids*.
+  def auto_assign_line_refs()
+    # For each grid line, find perpendicular lines at start_mm and end_mm.
+  def snap_endpoints_to_refs()
+    # Set start_mm / end_mm to the pos_mm of the referenced perpendicular line.
+  def resolve_line_endpoints_from_snapped()
+    # Resolve each line's start/end from snapped perpendicular line positions.
+  def find_doubled_lines()
+    # Find pairs of grid lines that are border-pair duplicates.
+  def find_split_segments()
+    # Find pairs of close lines that are split segments (NOT border pairs).
+  def collapse_doubled_lines()
+    # Collapse border-pair duplicate lines and rebind affected fields.
+
+--- pdf_parsing_v2/grid_matcher.py ---
+  [файл] Привязка линий шаблона к сетке PDF: find_tables, walk, progressive interp, отчёт.
+  class CellBbox
+    # One cell bbox in fitz displayed coordinates (pts).
+  class AnchorMatch
+    # Pair template anchor cell <-> detected cell.
+  class SnapResult
+  class AdaptResult
+  def cluster_lines()
+    # Merge nearby coordinates into logical lines.
+  def get_detected_stamp_cells()
+    # find_tables() -> stamp filter -> line consolidation -> dedup.
+  def match_anchor_cells()
+    # Match manual/auto template anchors to detected cells.
+  def approximate_field_bbox()
+    # Interpolate field position/size from matched anchors.
+  def snap_to_detected()
+    # Snap approximate bbox to nearest detected cell; handle split/merge.
+  def adapt_all_fields()
+    # Unified adaptation: boundary-snap with shape/position/adjacency scoring.
+  def adapt_all_fields_indexed()
+    # Same as ``adapt_all_fields`` but returns an ordered list of (key, result) pairs aligned 1-to-1 with ``template.fields``.
+  class DetectedGridLineInfo
+    # Detected grid line after border-pair merge — for editor visualisation.
+  class AlignmentReport
+    # Structured feedback from the grid alignment engine.
+  class CellAssignmentInfo
+    # Diagnostics for the cell-assignment algorithm.
+  def adapt_by_cell_assignment()
+    # Cell-assignment adaptation: match each template field to the nearest detected cell, using a global top-left-anchored transform.
+  class _DetectedGridLine
+    # Detected grid line enriched with span and cell-count metadata.
+  class GridLineSnapDiag
+    # Per-line snap diagnostics for debug snapshots.
+  class AlignmentLineDiag
+    # Per-line diagnostics for the ordered alignment algorithm.
+  class AlignmentSummary
+    # Summary diagnostics for the full alignment pass.
+  def expand_fields_by_bindings()
+    # Set field bbox edges from bound grid-line positions (dict-lookup, no heuristics).
+  def close_fragmented_gaps()
+    # Extend fields matched to cell fragments so they abut correctly-matched neighbors.
+
+--- pdf_parsing_v2/migrate_to_project_folders.py ---
+  [модуль] Скрипт миграции: flat templates/ + catalogs/ + sets/ → project folder structure.
+  def migrate()
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing_v2/models.py ---
+  [файл] Датаклассы шаблона, поля, grid line, результатов страницы.
+  def normalize_field_type()
+    # Миграция: static→label, static_empty→empty; неизвестное → data.
+  def normalize_expected()
+    # Допустимое значение FieldDef.expected (required|optional|absent).
+  class TemplateGridLine
+    # One grid/wireframe line of the stamp template.
+  class FieldDef
+  class StampTemplate
+    # Контейнер данных / логики модуля.
+  class FrameInfo
+    # Рамка чертежа / штампа в координатах pdfminer (x вправо, y вверх от низа страницы), пункты.
+  class FieldResult
+  class V2PageResult
+  class TemplateScore
+  class FieldCatalogEntry
+  class FieldCatalog
+    # Контейнер данных / логики модуля.
+  def merge_field_defs_with_catalog()
+    # Подставить label и field_type из каталога для совпадающих id; clean остаётся из *fields*.
+  def merge_stamp_template_with_catalog()
+  class TemplateSet
+    # DEPRECATED: use project folder structure instead (catalog.json + templates in same folder).
+
+--- pdf_parsing_v2/mto_grid_diagnostic.py ---
+  [модуль] MTO grid diagnostic -- analyses stamp-area grid lines only (filtered by template bbox).
+  def analyze_pdf()
+    # Analyze stamp grid lines for one PDF.
+  def run_diagnostic()
+    # Запуск сценария или подсистемы.
+
+--- pdf_parsing_v2/pdf_v2_settings_gui.py ---
+  [файл] Окно настроек PDF v2.
+  def show_pdf_v2_settings()
+    # Показ UI или открытие диалога/папки.
+
+--- pdf_parsing_v2/stamp_extractor.py ---
+  [файл] Движок v2: рамка → кандидаты шаблонов → поля (fitz/char index), grid_adapt.
+  def extract_page()
+    # Extract stamp fields from *fitz_page* using the best matching template.
+  def select_templates()
+    # Return templates applicable to *(doc_type, page_num)*, sorted by priority desc.
+
+--- pdf_parsing_v2/stamp_fill_gaps.py ---
+  [модуль] Post-pass: expand field rectangles to abut horizontal/vertical neighbors.
+  def fill_stamp_gaps_for_rects()
+    # Return *changed* rectangles only: expand each field to meet neighbors inside stamp.
+
+--- pdf_parsing_v2/template_editor/__init__.py ---
+  [модуль] Редактор шаблонов штампа (PySide6). Этап F — отдельный процесс, не блокирует CTk GUI.
+  def launch_template_editor()
+    # Launch the PySide6 template editor as a standalone Qt application.
+
+--- pdf_parsing_v2/template_editor/_save_dialog.py ---
+  [модуль] Dialog for template metadata before saving (name, doc_types, page_selector, etc.).
+  class SaveTemplateDialog -> QDialog
+    # Компонент GUI (Qt).
+
+--- pdf_parsing_v2/template_editor/adapt_debug.py ---
+  [файл] Снимок отладки адаптации: JSON + alignment_log.txt.
+  def collect_adapt_debug_snapshot()
+    # Collect a comprehensive debug snapshot for adaptation analysis.
+  def save_adapt_debug_snapshot()
+    # Write snapshot to a timestamped JSON file + alignment log .txt.
+
+--- pdf_parsing_v2/template_editor/auto_detect.py ---
+  [модуль] fitz.find_tables → bbox ячеек для начальной авто-разметки.
+  def detect_cells()
+    # Find table cells on *fitz_page* via ``find_tables()`` (PyMuPDF >= 1.23).
+
+--- pdf_parsing_v2/template_editor/catalog_editor.py ---
+  [модуль] Редактор каталога полей проекта.
+  class NumericSortTableWidgetItem -> QTableWidgetItem
+    # Сортировка столбца «#» по числу (1, 2, … 10), не лексикографически.
+  class CatalogProjectPropertiesDialog -> QDialog
+    # Редактирование метаданных каталога: имя, описание, список идентификаторов проектов.
+  class CatalogEditorPanel -> QWidget
+    # Embedded bottom panel for editing the active project field catalog.
+  class CatalogEditorDialog -> QDialog
+    # Legacy modal dialog. Use CatalogEditorPanel for embedded/modeless UX.
+  class _ImportFromTemplateDialog -> QDialog
+    # Interactive import dialog: template fields -> catalog (T7.2).
+
+--- pdf_parsing_v2/template_editor/cell_items.py ---
+  [модуль] FieldRectItem — перетаскиваемый прямоугольник поля на Canvas с resize handles.
+  def short_label_from_field_id()
+    # Короткая подпись внутри прямоугольника по id поля (без обрезки по первому _).
+  class _Handle -> QGraphicsRectItem
+    # Small resize handle on corners / midpoints of a FieldRectItem.
+  class FieldRectItem -> QGraphicsRectItem
+    # Draggable, resizable rectangle representing one stamp field on the canvas.
+
+--- pdf_parsing_v2/template_editor/cells_panel.py ---
+  [модуль] Список ячеек (QTreeWidget) — боковая панель с навигацией Canvas <-> Список.
+  class NumericSortTreeWidgetItem -> QTreeWidgetItem
+    # Сортировка: столбец «#» по числу (1, 2, … 10), не лексикографически (1, 10, 2).
+  class CellsPanel -> QWidget
+    # Side panel: list of all FieldRectItem objects on the scene.
+
+--- pdf_parsing_v2/template_editor/graphics_view.py ---
+  [модуль] QGraphicsView + QGraphicsScene: PDF-подложка, zoom-to-cursor, pan.
+  class StampGraphicsView -> QGraphicsView
+    # PDF page viewer with zoom-to-cursor and pan.
+
+--- pdf_parsing_v2/template_editor/grid_line_items.py ---
+  [модуль] Interactive grid-line items on the stamp editor canvas.
+  class _EndpointHandle -> QGraphicsRectItem
+    # Small draggable square at one endpoint of a grid line.
+  class GridLineGraphicsItem -> QGraphicsLineItem
+    # Interactive grid line on the canvas with two endpoint handles.
+  class DetectedGridLineItem -> QGraphicsLineItem
+    # Read-only, selectable item representing a detected PDF grid line.
+
+--- pdf_parsing_v2/template_editor/main_window.py ---
+  [файл] Редактор шаблонов PySide6: PDF-сцена, поля, wireframe, тест-адаптация.
+  class _ConsolidationState
+  class TemplateEditorWindow -> QMainWindow
+    # Компонент GUI (Qt).
+
+--- pdf_parsing_v2/template_editor/properties_panel.py ---
+  [модуль] Панель свойств выбранной ячейки: id/clean/regex/expected/тип/origin и др.
+  class PropertiesPanel -> QWidget
+    # Properties editor for the currently selected FieldRectItem.
+
+--- pdf_parsing_v2/template_editor/set_editor.py ---
+  [модуль] QDialog для редактирования TemplateSet (привязка шаблонов к проектам).
+  class SetEditorDialog -> QDialog
+    # Компонент GUI (Qt).
+
+--- pdf_parsing_v2/template_editor/template_meta_panel.py ---
+  [модуль] Панель метаданных шаблона (постоянная, в правой панели).
+  class TemplateMetaPanel -> QWidget
+    # Persistent widget for template-level metadata editing.
+
+--- pdf_parsing_v2/template_editor/templates_browser.py ---
+  [модуль] Браузер шаблонов (IDE-style левая панель): проекты > шаблоны.
+  class TemplatesBrowserPanel -> QWidget
+    # Left sidebar: project tree from templates_dir.
+
+--- pdf_parsing_v2/template_editor/wireframe_panel.py ---
+  [файл] Панель линий сетки и привязок полей к линиям.
+  class _NumSortItem -> QTableWidgetItem
+    # Контейнер данных / логики модуля.
+  class GridLinesPanel -> QWidget
+    # Table of TemplateGridLine objects + generate / auto-bind / add / delete.
+  class FieldBindingsPanel -> QWidget
+    # Per-field binding editor: 4 combo-boxes mapping to grid line IDs.
+
+--- pdf_parsing_v2/template_loader.py ---
+  [файл] Обнаружение проектов шаблонов (catalog.json) и загрузка JSON.
+  class ProjectTemplates
+    # Шаблоны одного проекта, загруженные из project folder.
+  def load_projects()
+    # Сканирует подпапки templates_dir; каждая папка с catalog.json = проект.
+  def load_all_templates()
+    # Загружает все шаблоны из templates_dir.
+  def load_project_templates()
+    # Возвращает шаблоны только из проектов, чьи projects[] содержат project_filter.
+
+--- pdf_parsing_v2/test_progressive_interp.py ---
+  [модуль] Unit tests for progressive interpolation helpers in grid_matcher.
+  class TestProgressiveInterp
+    # Tests for piecewise-linear interpolation.
+  class TestInsertAnchor
+    # Tests for anchor insertion with monotonicity guard.
+  class TestProgressiveWalkSimulation
+    # Simulate the progressive walk on synthetic data matching the log scenarios.
+
+--- pdf_parsing_v2/v2_config.py ---
+  [файл] Путь и чтение/запись pdf_v2_config.json.
+  def get_v2_config_path()
+  def get_default_v2_config()
+  def load_v2_config()
+    # Загрузка данных или конфигурации.
+  def save_v2_config()
+    # Сохранение/запись результата.
+
+--- pdf_parsing_v2/v2_pipeline.py ---
+  [файл] Пакетный прогон папки PDF через движок v2 и шаблоны.
+  def run_v2_pipeline()
+    # Process *pdf_path* folder through the v2 template engine.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- pdf_parsing_v2/v2_report.py ---
+  [модуль] Модульный Excel-отчёт для отладки v2 pipeline.
+  class ColumnDef
+    # Описание одного столбца выходного Excel.
+  def save_v2_debug_report()
+    # Сохраняет отладочный Excel-отчёт.
+  def collect_results_from_curr_proj()
+    # Собирает all_results из списка doc_ATTRIBUTES.
+
+--- RFQ/cls_MtoCompareRow.py ---
+  class MtoCompareRow
+
+--- RFQ/ds_compare/aggregate_mto_positions.py ---
+  def aggregate_mto_positions()
+
+--- RFQ/ds_compare/ds_classes.py ---
+  class ComparisonResult -> Enum
+    # Перечисление.
+  class ComparisonStatus -> Enum
+    # Перечисление.
+  class ComparisonRule
+    # Базовый класс для правил сравнения
+  class QuantityComparisonRule -> ComparisonRule
+    # Правило сравнения количеств
+  class DsMtoComparator
+    # Контейнер данных / логики модуля.
+  class RuleFactory
+    # Фабрика для создания правил сравнения
+
+--- RFQ/ds_compare/ds_compare_config.py ---
+  [модуль] Параметры сравнения ДС vs MTO (опциональный JSON рядом с модулем).
+  def get_ds_compare_config_path()
+  def get_default_ds_compare_config()
+  def load_ds_compare_config()
+    # Читает ds_compare_config.json; при отсутствии или ошибке — defaults.
+
+--- RFQ/ds_compare/ds_merge_folder.py ---
+  def merge_ds_folder()
+    # Ищет *.xlsx файлы в папке, загружает их через load_ds_data, склеивает в один список и сохраняет результат в сводный xlsx через STDTable.to_excel_ds_spec.
+
+--- RFQ/ds_compare/ds_start_init.py ---
+  def analyze_ds_specification()
+    # Задача от 05.09.2025 от Михеева по указанию Кузина Цель: Подготовить инструмент для сравнения закупочной спецификации с рабочей спецификацией
+
+--- RFQ/ds_compare/DsMtoTable.py ---
+  class DsMtoTable
+    # Контейнер данных / логики модуля.
+
+--- RFQ/ds_compare/get_mto_list_from_ds.py ---
+  def get_mto_list_from_ds()
+    # Получение значения, пути или конфига.
+
+--- RFQ/ds_compare/load_mto.py ---
+  def load_mto_by_dict()
+    # Загрузка данных или конфигурации.
+
+--- RFQ/ds_compare/mto_check.py ---
+  class MtoCheck
+    # Контейнер данных / логики модуля.
+
+--- RFQ/ds_compare/mto_ds_compare.py ---
+  def mto_ds_list_compare()
+    # Задача: Проверка MTO рабочей документации по закупочным DS спецификациям Args: mto_file_path: Путь к MTO файлу force_ds_update: Принудительное обновление данных DS из файла (игнорирует кэш)
+  def show_check_results_popup()
+    # Показывает всплывающее окно с результатами проверок МТО и DS Args: system_title: Название системы ds_value: Сумма по DS mto_value: Сумма по МТО diff: Разность между DS и МТО codes_identical: Совпадают ли суммы по кодам codes_difference: Разность по кодам codes_only_in_ds: Коды только в ДС словаре codes_only_in_mto: Ко…
+
+--- RFQ/ds_compare/report.py ---
+  def generate_report()
+    # Генерирует различные отчеты на основе результатов сравнения
+  def generate_detailed_excel_report()
+    # Генерирует детальный Excel отчет
+  def generate_summary_excel_report()
+    # Генерирует сводный Excel отчет
+  def generate_text_report()
+    # Генерирует текстовый отчет
+  def generate_issues_report()
+    # Генерирует отчет по проблемным позициям
+  def generate_execution_log()
+    # Генерирует лог выполнения
+  def generate_html_report()
+    # Генерирует HTML отчет (опционально)
+  def open_report_directory()
+    # Открывает папку с отчетами в проводнике
+  def cleanup_old_reports()
+    # Очищает старые отчеты
+
+--- RFQ/ds_compare/support_finctions.py ---
+  def validate_values_float()
+    # Проверяет, что все значения в колонке VALUES могут быть преобразованы в float. Возвращает список ошибок: [(spec_name, invalid_value, code), ...]
+  def validate_and_exit_if_errors()
+    # Проверяет данные на недопустимые значения в колонке количества (VALUES). При обнаружении ошибок выводит таблицу и завершает программу.
+  def load_ds_data()
+    # Загружает данные из DS файла с поддержкой кэширования Args: ds_path: Путь к DS файлу summ_ds: Флаг для определения типа DS файла force_update: Принудительное обновление данных из файла (игнорирует кэш) use_cache: Если False — не читать и не писать кэш (полностью отключено) Returns: Список объектов RowStd с данными DS
+  def load_mto_data()
+    # Загружает MTO данные
+  def load_replacement_table()
+    # Загружает таблицу замен кодов из XLSX файла
+  def ds_codr_vs_base_google()
+  def check_comparison_results()
+    # Проверяет результаты сравнения DS и MTO по спецификациям Сравнивает суммы количеств из VALUES_2 (распределенные из MTO) с исходными количествами в MTO Особенности обработки агрегированных строк: - Если в комментарии VALUES_2 найден паттерн [AGG_CODES: код1:количество1,код2:количество2,...], то количество из VALUES_2 р…
+  def load_ds_data_list()
+    # Загружает данные из DS файла с поддержкой кэширования Args: ds_path: Путь к DS файлу force_update: Принудительное обновление данных из файла (игнорирует кэш) Returns: Список объектов RowStd с данными DS
+
+--- RFQ/DS_compare_functions.py ---
+  def file_name_remove_junk()
+    # Для сокращения имени файла в MTO_vs_MTO и имени файла убираем лишнее: Номер договора Расширение файл Язык документа МТО-0001 :param in_file_name: :return:
+  def ds_mto_compare()
+  def start()
+    # Запуск сценария или подсистемы.
+  def list_vs_list()
+  def tags_diff()
+  def doubles_check()
+  def print_base_pt()
+  def excel_base_out()
+    # Формирование или запись Excel.
+
+--- RFQ/DS_compare_MTO.py ---
+  def ds_compare_folder_start()
+  def ds_compare_start()
+    # :param ds_base_unique: :param mto_path: :param ds_path: :return:
+
+--- RFQ/func_get_unique_row_list.py ---
+  def get_unique_row_list()
+    # Retrieve a unique list of RowStd objects based on specific attributes.
+
+--- RFQ/mto_compare.py ---
+  def mto_multi_compare_start()
+  def mto_compare_start()
+
+--- RFQ/pre_Address/start_pre_address.py ---
+  def start_pre_address()
+    # Запуск сценария или подсистемы.
+
+--- RFQ/R_R/R_compare.py ---
+  def r_start()
+
+--- RFQ/RFQ_compare.py ---
+  def rfq_start()
+  def rfq_file_start()
+
+--- RFQ/tags_rfp_compare/agregate_tags.py ---
+  [файл] Оркестратор tags_rfp_compare: step1–4, кэш, load_base параллельно step2/3, timing/memory логи.
+  class _ThreadLocalStream
+    # Thread-local stream wrapper: each thread can redirect output to its own buffer.
+  def main()
+    # Главная функция для запуска процесса сравнения тегов. :param config_override: Опциональная конфигурация (если None — загружается из файла)
+
+--- RFQ/tags_rfp_compare/column_optimization.py ---
+  [файл] Сужение набора колонок итоговой выгрузки по хэшу конфига.
+  def apply_column_optimization()
+    # Модифицирует rows in-place: обрезка строк и обнуление столбцов по конфигу.
+
+--- RFQ/tags_rfp_compare/compare_step4_files.py ---
+  [файл] Сравнение двух Excel step4 как мультимножества строк.
+  def compare_step4_files()
+    # Сравнение сущностей или результатов.
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- RFQ/tags_rfp_compare/mto_file_filter.py ---
+  [файл] Отбор MTO-файлов по правилам путей/имён.
+  def filter_mto_files()
+    # Находит и фильтрует MTO файлы, исключая файлы из папок old и других временных папок. Учитывает структуру: корневая папка -> 4-символьная папка (например 2225) -> (опционально подпапка из списка POS, SPP, SOS и т.д.) -> МТО файл Args: mto_path: Путь к директории с MTO файлами debug: Флаг отладки для вывода подробной ин…
+
+--- RFQ/tags_rfp_compare/rfp_tags_settings_gui.py ---
+  [файл] Окно настроек tags_rfp_compare.
+  def show_rfp_tags_settings()
+    # Открывает окно настроек RFP tags compare. При сохранении вызывает on_save(config) если передан. load_fn / save_fn — переопределяют функции загрузки/сохранения конфига (для as-build и др.). title_suffix — добавляется к заголовку окна (например ' (as-build)').
+
+--- RFQ/tags_rfp_compare/rfp_tags_utils.py ---
+  [файл] JSON-конфиг сравнения тегов, пути result_dir, буферизованные timing/memory логи.
+  def get_default_config()
+    # Возвращает конфигурацию по умолчанию
+  def load_config()
+    # Загружает конфигурацию из файла. При отсутствии или ошибке — возвращает значения по умолчанию.
+  def get_column_optimization_hash()
+    # Хэш column_optimization для ключа кэша. Пустой/None -> пустая строка.
+  def save_config()
+    # Сохраняет конфигурацию в файл. Возвращает True при успехе.
+  def get_asbuild_config_path()
+    # Путь к as-build конфигу (рядом с основным конфигом).
+  def get_default_asbuild_config()
+    # Дефолтная конфигурация для as-build: те же параметры, но пути MTO и результатов — as-build.
+  def load_asbuild_config()
+    # Загружает as-build конфигурацию. При отсутствии — возвращает дефолт с as-build путями.
+  def save_asbuild_config()
+    # Сохраняет as-build конфигурацию. Возвращает True при успехе.
+  def find_latest_step4_result_file()
+    # Ищет последний по дате/времени файл Шаг4_Сопоставление_RFP_MTO_*.xlsx во всех папках результатов (основной и as-build конфиги). Возвращает полный путь к файлу или None, если не найден.
+  def get_result_dir_path()
+    # Создает путь для папки результатов на основе пути к RFP файлу Args: rfp_path: Путь к RFP файлу Returns: Путь к папке результатов в формате: <директория_файла>_результат_проверки_ГГГГ.ММ.ДД.ЧЧ.ММ
+  def ensure_result_dir_exists()
+    # Проверяет наличие папки результатов и создает её при необходимости Args: result_dir: Путь к папке результатов Returns: Путь к папке результатов (нормализованный)
+  def set_timing_log_enabled()
+    # Включает/выключает запись в timing_log.xlsx (глобально для всего процесса).
+  def set_memory_log_enabled()
+    # Включает/выключает запись в memory_log.txt (глобально для всего процесса).
+  def append_memory_log()
+    # Добавляет строку в лог использования памяти (memory_log.txt). Использует только psutil (без tracemalloc — без накладных расходов на аллокации). Args: result_dir: Путь к папке результатов label: Метка точки замера (например "after_step1_load_rfp")
+  def append_memory_top_stats()
+    # Записывает топ-N аллокаций памяти (tracemalloc) в memory_log.txt. Args: result_dir: Путь к папке результатов label: Метка точки замера (например "step4_after_save_match_result_to_excel") top_n: Количество строк в отчёте
+  def log_data_structures_memory()
+    # Записывает в memory_log.txt размер переданных структур данных и системную память. Использует выборку (до 50 элементов) вместо полного обхода — для ускорения. Args: result_dir: Путь к папке результатов label: Метка точки замера (например "after_step1_load_rfp") **structures: Именованные структуры: rfp_data=..., mto_dat…
+  def log_mto_tag_distribution()
+    # Логирует распределение тегов по строкам MTO (до раскрытия). Сколько строк с 0, 1, 2, 3-9, 10+ тегами; строк без тегов с VALUES>1. Args: result_dir: Путь к папке результатов mto_data: Словарь title_system -> список RowStd label: Метка для лога
+  def append_timing_log()
+    # Буферизует запись timing_log в памяти. Запись на диск -- в finalize_timing_log().
+  def save_input_fingerprint()
+    # Сохраняет легковесный fingerprint входных файлов (mtime/size/path) в JSON. Нужен для подтверждения, что разные прогоны сделаны на одном и том же наборе данных.
+  def finalize_timing_log()
+    # Flush buffered timing entries to Excel and build top_longest summary sheet.
+
+--- RFQ/tags_rfp_compare/step1_load_rfp.py ---
+  [файл] Чтение RFP Excel → RowStd; опционально split по тегам/VALUES.
+  def step1_load_rfp_data()
+    # Этап 1: Загрузка данных из RFP файла (Excel) и проверка тегов Args: rfp_path: Путь к Excel файлу RFP result_dir: Путь к папке результатов для вывода промежуточных результатов debug: Флаг отладки Returns: Кортеж: (список всех строк RFP, список строк с ошибками проверки)
+  def split_rfp_rows()
+    # Разбиение строк RFP: - несколько тегов -> одна строка на тег (VALUES по 1 до исчерпания) - без тегов и VALUES > 1 -> VALUES строк по 1 (если код/ед.изм. не в ban)
+
+--- RFQ/tags_rfp_compare/step2_load_mto.py ---
+  [файл] Загрузка MTO (кэш), RowStd, опциональный экспорт шага 2.
+  class ColumnDef
+    # Описание столбца для выгрузки Step2 в Excel.
+  def step2_load_mto_data()
+    # Этап 2: Сканирование пути mto_path с поиском файлов Excel содержащих "МТО" в имени и загрузка данных через функцию похожую на get_mto_list_from_ds Args: mto_path: Путь к директории с MTO файлами result_dir: Путь к папке результатов (не используется, для совместимости) rfp_data: Данные из RFP для возможного использован…
+
+--- RFQ/tags_rfp_compare/step3_load_vo.py ---
+  [файл] Загрузка VO (кэш), RowStd, связь с тегами.
+  def step3_load_vo_data()
+    # Этап 3: Загрузка данных из вендорской документации VO (Excel файл или файлы) Args: vo_path: Путь к директории с VO данными (Excel файлы) result_dir: Путь к папке результатов (не используется, для совместимости) debug: Флаг отладки export_to_excel: Флаг выгрузки отчетов в Excel Returns: Словарь: title_system -> список …
+
+--- RFQ/tags_rfp_compare/step4/step4_1_check_mto_data.py ---
+  [файл] Проверка и нормализация MTO/VO, split «без тегов», отчёты по тегам.
+  def check_mto_data()
+    # Проверка данных из MTO: 1. Проверка соответствия количества тегов и VALUES 2. Разбиение строк с несколькими тегами на отдельные строки Args: mto_data: Словарь title_system -> список строк RowStd из MTO result_dir: Путь к папке результатов debug: Флаг отладки debug_tag: Тег для точечной отладки (AND с другими фильтрами…
+  def check_vo_data()
+    # Проверка данных из VO: 1. Разбиение строк с несколькими тегами на отдельные строки 2. Проверка на дублирование тегов Args: vo_data: Словарь title_system -> список строк RowStd из VO result_dir: Путь к папке результатов debug: Флаг отладки debug_tag: Тег для точечной отладки (AND с другими фильтрами) debug_code: Код дл…
+  def save_mto_diagnostics_reports()
+    # Печатает таблицы и сохраняет Excel-отчёты по MTO-диагностике (агрегированные из worker'ов).
+  def save_vo_diagnostics_reports()
+    # Печатает таблицу и сохраняет Excel-отчёт по VO-дубликатам (агрегированные из worker'ов).
+
+--- RFQ/tags_rfp_compare/step4/step4_2_match_rfp_with_mto.py ---
+  [файл] Сопоставление RFP↔MTO (коды, теги, оптимизации pass_match_code).
+  def match_rfp_with_mto()
+    # Сопоставляет строки RFP с MTO по тегам в рамках одного title_mark Args: rfp_rows: Список строк RFP для сопоставления mto_data: Словарь title_mark -> список строк MTO replacement_table: Таблица замен кодов (старый -> список новых кодов) debug: Флаг отладки debug_tag: Тег для точечной отладки (AND с другими фильтрами) d…
+  def add_mto_data_to_rfp_row()
+    # Добавляет данные из MTO в строку RFP Args: rfp_row: Строка RFP для модификации mto_row: Строка MTO с данными
+  def match_rfp_with_vo()
+    # Сопоставляет строки RFP с VO по тегам в рамках одного title_system Args: rfp_rows: Список строк RFP для сопоставления vo_data: Словарь title_system -> список строк VO replacement_table: Таблица замен кодов (старый -> список новых кодов) mto_data: Словарь title_system -> список строк MTO (для поиска строк без тегов) un…
+  def add_vo_data_to_rfp_row()
+    # Добавляет данные из VO в строку RFP Args: rfp_row: Строка RFP для модификации vo_row: Строка VO с данными
+
+--- RFQ/tags_rfp_compare/step4/step4_3_assign_position_status.py ---
+  [файл] Назначение POSITION_STATUS и производных статусов строки.
+  def assign_position_status()
+    # Определяет статус позиции для всех строк RFP Статусы: - "Исключен" - тега в RFP нет, т.к. в MTO не хватило позиций с таким CODE - "Не протегирован в МТО" - тега в RFP нет, т.к. в МТО для позиции с таким CODE не указан ТЕГ, но позиция есть и количество хватает. При этом вставляются данные из МТО с поправкой на количест…
+
+--- RFQ/tags_rfp_compare/step4/step4_4_add_unmatched_mto_rows.py ---
+  [файл] Несопоставленные MTO/VO, дозаполнение, часть с optional MP.
+  def add_unmatched_mto_rows()
+    # Добавляет несопоставленные строки MTO как новые строки после последней строки RFP с тем же title_mark Args: rfp_rows: Список строк RFP (будет модифицирован) unmatched_mto_rows: Список несопоставленных строк MTO mto_data: Словарь title_mark -> список строк MTO (для определения title_mark) debug: Флаг отладки debug_tag:…
+  def add_unmatched_vo_rows()
+    # Добавляет несопоставленные строки VO как новые строки после последней строки RFP с тем же title_mark Args: rfp_rows: Список строк RFP (будет модифицирован) unmatched_vo_rows: Список несопоставленных строк VO vo_data: Словарь title_mark -> список строк VO (для определения title_mark) debug: Флаг отладки debug_tag: Тег …
+  def create_rfp_row_from_mto()
+    # Создает новую строку RFP на основе строки MTO Правая часть (RFP столбцы) должна быть пустой, кроме DS_TITLE (title_mark) Если на mto_row есть атрибут _matched_vo_row, также добавляет данные из VO. Args: mto_row: Строка MTO base_rfp_row: Базовая строка RFP для копирования структуры (опционально, не используется) title_…
+  def create_rfp_row_from_vo()
+    # Создает новую строку RFP на основе строки VO Правая часть (RFP столбцы) должна быть пустой, кроме DS_TITLE (title_mark) Args: vo_row: Строка VO base_rfp_row: Базовая строка RFP для копирования структуры (опционально, не используется) title_mark: Значение title_mark для установки в новую строку Returns: Новая строка Ro…
+  def match_added_vo_rows_with_mto_by_code()
+    # Доп. шаг: для строк, добавленных из VO без тегов, пытается найти MTO по коду. Использует остатки количества по MTO строкам (VALUES). Если переданы mto_by_title и mto_remaining_qty — использует их (для объединённого вызова). Возвращает (mto_by_title, mto_remaining_qty) для передачи в match_rows_with_vo_and_rfp_code_mis…
+  def match_rows_with_vo_and_rfp_code_missing_mto()
+    # Доп. шаг: для строк, где есть RFP CODE и VO CODE, но нет MTO CODE, пытается найти MTO по коду и заполнить. Если переданы mto_by_title и mto_remaining_qty — использует их (индекс уже построен и consume выполнен).
+  def match_unmatched_vo_with_mto_by_reverse_replacement()
+    # Дополнительный шаг: для строк, добавленных из VO без MTO, ищет MTO по обратной таблице замен. Если VO код является заменой для какого-то оригинального кода, ищем свободные MTO строки с этим оригинальным кодом. Пример: VO код BCC0003171, в таблице замен BCC0000764 -> BCC0003171 Ищем MTO строки с кодом BCC0000764 Args: …
+  def add_unmatched_mto_cabinet_rows()
+    # Добавляет несопоставленные строки MTO с непустым IN_CABINET в финальный вывод. Обрабатывает только строки БЕЗ тегов (строки с тегами уже обрабатываются через add_unmatched_mto_rows). Строка считается несопоставленной если: - _consumed_in_output не установлен (не была полностью сопоставлена по коду) - Оставшееся количе…
+
+--- RFQ/tags_rfp_compare/step4/step4_5_check_values_sum.py ---
+  [файл] Сверка сумм VALUES между RFP/MTO/VO после матчинга.
+  def check_values_sum()
+    # Проверяет суммы VALUES из исходных данных и результата сопоставления.
+
+--- RFQ/tags_rfp_compare/step4/step4_6_cell_colors.py ---
+  [файл] Раскраска ячеек по состоянию CheckElement.
+  def assign_row_colors()
+    # Присваивает цвет в row.el[col].color для всех position_row.
+
+--- RFQ/tags_rfp_compare/step4/step4_6_save_match_result_to_excel.py ---
+  [файл] Запись итогового Excel step4 (стили, автофильтр, быстрый writer).
+  class ColumnDef
+    # Описание столбца для вывода в Excel.
+  def save_match_result_to_excel()
+    # Сохраняет результат сопоставления RFP и MTO в Excel (xlsxwriter).
+
+--- RFQ/tags_rfp_compare/step4/step4_postmerge_ops.py ---
+  [файл] Пост-merge: обогащение из Google base, TAG_EFFECTIVE, лоты, цвета, служебные поля.
+  def apply_all_postmerge_per_row_ops()
+    # Applies all per-row post-merge operations in correct order.
+  def set_equipment_type_status()
+  def set_tags_match_summary()
+  def set_tags_pair_statuses()
+  def set_rfp_mto_struck_code_status()
+  def set_effective_tags_per_row()
+    # Phase 1: per-row TAG_EFFECTIVE assignment.
+  def set_mto_cabinet_equipment()
+  def enrich_rfp_from_google_base()
+    # Подставляет NAME, TYPE_MARK, VENDOR из Google-базы по коду RFP. Если код найден — записывает значения и подсвечивает ячейки Color.is_replacement_mto_vo. code_base_by_code — словарь {code: (name, type_mark, vendor)}, строится один раз в main-процессе и передаётся в workers. Tuple вместо RowStd минимизирует pickle-объём.
+  def apply_lot_map_to_rows()
+
+--- RFQ/tags_rfp_compare/step4/step4_worker.py ---
+  [файл] Один title_mark: split, check MTO/VO, match, статусы, unmatched, collapse, postmerge per-row.
+  def worker_init()
+    # Called once per worker process to store shared (immutable) config.
+  def process_title_mark_parallel()
+    # Thin wrapper for ProcessPoolExecutor: shared kwargs come from initializer globals.
+  def process_title_mark()
+    # Обрабатывает один title_mark и возвращает локальный результат.
+
+--- RFQ/tags_rfp_compare/step4_analyze_and_match.py ---
+  [файл] Весь этап 4: цикл по title_mark, optional ProcessPoolExecutor, merge, постобработка, Excel.
+  def step4_analyze_and_match()
+    # Анализ всех данных для сопоставления строк из RFP со строками из MTO и VO Args: rfp_data: Данные из RFP (список строк RowStd) mto_data: Данные из MTO (словарь: title_system -> список строк RowStd) vo_data: Данные из VO (словарь: title_system -> список строк RowStd) result_dir: Путь к папке результатов replacement_tabl…
+
+--- RFQ/Value_Compare.py ---
+  def file_name_remove_junk()
+    # Для сокращения имени файла в MTO_vs_MTO и имени файла убираем лишнее: Номер договора Расширение файл Язык документа МТО-0001 :param in_file_name: :return:
+  def multi_mto_compare()
+  def two_mto_compare()
+  def start()
+    # Запуск сценария или подсистемы.
+  def list_vs_list()
+  def tags_diff()
+  def doubles_check()
+  def print_base_pt()
+  def excel_base_out()
+    # Формирование или запись Excel.
+
+--- RFQ/ZIP/zip_code_rules.py ---
+  def zip_code_rule()
+  def proc_no_less_count()
+  def one_position()
+  def one_position_in_area()
+  def thousand_fo_object()
+
+--- RFQ/ZIP/zip_start.py ---
+  def zip_start()
+    # Scans the specified directory for Excel files relevant to the project, processes them to extract unique data rows, and checks them against a Google database for ZIP code assignments.
+
+--- tags/decimal_format.py ---
+  def decimal_format()
+
+--- tags/tag_classes.py ---
+  [файл] Классы представления тегов.
+  def hide_tag()
+  def check_system_code_94s_4_1()
+  def check_tag_94s_4_2()
+  def check_tag_94s_4_4_additional_code()
+    # Проверка данных или условий.
+  class TagClass
+  class GoogleSystemCode
+
+--- tags/tag_parser.py ---
+  [файл] Парсинг тегов из текста PDF, глобальный source_dict, analyze/merge для parallel.
+  def reset()
+  def merge_dicts()
+    # Мерджит *local_dict* в *base_dict* (append значений по ключам).
+  def add_context()
+    # Парсит теги из *text* и складывает в *target_dict* (или глобальный source_dict).
+  def analyze()
+  def save_tags_to_file()
+  def diff_lists_MTO_B()
+  def print_width_list_str()
+  def add_to_dict()
+  def add_to_dict_doubles()
+  def get_tag()
+    # Получение значения, пути или конфига.
+  def string_cleaner()
+  def get_bbb_work_code()
+    # Получение значения, пути или конфига.
+  def print_ex()
+
+--- test_2.py ---
+  [parse error] invalid syntax. Perhaps you forgot a comma? (<unknown>, line 29)
+
+--- utils/bbox/bbox2d.py ---
+  [модуль] 2D bounding box module.
+  class BBox2D
+    # Class to reprsent a 2D bounding box.
+
+--- utils/bbox/bbox2d_list.py ---
+  [модуль] Bounding Box 2D list module.
+  class BBox2DList
+    # Bounding Box 2D list class.
+
+--- utils/bbox/box_modes.py ---
+  [модуль] Enumerations of bounding box modes.
+  class BoxMode2D -> Enum
+    # BoxMode2D defines the mode in which the bounding box is defined.
+
+--- utils/bbox/geometry.py ---
+  [модуль] Useful functions to deal with 3D geometry
+  def get_plane()
+    # Get plane equation from 3 points. Returns the coefficients of `ax + by + cz + d = 0`
+  def point_plane_dist()
+    # Get the signed distance from a point `pt` to a plane `plane`. Reference: http://mathworld.wolfram.com/Point-PlaneDistance.html
+  def edges_of()
+    # Return the vectors for the edges of the polygon defined by `vertices`.
+  def orthogonal()
+    # Return a 90 degree clockwise rotation of the vector `v`.
+  def is_separating_axis()
+    # Return True and the push vector if `o` is a separating axis of `p1` and `p2`. Otherwise, return False and None.
+  def polygon_collision()
+    # Return True if the shapes collide. Otherwise, return False.
+  def polygon_area()
+    # Get the area of a polygon which is represented by a 2D array of points. Area is computed using the Shoelace Algorithm.
+  def polygon_intersection()
+    # Use the Sutherland-Hodgman algorithm to compute the intersection of 2 convex polygons.
+
+--- utils/bbox/metrics.py ---
+  [модуль] Functions for metrics related to 2D and 3D bounding boxes.
+  def iou_2d()
+    # Compute the Intersection over Union (IoU) of a pair of 2D bounding boxes.
+  def is_cross()
+  def jaccard_index_2d()
+    # Compute the Jaccard Index / Intersection over Union (IoU) of a pair of 2D bounding boxes.
+  def multi_iou_2d()
+    # Compute the Intersection over Union (IoU) of two sets of 2D bounding boxes.
+  def multi_jaccard_index_2d()
+    # Compute the Jaccard Index (Intersection over Union) of two sets of 2D bounding boxes.
+
+--- utils/bbox/utils.py ---
+  [модуль] Utility code.
+  def nms()
+    # Perform fast non-maximum suppression on a set of bounding boxes given their associated confidences.
+  def aspect_ratio()
+    # Enumerate box for each aspect ratio.
+
+--- utils/cache_manager_cli.py ---
+  [модуль] Утилита командной строки для управления кэшем DS данных
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- utils/cache_utils.py ---
+  [файл] Кэш загрузки MTO/VO Excel на диске, инвалидация по mtime/size.
+  class CacheManager
+    # Менеджер кэша для данных DS файлов
+  def set_cache_dir()
+    # Устанавливает директорию кэша для глобального менеджера. Args: cache_dir: Директория для хранения кэш-файлов
+
+--- utils/colors.py ---
+  class Color
+
+--- utils/error_log.py ---
+  class ErrorLog
+    # Тип исключения.
+
+--- utils/excel.py ---
+  def get_text_from_excel()
+    # Получение значения, пути или конфига.
+
+--- utils/file_name_converts.py ---
+  class ProjectFileName
+    # Контейнер данных / логики модуля.
+
+--- utils/folder_select.py ---
+  def set_main_window()
+    # Устанавливает главное окно для диалогов выбора (вызывается из main.py).
+  def getDirectory()
+  def getFile()
+
+--- utils/formats_A.py ---
+  def get_Real_Page_Format()
+    # Получение значения, пути или конфига.
+  def get_a4_count_in_format()
+    # Получение значения, пути или конфига.
+
+--- utils/integer_converse.py ---
+  def integer_from_any()
+
+--- utils/md5.py ---
+  def calculate_md5()
+    # Вычисляет MD5 хеш файла
+  def format_file_size()
+    # Форматирует размер файла в читаемый вид
+  def format_date()
+    # Форматирует дату в русском формате
+  def format_filename()
+    # Форматирует имя файла согласно требованиям
+  def find_pdf_files()
+    # Находит все PDF файлы в директории и поддиректориях, исключая файлы с '-УЛ'
+  def process_pdf_files()
+    # Основная функция обработки PDF файлов
+  def main()
+    # Точка входа при запуске файла как скрипта.
+
+--- utils/path.py ---
+  [файл] Пути к папкам PDF/результатов, имена файлов, open_dir.
+  def get_path_out_dir()
+    # Создает путь для выходной директории результатов. Если base_path указывает на файл, использует директорию файла.
+  def get_path_from_file_path()
+  def get_file_name_from_full_file_path()
+    # Получение значения, пути или конфига.
+  def file_path_plus_file_name()
+  def make_dir()
+  def normalize_path()
+  def get_directory_path()
+    # Извлекает путь к папке из переданного пути. Если путь ведет к файлу - возвращает папку, содержащую файл. Если путь ведет к папке - возвращает саму папку.
+  def open_dir()
+    # Показ UI или открытие диалога/папки.
+  def open_file()
+  def is_file_path()
+  def get_files_single()
+    # Получение значения, пути или конфига.
+  def copy_file()
+
+--- utils/PD/pd_start.py ---
+  def list_list_to_excel()
+  def pd_start()
+
+--- utils/PD/подсчет листов.py ---
+  def convert_to_a4()
+    # Конвертирует строку формата в количество листов A4
+  def process_excel_file()
+    # Обрабатывает xlsx-файл и добавляет столбец с количеством листов A4
+
+--- utils/prints_to_console.py ---
+  def print_file_list_to_console()
+
+--- utils/release_zip.py ---
+  [файл] Сборка zip-дистрибутива для коллег (.release_zipignore).
+  def build_release_zip()
+    # Build a distributable ZIP archive for colleagues.
+
+--- utils/save_to_file.py ---
+  def save_text_to_file()
+  def save_string_to_file()
+    # Сохраняет строку в файл.
+
+--- utils/Scaner_XLSX/01_scaner_xlsx.py ---
+  def find_mto_xlsx_files()
+    # Сканирует каталог и подкаталоги, находит файлы .xlsx с 'MTO' в имени, собирает информацию в таблицу и сохраняет как .xlsx файл.
+  def find_mto_xlsx_files_simple()
+    # Упрощенная версия с прогресс-баром без предварительного подсчета файлов.
+  def show_summary()
+    # Показывает сводку результатов
+
+--- utils/Scaner_XLSX/02_scaner_xlsx_cleaner.py ---
+  def analyze_mto_files()
+    # Анализирует MTO файлы из таблицы, проверяет имена файлов и сохраняет результат
+  def show_analysis_summary()
+    # Показывает сводку результатов анализа
+
+--- utils/Scaner_XLSX/03_filter_file_path.py ---
+  class PathAnalyzer
+    # Класс для анализа путей файлов по заданным критериям
+  def analyze_valid_files_paths()
+    # Анализирует пути валидных файлов из таблицы и сохраняет результат. Дополнительно проверяет имя файла по перечню из unicue_mto.xlsx. Исключает файлы, содержащие "~$" в имени.
+  def show_path_analysis_summary()
+    # Показывает сводку результатов анализа путей
+  def check_path_conditions()
+    # Обертка для статического метода класса PathAnalyzer
+
+--- utils/Scaner_XLSX/05_clear_code.py ---
+  def filter_old_codes_without_slash()
+    # Фильтрует старые коды, удаляя строки содержащие знак "/" в первой колонке.
+  def batch_filter_old_codes()
+    # Пакетная обработка нескольких файлов
+
+--- utils/Scaner_XLSX/analyze_xlsx.py ---
+  def list_list_to_excel()
+  def pd_start()
+
+--- utils/Scaner_XLSX/f04_00_process_valid_paths.py ---
+  def process_valid_files_with_analyze()
+    # Обрабатывает файлы с валидными путями, запуская внешнюю функцию analyze_mto
+
+--- utils/Scaner_XLSX/f04_01_analyze_mto.py ---
+  def analyze_mto()
+    # Обработка или анализ набора данных.
+
+--- utils/Scaner_XLSX/f04_02_functions.py ---
+  def process_code_data()
+    # Обрабатывает список RowStd и извлекает данные по CODE, NAME и TYPE_MARK когда оба значения (value и struck_value) в CODE не пустые.
+  def aggregate_and_analyze_data()
+    # Создает сводный xlsx файл с колонками: файл источник, код, наименование позиции
+  def process_multiple_files()
+    # Основная функция для обработки нескольких файлов
+  def analyze_single_file()
+    # Анализирует данные из одного файла
+
+--- utils/Scaner_XLSX/f_04_000_in_one.py ---
+  def process_code_data()
+    # Обрабатывает список RowStd и извлекает данные по CODE, NAME и TYPE_MARK когда оба значения (value и struck_value) в CODE не пустые.
+  def aggregate_and_analyze_data()
+    # Агрегирует данные из нескольких файлов, проводит анализ и сохраняет в xlsx. Старый и новый код разносятся по столбцам, а не по строкам.
+  def process_multiple_files()
+    # Основная функция для обработки нескольких файлов
+  def process_valid_files_with_analyze()
+    # Обрабатывает файлы с валидными путями, запуская внешнюю функцию analyze_mto
+
+--- utils/string_parsing.py ---
+  def check_mto_bbb_page()
+  def getOdStyleFileName()
+  def getRevisionFromFileName()
+  def getMarkaFromFileName()
+  def getDocTypeFromFile()
+  def getDocNumber()
+  def getDocTitle()
+  def string_Remove_New_Lines()
+  def string_Remove_New_Lines_With_Space()
+  def string_Junk_Cleaner()
+  def list_6_1_extrction()
+  def list_6_2_extrction()
+  def list_18_1_extrction()
+  def list_18_2_extrction()
+  def list_18_3_extrction()
+  def remove_dates()
+  def list_flatter()
+  def string_remove_spaces()
+  def get_Format_from_51()
+    # Получение значения, пути или конфига.
+  def get_Format_Count()
+  def get_Format_Single()
+    # Получение значения, пути или конфига.
+  def get_page_num_prefix()
+  def get_page_num_suffix()
+  def check_data_format_long()
+  def check_data_format_short()
+  def compare_data()
+  def check_pdf_suffix()
+    # Проверка данных или условий.
+  def check_1_cirillic_letters()
+  def check_2_cirillic_letters()
+    # Проверка данных или условий.
+  def get_6_1_att_reg_exp()
+    # Получение значения, пути или конфига.
+  def print_att_list_table()
+  def cable_x_fixer()
+
+--- utils/time_cls.py ---
+  class TimerError -> Exception
+    # A custom exception used to report errors in use of Timer class
+  class Timer
+
+--- XML/xml_read.py ---
+  def xml_read_file()
+
+
+=== АНАЛИТИКА: автономные куски и связи (ручная сводка для рефакторинга) ===
+Пакеты (логические подсистемы):
+- main.py — точка входа GUI/оркестрации (теги RFP, PDF v1/v2, zip, 1C и т.д.).
+- RFQ/ — сравнение спецификаций: tags_rfp_compare (ядро), ds_compare, ZIP, pre_Address и др.
+- cable_mapping/ — отдельная подсистема кабельных карт/сводок (импортирует base/utils/tags).
+- base/ — общие классы строк Excel, колонки, Google base, BBB Excel, загрузка xlsx.
+- utils/ — кэш, файлы, zip релиза, вспомогательные функции.
+- tags/ — парсинг тегов.
+- pdf_parsing/ — конвейер PDF v1 (legacy).
+- pdf_parsing_v2/ — движок v2 + template_editor (Qt), grid matcher, шаблоны JSON.
+
+Относительно автономные модули (мало или нет импортов из «своего» дерева):
+- utils/* часто зависит только от stdlib / paths — кандидат в общую библиотеку.
+- tags/tag_parser.py — обычно изолирован от RFQ step4.
+- pdf_parsing vs pdf_parsing_v2 — параллельные ветки; точки соприкосновения через main и конфиги.
+
+Сильные связи (упростить = ввести интерфейсы / пакетные границы):
+- RFQ/tags_rfp_compare/* <-> base/* (RowStd, columns, xlsx) — ядро домена.
+- RFQ/tags_rfp_compare/* <-> utils/cache_utils — кэш MTO/VO.
+- pdf_parsing_v2/template_editor/* <-> pdf_parsing_v2/{models,coord_transform,grid_matcher,grid_lines_utils,...} — толстый UI-слой.
+- main.py импортирует почти всё — «божественный объект»; вынос подкоманд в cli/подпакеты снизит связность.
+
+Рекомендации для независимости (для следующего чата):
+1) Выделить пакет rfp_domain (base RowStd + tables_columns + rfp_tags_utils) с явным публичным API.
+2) step1–step4 оставить как pipeline, зависящий только от rfp_domain + cache interface.
+3) pdf_parsing_v2: слой core (без PyQt) vs editor (только Qt + вызовы core).
+4) Документировать контракты JSON шаблонов (models) отдельно от UI.
+
+Файл сгенерирован _gen_project_context.py — при больших изменениях перезапустите: python _gen_project_context.py

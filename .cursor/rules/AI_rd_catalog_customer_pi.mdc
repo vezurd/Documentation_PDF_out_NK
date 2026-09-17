@@ -1,0 +1,80 @@
+---
+description: "Выгрузка ПИ заказчика (xlsb→pickle, BCC) и каталог АвтоМТО."
+globs: ["rd_catalog/customer_pi.py", "rd_catalog/customer_pi_*.py", "rd_catalog/База заказчика/**", "tmp/test_rd_catalog_customer_pi*.py"]
+alwaysApply: false
+---
+
+# Выгрузка ПИ заказчика (EDMS)
+
+Отчёт с цифрами: [rd_catalog/База заказчика/ОТЧЕТ.md](rd_catalog/База заказчика/ОТЧЕТ.md).
+Код: [rd_catalog/customer_pi.py](rd_catalog/customer_pi.py).
+Pickle: [rd_catalog/База заказчика/customer_pi_bcc.pkl](rd_catalog/База заказчика/customer_pi_bcc.pkl).
+Каталог xlsx: [rd_catalog/customer_pi_auto_mto.py](rd_catalog/customer_pi_auto_mto.py) → `rd_catalog/База заказчика/АвтоМто/`.
+GUI: [rd_catalog/customer_pi_dialog.py](rd_catalog/customer_pi_dialog.py), кнопка «База заказчика…».
+
+Не путать с УЛ ТСД (`tsd_packing_rows.cache`), с Google КСБ ИД и с листом MTO xlsx `ColNames.MTO` (10 колонок по индексу). Не писать в UNC источник. Не класть pickle/АвтоМто в release zip (`rd_catalog/База заказчика/` уже в `.release_zipignore`).
+
+## Источник и фильтр
+
+Папка: `\\bcc\root\CurProjects\di_manegers\Пятницкий_П\Амурский ГХК\Поставки\Отчет систем ПИ\`
+
+Два шаблона xlsb (ридер выбирает по шапке, pickle всегда 49 канонических столбцов):
+
+| layout | Пример | Лист | Шапка | Столбцов в файле | Данные |
+|---|---|---|---|---|---|
+| `full` | `Отчет для заказчика АГХК 07.09.2026.xlsb` | `TDSheet` | **две** строки (План/Прогноз/Факт) | 49 | с Excel-строки 3 |
+| `identity` | `Отчет для заказчика АГХК 14.09.2026_ВСС.xlsb` | `Лист1` | **одна** строка | 23 (до «По РД», без «Центр закупки») | с Excel-строки 2 |
+
+`identity` — уже срез BCC; нет дат RFQ/ГП/отгрузки, количеств «ПИ», ЗИП. В pickle эти поля пустые. Набор **строк** у `_ВСС` уже другого состава, чем полный `full` (спеки могут пропасть) — это содержимое выгрузки, не маппинг столбцов.
+
+- Срез: поставщик **БИ.СИ.СИ., ООО**. Остальные поставщики не храним.
+- Договоры **не** фильтруются: все контракты BCC в pickle, сужение — позже у потребителя.
+- Пустой used-range хвост (`identity` ~720 тыс. строк) обрывается после 128 пустых подряд.
+
+Пересборка: `python -m rd_catalog.customer_pi --from-xlsb <xlsb>` (`pyxlsb`). Чтение: `load_customer_pi()`.
+
+## Выводы
+
+1. **«Спецификация»** — ствол AGCC **без** хвоста ревизии (`AGCC.287-8445-SOT.MTO-0001`). Титул/марка в столбцах совпали со стволом (0 расхождений). Дисциплины среза: **MTO / BOM / DS** (OD нет).
+2. **«№ ревизии РД»** — filename-ревизия **того документа** (`0` / `01` / `01-AN01`), тот же токен что `parse_agcc_mto_xlsx_revision_for_chain`. В имени спеки ревизии нет. В срезе у каждой спеки **ровно одна** ревизия.
+3. **Ловушка имени столбца:** «РД» ≠ ревизия комплекта/OD. В каталоге `kit_package.revision_text` = overlay-current (OD wins ties); `kit_package.mto_revision_text` = MTO xlsx в пакете (может отставать). PI `rd_revision` стыковать с **`mto_revision_text` / именем `….MTO-0001_{rev}_RU.xlsx`**, не с kit overlay rev.
+4. **BBB** в репо — BOM/BOE/BOQ (`AI_bbb_analysis.mdc`) или папка-носитель `BBB` рядом с PDF/DWG. Не эта колонка.
+5. Compare строк: `CODE` = **«Код РД»** (BCC/ECBL), не «Код» (1С). `VENDOR` в PI нет («Поставщик» = BCC). `as_mto_fields()` → `VENDOR=""`. Не агрегировать по коду (как `mto_diff`).
+6. В pickle BOM/DS остаются своей дисциплиной. Каталог АвтоМТО переписывает токен в имени (`.BOM-` / `.BOE-` / `.DS-` → `.MTO-`). **Ревизия в имени файла = PI «№ ревизии РД» того источника.** Две разные ревизии → два файла (`…MTO-0001_02-AN01_RU.xlsx` и `…MTO-0001_0_RU.xlsx`). Строки не сливаются. Если stem+рев совпали (один путь), побеждает нативный MTO, второй документ только в `source_specs`. Пакетные `94A`/`99A` не конвертируются.
+
+## Pickle
+
+`schema_version=1`, `format="rd_catalog.customer_pi"`, protocol 4. Индексы **не** сериализуются (ленивые на store).
+
+```python
+from rd_catalog.customer_pi import load_customer_pi
+
+store = load_customer_pi()
+rec = store.record(0)
+rec.spec, rec.rd_revision, rec.code_rd, rec.discipline
+rec.as_mto_fields()
+store.by_spec()[spec]
+store.by_spec_rev()[(spec, rev)]
+store.by_title_mark()[(title, mark)]  # столбцы Титул/Раздел
+store.by_code_rd()[code]
+```
+
+`rows`: `tuple[str,…]` × 49; `columns` русские (`COLUMN_CAPTIONS`), `column_keys` английские. Даты План/Прогноз/Факт → `YYYY-MM-DD`. В договорах бывает NBSP. `meta.layout` = `full` | `identity`; `meta.source_n_cols` — ширина исходного листа.
+
+## АвтоМТО (каталог xlsx)
+
+Только дисциплины **MTO / BOM / BOE / DS**. В имени файла токен всегда `.MTO-` (`spec_as_mto_stem`). Прочие стебли (`94A` и т.п.) не пишем.
+
+- Имя: `{mto_stem}_{rd_revision}_RU.xlsx` — ревизия из PI, не из папки передачи. Два источника с разными рев. дают два файла; одинаковый путь → нативный MTO, без слияния строк.
+- Лист ровно `Спецификация`, заголовки как `ColNames.MTO` (TAGS…ANNOTATION). `VENDOR` пустой.
+- Путь: `АвтоМто/{title}/{MARK}/{filename}.xlsx`.
+- Теги при fingerprint прогоняются через `get_tag` (как загрузчик MTO), иначе сверка с РД расходится.
+- GUI: столбец Комплекты **«Авто МТО»** vs **MTO filename** рев. файла в официальной папке передачи РД (или ручного выбора), не overlay/OD и не предыдущая NN. Имя MTO может отставать от OD (`03` скопирован в пакет `04`). Нет MTO в этой папке — «MTO · рев.» = **«нет»**, сверка «нет MTO РД». Если показанная рев. ПИ строго выше официальной «РД · рев.» на диске (`02-AN01` vs `02`) — светлая маджента `AUTO_MTO_AHEAD_FILL`, важнее зелёного/жёлтого vs MTO; теплокарта без этой заливки. Если у комплекта несколько файлов заказчика, ячейка показывает ту рев., что совпала с РД (`pick_auto_mto_file` / `format_auto_mto_cell_text`), иначе `.MTO-0001` с наибольшим rank, и суффикс ` (N)` — число файлов. Столбец **«Сверка Авто МТО»** сразу после него — статус содержимого (`auto_mto_compare_status`: `четкое · rev` / `ПоКоду и Кол-ву · rev` / `четкое · сумма …` / `не совпало` / `не сверялось` / `рев. совпала` / `нет в ПИ` / `нет MTO РД` / `другой файл`). `paint_match` is True for `matched` / `composite` / `soft` / **`rev_match`** (same green as «Авто МТО»), False for `no_match` / `stale`. Tooltip ревизии — список `рев. + имя + PI-источник`; tooltip сверки — с каким файлом РД сравнивали. Heatmap: фиксированные столбцы 0–5 = Титул | Марка | В папку робота | **РД · рев.** | **Авто МТО** | **Сверка Авто МТО**; «Авто МТО» сравнивает PI с `ExportSelection.source_revision_text` (файл в робота, включая pin), не с overlay/OD. «MTO · Перечень» повторяет сверку на уровне комплекта после «Ручной выбор MTO». Кнопка «База заказчика…»; справа таблица уникальных «Спецификация» (титул/марка, сортировка по заголовку, пропорциональные ширины, фильтр титул–марка). Двойной щелчок — отдельное окно строк в порядке столбцов MTO (`HEADER_ROW`). Блекло-зелёный (`PAINT_OUTSIDE_KITS`) — спека, чья титул–марка **не** в видимых Комплектах (забанено / не наша задача); строка статистики на том же фоне: получено МТО / записано / нет в ПИ относительно Комплектов. Имя проверяется `parse_agcc_mto_xlsx_revision_for_chain`; марки с 0–2 цифрами (`KSB1`, `SS30`, `PD21`) валидны (`AgccFilenamePatterns.TITLE_SYSTEM`). Не пересекать со сканом/Google/копированием.
+- **Сверка содержимого** (`compare_auto_mto_to_rd`, `AUTO_MTO_COMPARE_ALGORITHM_VERSION = 2`, без schema bump): три градации, строки не агрегируются по коду. **Чёткое** — совпал multiset `(CODE, VALUES, TAGS, UNITS)`. **ПоКоду и Кол-ву** — совпал только `(CODE, VALUES)` (теги или ед. изм. разошлись). **Не совпало** — код или количество разошлись. `NAME` / `VENDOR` / `TYPE_MARK` не сравниваются (в ПИ вендор всегда пустой, в РД имя часто склеивает марку). Сначала один файл, затем сумма **разных исходных спек** (`source_specs[0]`, не история одного документа), тот же output stem (`.MTO-0001` ≠ `.MTO-0002`), `max_members=4`, `max_combinations=128`. Точное побеждает мягкое; один файл побеждает сумму той же градации. Ревизии при сборке xlsx **не сливаются**. GUI **сама** ставит в очередь комплекты с `не сверялось` / `рев. совпала` / `другой файл` (`needs_auto_mto_compare`) при той же отрисовке статуса: `apply_export_selections`, hydrate кэша, startup overlay (пока теплокарта deferred), `_reload_auto_mto_index`, не только `_refresh_revision_matrix`. Это не очередь RD↔робот (`mto_compare_cli`). Поток [`rd_catalog/customer_pi_compare_thread.py`](rd_catalog/customer_pi_compare_thread.py), по одному комплекту; `_busy()` **не** включает его. Кэш JSON `runtime_dir/auto_mto_compare_cache.json` ([`rd_catalog/auto_mto_compare_cache.py`](rd_catalog/auto_mto_compare_cache.py)): только `single`/`composite`/`no_match` плюс `grade`. Путь сверки сравнивают через `auto_mto_rd_paths_match` (U+2010 и `make_path_key`). Hydrate сначала ищет запись **текущего** файла РД. Ручное меню «Сверить Авто МТО…» prepend в ту же очередь. Ячейка «Сверка Авто МТО» показывает другую сверку как `другой файл`, если путь не совпал. Составной match рисует `четкое · сумма 02 + 0` или `ПоКоду и Кол-ву · сумма …` и зелёный фон в столбце сверки, не в «Авто МТО». Частичные ошибки чтения при уже загруженных файлах → `no_match`, не `not_compared`.
+
+```
+python tmp/test_rd_catalog_customer_pi.py
+python tmp/test_rd_catalog_customer_pi_auto_mto.py
+python tmp/test_rd_catalog_customer_pi_dialog.py
+```
+

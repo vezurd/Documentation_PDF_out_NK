@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Каталог РД — монитор</title>
+  <link rel="stylesheet" href="/static/vendor/tabulator.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-title">
+      <h1>Каталог РД</h1>
+      <span class="readonly-tag">только чтение</span>
+    </div>
+    <div id="meta-line" class="meta-line">Загрузка…</div>
+    <button type="button" id="refresh-btn">Обновить</button>
+  </header>
+  <div id="warning" class="warning" hidden></div>
+  <nav class="tab-bar" role="tablist" id="tab-bar">
+    <button type="button" role="tab" data-tab="kits" aria-selected="true">Комплекты</button>
+    <button type="button" role="tab" data-tab="an">АН</button>
+  </nav>
+
+  <section class="tab-panel" data-panel="kits">
+    <div class="filters">
+      <label>Фильтр: <input type="search" id="filter-kits" placeholder="Титул, марка, статус, трансмиттал…"></label>
+      <span id="count-kits" class="count kits-progress"></span>
+    </div>
+    <div class="filters filters-second">
+      <label><input type="checkbox" id="flt-code-a"> Код A</label>
+      <label><input type="checkbox" id="flt-tdo"> Прошли ТДО</label>
+      <label><input type="checkbox" id="flt-no-ab"> Без as-build</label>
+      <label><input type="checkbox" id="flt-only-ab"> Только as-build</label>
+      <label><input type="checkbox" id="flt-mto-problems"> Проблемы MTO</label>
+      <label><input type="checkbox" id="flt-an-closes"> АН закрывает Авто МТО</label>
+      <button type="button" id="btn-kits-legend">Показать легенду</button>
+      <button type="button" id="btn-kits-xlsx" title="Видимые строки текущей сортировки. Порядок и ширины колонок — как на экране.">Сохранить Excel</button>
+    </div>
+    <div class="kits-split" id="kits-split">
+      <div id="table-kits" class="table-host"></div>
+      <div id="kits-gutter" class="kits-gutter" role="separator" aria-orientation="vertical" aria-label="Ширина карточки"></div>
+      <aside class="kit-card" id="kit-card">
+        <div class="kit-pane-tabs" role="tablist">
+          <button type="button" data-kit-pane="tips" aria-selected="true">Подсказки</button>
+          <button type="button" data-kit-pane="card">Карточка</button>
+        </div>
+        <div id="kit-pane-tips" class="kit-pane">
+          <pre id="kit-tips" class="kit-tips">Выберите комплект</pre>
+        </div>
+        <div id="kit-pane-card" class="kit-pane" hidden>
+          <div id="card-empty" class="card-empty">Выберите комплект</div>
+          <div id="card-body" hidden>
+            <div class="card-ident" id="card-ident"></div>
+            <div class="badges" id="card-badges"></div>
+            <div class="card-mto" id="card-mto"></div>
+            <div class="card-packages-wrap">
+              <table class="pkg-table" id="card-packages"></table>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+    <div id="kits-load-overlay" class="kits-load-overlay" hidden>
+      <div class="kits-load-box">
+        <div class="kits-load-spinner" aria-hidden="true"></div>
+        <div id="kits-load-text">Собираем таблицу Комплекты…</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" data-panel="an" hidden>
+    <div class="filters">
+      <label>Фильтр: <input type="search" id="filter-an" placeholder="Титул, марка, файл…"></label>
+      <span id="count-an" class="count"></span>
+    </div>
+    <div id="table-an" class="table-host"></div>
+  </section>
+
+  <dialog id="kits-legend-dialog" class="legend-dialog">
+    <form method="dialog">
+      <h2 id="kits-legend-title">Легенда таблицы Комплекты</h2>
+      <p id="kits-legend-intro"></p>
+      <div id="kits-legend-body"></div>
+      <menu>
+        <button value="close">Закрыть</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="/static/vendor/tabulator.min.js"></script>
+  <script src="/static/app.js?v=20260916d"></script>
+</body>
+</html>

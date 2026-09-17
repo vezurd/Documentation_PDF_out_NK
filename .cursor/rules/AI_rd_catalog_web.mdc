@@ -1,0 +1,112 @@
+---
+description: "rd_catalog WEB monitor: Qt-free monitor_views, dual GUI+WEB, LAN read-only."
+globs: ["rd_catalog/**", "rd_catalog_web/**", "tmp/test_rd_catalog_*.py"]
+alwaysApply: false
+---
+
+# RD Catalog — WEB + dual GUI
+
+Алгоритмы и схема: [AI_rd_catalog.mdc](.cursor/rules/AI_rd_catalog.mdc), [AI_rd_catalog_db.mdc](.cursor/rules/AI_rd_catalog_db.mdc). Этот файл — **манифест двух клиентов** (Qt и браузер) над одним join-слоем.
+WEB биндит те же `pipeline_*_tooltip` / новые labels из [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py) ([AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc)); Ctrl+клик — только Qt, у WEB нет.
+
+## 1. Слои (не смешивать)
+
+```
+Qt writers (scan, Google, Outlook, robot, journal decisions)
+        ↓ persist
+SQLite schema 10 + JSON caches (pins, AutoMTO compare, AN compare, ban, palette)
+        ↓ read-only join
+rd_catalog/monitor_views.py   ← единственное место текста/fill/tooltip ячейки
+        ↓
+Qt bind (_refresh_*/_paint_* = setText + QColor(dto.fill))
+WEB bind (rd_catalog_web/ = JSON + CSS background)
+```
+
+- **Facts** (`list_*`, `rebuild_pipeline`, overlay) живут в SQLite. **Не** добавлять таблицы «нарисованных строк» (никакой schema 10 ради WEB).
+- **Join** — [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py). Qt-free. Не импортирует PySide. Не вызывает `rebuild_pipeline` / `ingest_google_snapshot` / scan.
+- **Clients** только биндят DTO. Запрещено собирать ` AB`, цель Авто МТО, robot-origin, AN tooltip, Google-подписи перечня в `window.py`, `*_tab.py` или JS.
+
+WEB **не** писатель. Пустой `kit_pipeline` → пустые листы + предупреждение «обновите в Qt». Hatch hydrate остаётся только у Qt `load_startup_snapshot`.
+
+## 2. Манифест новой фичи (обязателен)
+
+Любая новая колонка / цвет / подпись ячейки / фильтр-флаг:
+
+1. Факт (если новый) → `list_*` / derived table / JSON cache. Schema bump только если это **факт**, не подпись.
+2. Сборка → `MonitorCell` (+ флаг фильтра) в `monitor_views`. Тест в `tmp/test_rd_catalog_monitor_views.py`.
+3. Qt: `item.setText(cell.text)` / `QColor(cell.fill)`. WEB: то же поле JSON. **Оба клиента в одном PR/чате**, иначе дрейф.
+4. Не копировать формулу «как в window.py» в JS.
+
+**Где что править при смене алгоритма:** F/pipeline/overlay → `pipeline.py` + SQLite, затем `monitor_views` если меняется **смысл ячейки**. Подпись/`AB`/цель Авто МТО → только `monitor_views`. Геометрия таблицы → клиент (QSettings / localStorage), **кроме Комплектов**: порядок и ширины колонок — [`rd_catalog/kits_table_layout.json`](rd_catalog/kits_table_layout.json) (runtime `%LOCALAPPDATA%\...\rd_catalog\kits_table_layout.json`, иначе factory). WEB читает тот же JSON через `resolve_kits_table_layout`; не держать порядок Комплектов в localStorage. Сессия Qt (`window/kits_header_v10`) на WEB не едет, пока в GUI не нажали «Сохранить шаблон колонок».
+
+## 3. DTO (норматив)
+
+Общая ячейка `MonitorCell`: `text`, `tooltip`, `fill` (`#RRGGBB` или `None`), `foreground`, `bold`, `underline`, `sort_key`, `palette_key`.
+
+Константы покраски (не дублировать QColor в вкладках):
+
+- match `#E2F2E1`, mismatch `#F7E8BE`
+- Комплекты «Авто МТО» ahead of official «РД · рев.» `#F0D0EA` (`AUTO_MTO_AHEAD_FILL`); heatmap Auto MTO stays green/yellow vs export
+- robot origin `#C5E8C4` only when robot rev matches «MTO · рев.» of the official folder / SQ; orphan `#F3C2C2`; robot **bold** when RD↔robot content equal (MTO rev may differ)
+- mixed titles (`mixed_titles`) `#F3C2C2` on Комплекты «РД · рев.»; Сводка «Смешанные титулы»
+- «РД · рев.» yellow (`REV_DIFF_FILL`) when disk lags letter A/B/C or last F TDO/incoming pass; robot-origin green loses; grey `rd_missing_transfer` still wins
+- АН vs-*: [`rd_catalog/an_compare.py`](rd_catalog/an_compare.py) (`AN_VS_*_FILL`)
+- pipeline fill: `status_colors.color_for`
+
+`TDO_STATUSES` (per-rev heatmap/worklist) = `{tdo_review, code_a, code_b, code_c}` — живёт в `monitor_views`, вкладки **импортируют**. Комплекты «Прошли ТДО» — **другое**: `pipeline.status in {tdo_review, agreed}`. Не смешивать.
+
+API: `load_catalog_monitor(database, config) -> CatalogMonitor` (read-only). Ленивая карточка: `monitor.kit_card(title, mark)`. `as_json()` для FastAPI (`dataclasses.asdict`, enum → value). WEB кэш вызывает `load_catalog_monitor(..., sheets=WEB_MONITOR_SHEETS)` — только Комплекты + АН (heatmap/журнал/перечень/готовность/коллизии DTO не собираются). Qt по-прежнему `sheets=None` = все листы.
+
+Листы v1 и ключи колонок Комплектов — как `_KITS_HEADERS` в [`rd_catalog/window.py`](rd_catalog/window.py). `KitsMonitorRow.cells[header]`, плюс `kit_key`, `haystack`, флаги фильтров (`rd_present`, `kit_ok`, `code_a`, `kit_tdo_passed`, `as_build`, `has_mto_problem`, `an_closes_auto_mto`, …). `matrix` (`KitMatrixRow`) можно держать на Qt-стороне для open/copy; в JSON — пути пакетов, не Qt-объект.
+
+Heatmap: universe = present + canonical layout + не skip + не ban (как `_document_tree_kit_identities`). Колонки ревизий **не** переставлять. «РД · рев.» heatmap = official disk snapshot + суффикс ` AB`; если send/F нет в «Для передачи» — тот же статус `01-AN01 Нет в РД` и fill `rd_missing_transfer`.
+
+Перечень: Google `нет комплекта` / `нет статуса` / `есть`; связь `F✓/✗ · РД✓/✗ · MTO✓/✗` — функции в `monitor_views`, не в `mto_worklist_tab.py`.
+
+АН: `format_an_vs_cell` + кэш `an_content_compare_cache.json`. Колонка «К согл. передаче» и подсветка лучшей папки — `score_an_files_for_agreed` / `AN_HEADERS` в join, не в JS. WEB не ставит очередь сверки.
+
+Журнал: строки `list_issuance_journal` + display cells; haystack includes ``титул-марка``; `paints_kits_issuance` marks the row behind Комплекты «Выдача · рев.» (JS only reads the flag). WEB **без** `apply_journal_decision`.
+
+Карточка: `get_kit_card` + rollup MTO из worklist + строки пакетов (выдача/F/ликвидность/рассмотрение fill). Не расширять `KitCard` ради WEB — обёртка в `monitor_views`. Нижняя панель Комплектов: вкладка **Подсказки** по умолчанию биндит `KitsMonitorRow.tooltips_text` (`format_kits_row_tooltips`: **Сводка**, **РД · рев.**, затем остальные; рассмотрение/согласование — `pipeline_review_tooltip` / `pipeline_approval_tooltip` с именами листов F и «Выдача РД ПД»). Ctrl+клик по ячейке таблицы комплектов прокручивает блок этого столбца в «Подсказки» — только Qt. JS не переставляет колонки. Карточка пакетов — вторая вкладка.
+
+## 4. Join уже в monitor_views
+
+Не возвращать в Qt/JS: `auto_mto_rd_target`, `kit_an_targets`, `official_rd_rev_text` (` AB`), robot-origin fill, `format_kits_card_mto`, `package_liquidity_label`, `package_review_status`, `MtoKitFlags`, IFC tooltip, `worklist_google_cell`. Авто МТО compare: JSON-кэш или `comparisons=` с Qt-вкладки.
+
+## 5. WEB пакет
+
+[`rd_catalog_web/`](rd_catalog_web/): FastAPI, `python -m rd_catalog_web --host 0.0.0.0`. Только `load_catalog_monitor`. `CatalogDatabase(..., busy_timeout_ms=60_000)`. Не шарить один `sqlite3.Connection` между потоками. Не писать JSON-кэши. Не трогать `rd_catalog.lock`.
+
+Авторизация: нет (LAN). Не выставлять в интернет. SQLite только локальный файл (`%LOCALAPPDATA%\...\rd_catalog.sqlite`), **не** UNC/SMB. Та же машина, что Qt-писатель.
+
+`--host 0.0.0.0` — **bind** на все интерфейсы, не URL. Этот ПК открывает `http://127.0.0.1:8765`. Коллеги — `http://<LAN-IPv4>:8765` (`rd_catalog_web/urls.py`: `lan_share_url`, никогда не отдавать `http://0.0.0.0:...`).
+
+Qt-каталог может сам поднять child `python -m rd_catalog_web` (кнопка **Открыть WEB**, галка **Автозапуск WEB**, кнопка **Ссылка для коллег** копирует `lan_share_url`, QSettings `window/web_server_autostart`, default **false**). Автозапуск **не** открывает браузер. Child **не** входит в `_busy()` / `_catalog_workers_busy()`. «Открыть WEB» открывает loopback; подпись справа показывает LAN-URL.
+
+v1 листы WEB: **Комплекты** (с карточкой) и **АН**. Остальные вкладки Qt (Ревизии MTO, MTO · Перечень, MTO · Готовность, Выдача · Журнал, Коллизии, «Все документы») в браузере нет. Вне WEB: скан, Google write, Outlook, SQ→РД, робот, pin/export, legalize.
+
+Таблицы: сортировка, resize, reorder (кроме heatmap rev-колонок и кроме Комплектов: порядок/ширины с сервера), фильтры на клиенте, контекст-меню **навигация** `?tab=&title=&mark=`, копирование UNC. Не `os.startfile` с сервера. Tabulator: `nestedFieldSeparator: false` — иначе заголовки с `.` (`рев.`, `рев. F`) читаются как вложенный путь и ячейки пустые. Правая панель Комплектов по умолчанию = ширина колонки «Статус согласования» (163px, clamp 140–480; если нет localStorage — целое из `/api/meta` `kits_header_widths["Статус согласования"]`). Перетаскивание gutter между таблицей и карточкой; ключ `rdweb-kits-card-width` (геометрия панели, **не** порядок колонок). Overlay «Собираем таблицу Комплекты…» на init/Обновить до построения `/api/kits`; `/api/an` догружается после, без блокировки Комплектов. `/api/meta` отдаёт `kits_paint_legend` из `kits_paint_legend()` и `kits_progress_text` из `format_kits_progress_stats`; JS только рисует DTO, не сочиняет текст легенды и не считает «Ок» / «Совпадает» / Код A / ТДО. Клик по `#count-kits` копирует строку (без tooltip). Кнопка **«Сохранить Excel»** на Комплектах: `POST /api/kits/xlsx` с видимыми `(title, mark)` в порядке Tabulator и живыми ширинами; сервер красит из кэша `MonitorCell` тем же [`rd_catalog/table_xlsx.py`](rd_catalog/table_xlsx.py). Не генерировать xlsx в JS и не принимать fill от клиента.
+
+Старые `templates/` Flask не использовать.
+
+## 6. Чеклист ревью (GUI или WEB)
+
+- Новая подпись ячейки есть в `monitor_views` и тесте?
+- Qt/JS не считают ревизию / цель Авто МТО заново?
+- WEB не вызывает rebuild/scan/Google ingest?
+- Schema 9 / algorithm versions не bump «ради экрана»?
+- Per-rev TDO ≠ kit-level TDO?
+
+## 7. Что ещё в Qt (не join)
+
+Допустимо, пока не ломает dual-client:
+
+- Heatmap **буквы ревизий** / italic IFC / колонка экспорта (pin queue) — Qt `revision_matrix_tab.py`. WEB берёт `HeatmapMonitor.cells` (без italic).
+- Очередь сверки Авто МТО и АН content-compare — только Qt writers; WEB читает JSON-кэш.
+- «Все документы», Outlook, скан — не WEB v1.
+
+Новая **подпись** heatmap-буквы всё равно должна появиться в `monitor_views._build_heatmap`, не только в `_make_cell_item`.
+
+## 8. Фаза 2
+
+«Все документы»: `bundle_documents` + `list_folder_tree_hints` через `monitor_views`. Basic Auth — опция, не v1.

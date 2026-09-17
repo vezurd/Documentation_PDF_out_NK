@@ -1,0 +1,87 @@
+# GitHub backup: source and configs only.
+# Caches, Excel/PDF dumps, and secrets stay on this PC.
+
+# --- secrets (never upload) ---
+base_check/client_secret.json
+base_check/agcc-codes-*.json
+base_check/code_base_data.json
+base_check/code_base_meta.json
+base_check/mapping_base_data.json
+base_check/mapping_base_meta.json
+**/client_secret*.json
+**/credentials.json
+**/token.json
+**/*service_account*.json
+.env
+.env.*
+*.pem
+
+# --- Python / IDE ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+.idea/
+*.iml
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# --- caches and generated outputs ---
+cache/
+**/cache/
+tmp/*
+!tmp/*.py
+!tmp/*.ps1
+!tmp/*.md
+debug/
+debug_output/
+grid_diagnostic_output/
+adapt_debug/
+_release/
+release/
+uploads/
+approval_mail_samples/
+tmp_step4_compare/
+tmp_step4_compare_v2/
+
+# --- heavy binaries / workbooks (rebuilt locally) ---
+*.cache
+*.pkl
+*.log
+*.pdf
+*.PDF
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.png
+*.jpg
+*.jpeg
+*.zip
+*.7z
+
+# keep small Excel templates if present
+!templates/**/*.xlsx
+!RFQ/**/templates/**/*.xlsx
+
+# --- v2 test PDFs and bench dumps ---
+pdf_parsing_v2_engine/templates/test_pdf/
+pdf_parsing_v2_engine/templates/stamp_deform_bench/output/
+pdf_parsing_v2/templates/test_pdf/
+
+# --- customer dumps ---
+rd_catalog/База заказчика/
+
+# --- RFQ input data (not code) ---
+RFQ/tags_rfp_compare/input/**
+!RFQ/tags_rfp_compare/input/code_ban.txt
+
+# TB lives in a separate project
+TB/

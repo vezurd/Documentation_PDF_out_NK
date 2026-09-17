@@ -1,0 +1,263 @@
+C:\Users\ydruzev\PycharmProjects\Documentation_PDF_out_NK
+Связи модулей по статическому анализу import/from (только верхний уровень файла, ast).
+Это не граф вызовов функций: отражены зависимости пакетов друг от друга.
+Учитываются корни: GUI, RFQ, base, cable_mapping, nano_cad, pdf_parsing, pdf_parsing_v2, tags, utils.
+Обновление: python _gen_project_context.py
+
+=== Матрица: файлов в пакете A с импортом пакета B ===
+  base:
+    → utils: 14 file(s)
+    → base: 5 file(s)
+    → pdf_parsing: 4 file(s)
+    → tags: 3 file(s)
+    → GUI: 1 file(s)
+    → cable_mapping: 1 file(s)
+    → nano_cad: 1 file(s)
+  cable_mapping:
+    → utils: 18 file(s)
+    → base: 6 file(s)
+    → tags: 5 file(s)
+    → cable_mapping: 1 file(s)
+  GUI:
+    → base: 1 file(s)
+  nano_cad:
+    → base: 5 file(s)
+    → utils: 3 file(s)
+  pdf_parsing:
+    → utils: 10 file(s)
+    → base: 1 file(s)
+    → pdf_parsing: 1 file(s)
+    → tags: 1 file(s)
+  pdf_parsing_v2:
+    → pdf_parsing: 1 file(s)
+    → utils: 1 file(s)
+  RFQ:
+    → base: 36 file(s)
+    → utils: 25 file(s)
+    → RFQ: 6 file(s)
+    → pdf_parsing: 6 file(s)
+    → tags: 4 file(s)
+  tags:
+    → utils: 1 file(s)
+  utils:
+    → base: 6 file(s)
+    → pdf_parsing: 4 file(s)
+    → utils: 2 file(s)
+  (root):
+    → GUI: 1 file(s)
+    → RFQ: 1 file(s)
+    → base: 1 file(s)
+    → cable_mapping: 1 file(s)
+    → nano_cad: 1 file(s)
+    → pdf_parsing: 1 file(s)
+    → pdf_parsing_v2: 1 file(s)
+    → tags: 1 file(s)
+    → utils: 1 file(s)
+
+=== Обратная проекция: кто импортирует пакет B (число файлов-источников) ===
+  base ←
+    RFQ: 36 file(s)
+    cable_mapping: 6 file(s)
+    utils: 6 file(s)
+    base: 5 file(s)
+    nano_cad: 5 file(s)
+    (root): 1 file(s)
+    GUI: 1 file(s)
+    pdf_parsing: 1 file(s)
+  cable_mapping ←
+    (root): 1 file(s)
+    base: 1 file(s)
+    cable_mapping: 1 file(s)
+  GUI ←
+    (root): 1 file(s)
+    base: 1 file(s)
+  nano_cad ←
+    (root): 1 file(s)
+    base: 1 file(s)
+  pdf_parsing ←
+    RFQ: 6 file(s)
+    base: 4 file(s)
+    utils: 4 file(s)
+    (root): 1 file(s)
+    pdf_parsing: 1 file(s)
+    pdf_parsing_v2: 1 file(s)
+  pdf_parsing_v2 ←
+    (root): 1 file(s)
+  RFQ ←
+    RFQ: 6 file(s)
+    (root): 1 file(s)
+  tags ←
+    cable_mapping: 5 file(s)
+    RFQ: 4 file(s)
+    base: 3 file(s)
+    (root): 1 file(s)
+    pdf_parsing: 1 file(s)
+  utils ←
+    RFQ: 25 file(s)
+    cable_mapping: 18 file(s)
+    base: 14 file(s)
+    pdf_parsing: 10 file(s)
+    nano_cad: 3 file(s)
+    utils: 2 file(s)
+    (root): 1 file(s)
+    pdf_parsing_v2: 1 file(s)
+    tags: 1 file(s)
+
+=== Файлы → импортируемые пакеты проекта ===
+  GUI/gui_constants.py -> base
+  RFQ/DS_compare_MTO.py -> RFQ, base, pdf_parsing, utils
+  RFQ/DS_compare_functions.py -> RFQ, base, utils
+  RFQ/RFQ_compare.py -> RFQ, base, tags, utils
+  RFQ/R_R/R_compare.py -> base, tags, utils
+  RFQ/Value_Compare.py -> RFQ, base, utils
+  RFQ/ZIP/zip_code_rules.py -> base, utils
+  RFQ/ZIP/zip_start.py -> RFQ, base, utils
+  RFQ/ds_compare/DsMtoTable.py -> base
+  RFQ/ds_compare/aggregate_mto_positions.py -> base, utils
+  RFQ/ds_compare/ds_classes.py -> base, pdf_parsing
+  RFQ/ds_compare/ds_merge_folder.py -> RFQ, base, utils
+  RFQ/ds_compare/ds_start_init.py -> RFQ, base, utils
+  RFQ/ds_compare/get_mto_list_from_ds.py -> RFQ, base
+  RFQ/ds_compare/load_mto.py -> RFQ, base, pdf_parsing
+  RFQ/ds_compare/mto_check.py -> RFQ, base, utils
+  RFQ/ds_compare/mto_ds_compare.py -> RFQ, base, pdf_parsing, utils
+  RFQ/ds_compare/report.py -> RFQ, base, pdf_parsing, utils
+  RFQ/ds_compare/support_finctions.py -> RFQ, base, pdf_parsing
+  RFQ/func_get_unique_row_list.py -> base, utils
+  RFQ/mto_compare.py -> RFQ, base, utils
+  RFQ/pre_Address/start_pre_address.py -> base, utils
+  RFQ/tags_rfp_compare/agregate_tags.py -> RFQ, base, utils
+  RFQ/tags_rfp_compare/column_optimization.py -> base
+  RFQ/tags_rfp_compare/mto_file_filter.py -> utils
+  RFQ/tags_rfp_compare/rfp_tags_settings_gui.py -> RFQ
+  RFQ/tags_rfp_compare/rfp_tags_utils.py -> utils
+  RFQ/tags_rfp_compare/step1_load_rfp.py -> RFQ, base, utils
+  RFQ/tags_rfp_compare/step2_load_mto.py -> RFQ, base, utils
+  RFQ/tags_rfp_compare/step3_load_vo.py -> RFQ, base, tags, utils
+  RFQ/tags_rfp_compare/step4/step4_1_check_mto_data.py -> RFQ, base
+  RFQ/tags_rfp_compare/step4/step4_2_match_rfp_with_mto.py -> RFQ, base
+  RFQ/tags_rfp_compare/step4/step4_3_assign_position_status.py -> RFQ, base
+  RFQ/tags_rfp_compare/step4/step4_4_add_unmatched_mto_rows.py -> RFQ, base
+  RFQ/tags_rfp_compare/step4/step4_5_check_values_sum.py -> RFQ, base
+  RFQ/tags_rfp_compare/step4/step4_6_cell_colors.py -> base, utils
+  RFQ/tags_rfp_compare/step4/step4_6_save_match_result_to_excel.py -> RFQ, base, utils
+  RFQ/tags_rfp_compare/step4/step4_postmerge_ops.py -> RFQ, base, tags, utils
+  RFQ/tags_rfp_compare/step4/step4_worker.py -> RFQ, base
+  RFQ/tags_rfp_compare/step4_analyze_and_match.py -> RFQ, base
+  base/AVEVA.py -> base
+  base/base_cheks.py -> base, nano_cad, tags, utils
+  base/base_class_std_table.py -> base, utils
+  base/base_classes.py -> base, tags, utils
+  base/base_excel_out.py -> base, utils
+  base/base_google.py -> base, utils
+  base/base_mto.py -> base, utils
+  base/base_xlsx_load.py -> base, utils
+  base/bbb_analysis.py -> base, utils
+  base/bbb_checks.py -> base, pdf_parsing, tags, utils
+  base/bbb_excel_out.py -> base, utils
+  base/bbb_load.py -> base, utils
+  base/bbb_output_config.py -> base
+  base/bbb_settings_gui.py -> base
+  base/boot.py -> base, pdf_parsing, utils
+  base/cabinet_composition_info.py -> base, pdf_parsing
+  base/get_row_type_variants/BOE.py -> base
+  base/get_row_type_variants/BOM.py -> base
+  base/get_row_type_variants/BOQ.py -> base
+  base/get_row_type_variants/DsVsMto.py -> base
+  base/get_row_type_variants/GoogleBase.py -> base
+  base/get_row_type_variants/MTO.py -> base
+  base/get_row_type_variants/RFP.py -> base
+  base/get_row_type_variants/RFP_AGGREGATED.py -> base
+  base/get_row_type_variants/RFQ.py -> base
+  base/get_row_type_variants/VO_MTO.py -> base
+  base/get_row_type_variants/ds_specification.py -> base
+  base/google_sheets.py -> GUI, base, utils
+  base/output.py -> base, pdf_parsing, utils
+  base/section_type_info.py -> base
+  base/t_comm_initial_classes.py -> base
+  base/tables_columns.py -> cable_mapping
+  cable_mapping/cab_mapping.py -> base, cable_mapping, utils
+  cable_mapping/cj_check/cj_check_main.py -> cable_mapping, tags, utils
+  cable_mapping/cm_clss/cm_CableLayingTypes.py -> base, cable_mapping, utils
+  cable_mapping/cm_clss/cm_CableTable.py -> cable_mapping, tags, utils
+  cable_mapping/cm_clss/cm_CableTableRow.py -> cable_mapping, tags, utils
+  cable_mapping/cm_clss/cm_ColumnsCableTable.py -> cable_mapping
+  cable_mapping/cm_clss/cm_ElementCT.py -> utils
+  cable_mapping/cm_clss/cm_TableCommentsCabMap.py -> cable_mapping, utils
+  cable_mapping/cm_functions/cm_get_cable_numbers.py -> cable_mapping, utils
+  cable_mapping/cm_functions/cm_renumber_tpk_cables.py -> cable_mapping, tags, utils
+  cable_mapping/load_tpk.py -> base, cable_mapping, utils
+  cable_mapping/lolad_docx_cj.py -> cable_mapping, utils
+  cable_mapping/map_excel_out.py -> cable_mapping, utils
+  cable_mapping/mapping/get_cj.py -> cable_mapping, utils
+  cable_mapping/mapping/get_summary.py -> cable_mapping, utils
+  cable_mapping/mapping/load_map_from_google.py -> base, utils
+  cable_mapping/mapping/map_calsses.py -> base, cable_mapping, tags, utils
+  cable_mapping/mapping/summary_cables.py -> base, cable_mapping, utils
+  cable_mapping/utils_cm.py -> cable_mapping, utils
+  main.py -> GUI, RFQ, base, cable_mapping, nano_cad, pdf_parsing, pdf_parsing_v2, tags, utils
+  nano_cad/fields_in_tables.py -> base, nano_cad, utils
+  nano_cad/fields_tables/tables_fields.py -> base
+  nano_cad/import_db.py -> base, nano_cad
+  nano_cad/nc_start.py -> base, nano_cad, utils
+  nano_cad/write_db.py -> base, nano_cad, utils
+  pdf_parsing/OD_tab_parsing.py -> pdf_parsing, utils
+  pdf_parsing/camelot_stamp_debug.py -> pdf_parsing
+  pdf_parsing/console_out_Cur_Proj.py -> pdf_parsing
+  pdf_parsing/elements_coordinates.py -> utils
+  pdf_parsing/files_att_collector.py -> pdf_parsing, utils
+  pdf_parsing/find_function_MTO_BBB.py -> pdf_parsing
+  pdf_parsing/find_functions.py -> base, pdf_parsing, utils
+  pdf_parsing/find_tags.py -> pdf_parsing, tags, utils
+  pdf_parsing/get_pdf_files_list.py -> utils
+  pdf_parsing/od_raw_read_file.py -> utils
+  pdf_parsing/pdf_settings_gui.py -> pdf_parsing
+  pdf_parsing/rules_check.py -> pdf_parsing, utils
+  pdf_parsing/shtamp_extract_classes.py -> pdf_parsing, utils
+  pdf_parsing/stamp_config_editor.py -> pdf_parsing
+  pdf_parsing/stamp_parser.py -> pdf_parsing, utils
+  pdf_parsing/stamp_parser_example.py -> pdf_parsing
+  pdf_parsing/template_stamp_extractor_test.py -> pdf_parsing
+  pdf_parsing_v2/__init__.py -> pdf_parsing_v2
+  pdf_parsing_v2/compat.py -> pdf_parsing, pdf_parsing_v2
+  pdf_parsing_v2/coord_transform.py -> pdf_parsing_v2
+  pdf_parsing_v2/debug_visual.py -> pdf_parsing_v2
+  pdf_parsing_v2/field_cleaners.py -> utils
+  pdf_parsing_v2/frame_detector.py -> pdf_parsing_v2
+  pdf_parsing_v2/grid_diagnostic.py -> pdf_parsing_v2
+  pdf_parsing_v2/grid_lines_utils.py -> pdf_parsing_v2
+  pdf_parsing_v2/grid_matcher.py -> pdf_parsing_v2
+  pdf_parsing_v2/mto_grid_diagnostic.py -> pdf_parsing_v2
+  pdf_parsing_v2/pdf_v2_settings_gui.py -> pdf_parsing_v2
+  pdf_parsing_v2/stamp_extractor.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_editor/__main__.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_editor/adapt_debug.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_editor/auto_detect.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_editor/catalog_editor.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_editor/cell_items.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_editor/main_window.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_editor/set_editor.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_editor/templates_browser.py -> pdf_parsing_v2
+  pdf_parsing_v2/template_loader.py -> pdf_parsing_v2
+  pdf_parsing_v2/test_progressive_interp.py -> pdf_parsing_v2
+  pdf_parsing_v2/v2_pipeline.py -> pdf_parsing_v2
+  pdf_parsing_v2/v2_report.py -> pdf_parsing_v2
+  tags/tag_classes.py -> tags
+  tags/tag_parser.py -> tags, utils
+  utils/PD/pd_start.py -> base, pdf_parsing, utils
+  utils/PD/подсчет листов.py -> pdf_parsing
+  utils/Scaner_XLSX/02_scaner_xlsx_cleaner.py -> utils
+  utils/Scaner_XLSX/analyze_xlsx.py -> base, pdf_parsing, utils
+  utils/Scaner_XLSX/f04_00_process_valid_paths.py -> utils
+  utils/Scaner_XLSX/f04_01_analyze_mto.py -> base
+  utils/Scaner_XLSX/f04_02_functions.py -> base
+  utils/Scaner_XLSX/f_04_000_in_one.py -> base, utils
+  utils/bbox/__init__.py -> utils
+  utils/bbox/bbox2d_list.py -> utils
+  utils/bbox/metrics.py -> utils
+  utils/bbox/utils.py -> utils
+  utils/cache_manager_cli.py -> utils
+  utils/cache_utils.py -> base
+  utils/error_log.py -> utils
+  utils/path.py -> pdf_parsing, utils
+  utils/save_to_file.py -> utils

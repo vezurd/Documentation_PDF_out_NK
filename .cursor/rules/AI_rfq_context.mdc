@@ -1,0 +1,194 @@
+---
+description: "RFQ/tags_rfp_compare: модули, классы, колонки, units gate, ловушки."
+globs: ["RFQ/**", "base/**"]
+alwaysApply: false
+---
+
+# RFQ / tags_rfp_compare — контекст
+
+> Компактная память по пайплайну сравнения тегов. Общая точка входа: [AI_memory.mdc](.cursor/rules/AI_memory.mdc).
+> Финальный Excel RFP · Запуск: **[AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc)**.
+
+---
+
+## 2. Модули (tags_rfp_compare)
+
+```
+agregate_tags.py           — оркестратор step1..step4 + units gate
+step1_load_rfp.py          — step1_load_rfp_raw + step1_finalize_rfp_data; wrapper step1_load_rfp_data
+step2_load_mto.py / step3_load_vo.py — MTO/VO Excel, кэш
+units_gate.py              — общий gate конвертации RFP+MTO+УЛ до finalize/Step4
+RFQ/units_convert/         — matrix, plan/apply, Google strict index, ALGORITHM_VERSION
+step4_analyze_and_match.py — анализ; sub-steps step4_1 … step4_6, step4_postmerge_ops
+rfp_tags_utils.py, column_optimization.py
+compare_step4_files.py     — multiset сравнение результатов
+mto_file_filter.py
+RFQ/rfp_parts/             — свод из частей → AI_rfp_parts.mdc
+RFQ/packing_list_provider.py — read-only УЛ cache для Step4
+```
+
+---
+
+## 3. Классы (`base/`)
+
+- **RowStd:** `get_row_copy_light`, `batch_copy_light` — см. §5.
+- **CheckElement:** `value`, `struck_value`, `color`.
+- **RowType:** `position_row`, `section_row`, …
+
+---
+
+## 4. Колонки (`base/tables_columns.py`)
+
+**RFP:** `CODE`, `TAGS`, `VALUES`, `UNITS`, `NAME`, `TYPE_MARK`, `DS_*`, **`RFP_SUPPLY_STATUS`** (`rfp_supply_status`, net слот 15; канон. «Исключен из поставки» или «{old} тег заменен на {new}» — не `POSITION_STATUS`; иное непустое → fatal).
+
+**ДС identity:** `DS_NAME` (порядковый ярлык), **`DS_ACTUAL`** (фактический `ДС{n}` в Step4 / ключ посадки УЛ).
+
+**MTO (match):** `TAG_MTO`, `CODE_MTO`, `VALUES_MTO`, **`UNITS_MTO`**, `NUMBERS_MTO`, …
+
+**Статусы ед. изм.:** **`UNITS_CHECK_STATUS`**, **`UNITS_CONVERSION_TRACE`**
+
+**Diff qty:** **`VALUES_MTO_RFP_DIFF`** — MTO−RFP при совместимых нормализованных ед. изм. (postmerge); **`VALUES_MTO_UL_DIFF`** — MTO−УЛ после packing (`apply_mto_ul_quantity_diff`).
+
+**УЛ:** `UL_ORDERED_VALUES` … `UL_TAGS` (+ `UL_TAG_MATCH_STATUS`; см. step4 Excel rule)
+
+---
+
+## 5. КРИТИЧНО: `get_row_copy_light` и `_COPY_COLS`
+
+Light-копии **делят** один `CheckElement` для колонок **не** из `_COPY_COLS`.
+
+**`_COPY_COLS`** (оба метода в [base_classes.py](base/base_classes.py)):
+
+```
+VALUES, VALUES_2, VALUES_MTO, VALUES_VO,
+UNITS, UNITS_MTO, UNITS_CHECK_STATUS, UNITS_CONVERSION_TRACE,
+TAG_MTO, CODE_MTO, MTO_CODE_STRUCK, NAME_MTO, TYPE_MARK_MTO, NUMBERS_MTO,
+TAG_VO, CODE_VO, NAME_VO,
+MATCH_STATUS, MATCH_STATUS_VO, POSITION_STATUS, IN_CABINET, HAS_TAGS_RFP,
+TAG_EFFECTIVE, MATCH_STATUS_TAGS, MATCH_STATUS_CODE_REPLACEMENT,
+MATCH_STATUS_VO_MTO_TAGS, MATCH_STATUS_RFP_MTO_TAGS,
+MATCH_STATUS_RFP_MTO_STRUCK_CODE, EQUIPMENT_TYPE_STATUS,
+MTO_CABINET_EQUIPMENT, DS_LOT, DS_ACTUAL, RFP_SUPPLY_STATUS,
+UL_ORDERED_VALUES, UL_VALUES, UL_UNITS, UL_REMAINING_VALUES,
+UL_COMPARE_STATUS, UL_DATA_STATUS, UL_TAG_MATCH_STATUS, UL_CODE, UL_SOURCE_FILES,
+UL_NAME, UL_TYPE_MARK, UL_VENDOR, UL_TAGS,
+```
+
+**`_ALWAYS_COPY_COLS`** (только `batch_copy_light`): UL-колонки (включая `UL_TAG_MATCH_STATUS`) — всегда отдельный CE, даже если value пустой.
+
+`VALUES_MTO_RFP_DIFF` / `VALUES_MTO_UL_DIFF` **не** в `_COPY_COLS` — MTO−RFP пишется в postmerge после collapse, MTO−УЛ глобально после packing.
+
+---
+
+## 6. Порядок запуска (Launch)
+
+1. Optional parts preflight → effective RFP path
+2. Optional UL preflight (`ensure_tsd_packing_cache_current`, fingerprint) when `include_packing_lists`
+3. **`step1_load_rfp_raw`** — low-level cache по файлу; **без** normalize/split/convert
+4. Parallel **`step2_load_mto`** + **`step3_load_vo`** + **`load_base()`** (Google rows once)
+5. Optional **`load_packing_dataset()`** once (кэш уже свежий после preflight)
+5b. **`load_tags=false`**: preflight требует `rfp_parts_net_no_tags.xlsx` (лот как в ДС); in-memory blank `TAGS` on RFP/MTO/VO/УЛ (кэш УЛ не трогает)
+6. **`run_units_gate`** — один immutable plan для raw RFP + MTO + active UL rows (VO excluded); transactional **`apply_conversion_plan`**
+7. **`step1_finalize_rfp_data`** — normalize, optional split, validation
+8. **`column_optimization`**
+9. **`step4_analyze_and_match`** — snapshots/TM → balances → packing → Excel
+
+**Нет** pickle/cache записей «converted Step1/MTO/UL». Wrapper **`step1_load_rfp_data`** = raw + finalize (legacy/tests).
+
+Gate **до** finalize; injected **`packing_dataset`** передаётся в Step4 без reload.
+
+---
+
+## 7. Step4 main (после gate)
+
+`compare_title_systems` → input snapshots + `build_ordered_snapshot` → TM loop (step4_1…4, collapse, worker postmerge) → restore order → TAG_EFFECTIVE duplicates → **quantity balance** → **`check_values_sum`** → **УЛ** → **баланс УЛ** → Excel.
+
+**Collapse** (no-tag rows): ключ включает **`normalize(UNITS)`**, **`normalize(UNITS_MTO)`** и **`is_excluded_from_supply`** плюс `(DS_TITLE, DS_NUMBER, CODE, CODE_MTO, CODE_VO, IN_CABINET)`; survivor **`merge_units_status_trace`**. Не смешивать «Исключен из поставки» с обычными безтеговыми.
+
+---
+
+## 8. Decimal / integer contract (units_convert)
+
+- **Нет** глобального округления qty в gate/split.
+- **`try_exact_int_quantity`**: exact-int normalize only; genuine fractions остаются unsplit в finalize.
+- Реальный coef≠1 → результат integral within **1e-9** приводится к int; **настоящая дробь не fatal**: qty/ЕИ применяются как есть, строки пишутся в `дробные значения после конвертации {RFP|MTO|УЛ}.xlsx` (сбор частей → папка отчёта; Запуск → `result_dir`). **`ALGORITHM_VERSION` = v5** (v5: parts tagged remainder на `<NO_TAG>` при lot > tags). Очередь УЛ в Step4 принимает дробь как слот с весом (не `packing_quantity`); целое по-прежнему поштучно. Подробнее [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc).
+- Коэффициент матрицы: предпочтительный точный ввод дробью **`1/3`** (ограниченный парсер `числитель/знаменатель`, опционально `=`, запятая/точка в операндах; без Excel-выражений); колонки **`Коэффициент N`** пишутся как **Text (`@`)**, чтобы `1/3` не превращался в дату. Краткая запись **< 1** (напр. `0,33`) по-прежнему может нормализоваться в exact `1/n` при `|value − 1/n| ≤ 0.005` и `n ∈ [2, 100]` (`normalize_reciprocal_coefficient` в [matrix.py](RFQ/units_convert/matrix.py)); в xlsx/formula preview остаётся **raw** ввод, arithmetic/deps — effective coef. **`ALGORITHM_VERSION` = v5** (v1–v4 snapshots preflight rebuild).
+- Invariants: tagged (`tags_count` preserved / not exceed qty) — см. `ConversionInvariant`. Для настоящей дроби после coef≠1 инвариант **не fatal** (строка всё равно применяется и попадает в xlsx-лог).
+- Missing/conflicting Google rules → fatal или warning по policy plan.
+- Matrix: **`paths.units_convert_matrix`** в [rfp_tags_compare_config.json](RFQ/tags_rfp_compare/rfp_tags_compare_config.json); GUI [rfp_settings_panel.py](ds_compare_center/rfp_settings_panel.py).
+- Matrix xlsx: фиксированные колонки **A `Код` → B `Наименование Google` → C `Статус кода` → D `Ед. изм. Google`**, далее повторяющиеся тройки **`Найденная ЕИ N` → `Коэффициент N` → `Формула N`**; **`Наименование Google`** и **`Формула N`** — display-only (не участвуют в lookup/coef); **`Коэффициент N`** — text-formatted (`@`); формула — серая (`D9D9D9`) Excel-preview `<coef>/<Google unit> = 1/<source unit>` с `$D`; `load_matrix` читает legacy core A:C + 2-col или triple pairs и при reconcile переписывает в новый A:D + triple layout. **C `Статус кода`:** `Нет в базе` / `collision` / **`Требует уточнения`** (есть `?` в коэффициенте при наличии эталона; жёлтый, как ячейка `?`; AutoFilter). После заполнения всех `?` статус сбрасывается. **D без Google-базы — локальный эталон:** при `collision` записываются **все** найденные ЕИ (coef 1); пользователь ставит D, повтор запуска превращает прочие ЕИ в `?`. Если код есть в Google — D перезаписывается из базы. **Комментарий Excel на «Найденная ЕИ N»:** только если кода нет в Google; текст = уникальные наименования позиций; VML-окно 640×320 px. **Форматирование (persisted в [matrix.py](RFQ/units_convert/matrix.py)):** ширины A:D = `30.42578125 / 127 / 13.28515625 / 9.140625`; pair1 E/F/G = `13 / 13 / 23`; pair2+ H/I/J (и fallback pair3+) = `9.140625 / 13 / 23.28515625`; header row height `30`; header alignment left+center+wrap; data alignment left+wrap (vertical default); `layout_current` включает widths/alignment/`@`, иначе одна миграция при save. **UNC/perf:** один `read_bytes()` → `BytesIO` → `load_workbook`; data rows — один проход `iter_rows` (без random `.cell` по SMB); при load проверяется `@` на coef-ячейках (`layout_current=False` → одна миграция); save — `wb.save(BytesIO)` + один `write_bytes`; `build_conversion_plan` — индексы row/pair вместо линейного scan.
+- При обязательном `?` исключение заканчивается русским блоком **«Что нужно сделать»**: путь к матрице, правило коэффициента, сохранить/закрыть Excel и повторить запуск.
+- Занятая матрица (Excel держит xlsx): `PermissionError` на read/replace → `UnitsConversionError` «файл занят» + «закройте … и повторите сбор частей или запуск RFP»; без перетирания. Skip-write при неизменном semantic/layout не трогает открытый файл.
+- **Сообщения пользователю** (исключения, `fatals`/`warnings`, print/milestone gate): **русский** текст с сохранением технических полей (`request_id`, `tags_count`, `источник=…`) и машинных токенов инвариантов (`TAGS_EQUAL`, `TAGS_NOT_EXCEED_QUANTITY`); статусы/trace (`identity`, `converted`, `no_google`) не переводятся.
+
+Google rows загружаются **один раз** в Launch и reused для strict units index + `code_base_by_code` enrichment.
+
+---
+
+## 9. Кэш и Google
+
+- Excel MTO/VO cache: [utils/cache_utils.py](utils/cache_utils.py); raw RFP cache key отдельный (`_RAW_CACHE_ROWTYPE_KEY`).
+- **`load_base()`:** Drive meta + `base_check/code_base_data.json`; сеть недоступна → stale cache.
+- Enrichment: `step4_postmerge_ops.enrich_rfp_from_google_base()` после match.
+
+---
+
+## 10. Конфигурация
+
+- **`rfp_tags_utils.load_config()`**; полная схема: [SETTINGS_REFERENCE.md](RFQ/tags_rfp_compare/SETTINGS_REFERENCE.md)
+- GUI: **RFP · Настройки** [rfp_settings_panel.py](ds_compare_center/rfp_settings_panel.py); merge-on-save сохраняет неизвестные ключи
+- **`load_tags`** (default `true`) — читать теги из сырых данных; `false` берёт `rfp_parts_net_no_tags.xlsx` и обнуляет `TAGS` до gate/split. Кэш УЛ / боевой `rfp_parts_net.xlsx` не переписываются. См. SETTINGS_REFERENCE
+- **`rfp_parts.use_latest_net`** — [AI_rfp_parts.mdc](.cursor/rules/AI_rfp_parts.mdc)
+- **`step4.include_packing_lists`**, **`step4.filter_to_mto_titles`**, **`step4.include_mto_vo_without_rfp_anchor`**, parallel flags — см. SETTINGS_REFERENCE
+
+---
+
+## 11. УЛ vs Step4
+
+[step4_packing_compare.py](RFQ/tags_rfp_compare/step4/step4_packing_compare.py) — отдельный matcher; `build_ordered_snapshot` до split (без строк «Исключен из поставки»).
+
+- Injected **`PackingDataset`** from orchestrator; Step4 fallback load if `None`.
+- **`packing_units_mismatch`** → blank numeric **`UL_REMAINING_VALUES`**; details [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc)
+- Ключ блока A: `(actual, title, system, code)` (`rfp_packing_match_key`); **нет** fallback на 3-tuple **для RFP**. Разная title-mark и разный actual — жёсткие границы A. Тег **не** в ключе. Grouped DS: по-прежнему `packing_match_key(title, system, code)`.
+- Посадка — **A1–A4** по очереди с actual, затем leftover **B** (МТО без RFP) и **C** (VO-only) по `(title, system, code)`, затем dump «Только в УЛ». Все проходы глобальные, как RFP↔MTO, **не** все фазы внутри одной строки. A3–A4 не трогают тег, который сосед 4-tuple очереди ещё ждёт как RFP; B3/C3 — то же для `TAG_MTO`/`TAG_VO` соседа leftover-ключа. Строка «Добавлен из МТО» **без** `DS_NAME` не входит в A (это не pass A3). Не подставлять пустой actual в ключ A. Подробности и статусы leftover-поставки: [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc).
+- Ловушка тегов до фикса: per-row blind крал тег соседа (`8525`/`6550` + `BCC0000152`). Ловушка 8445 ДС29↔ДС82 закрыта ключом actual **в A**.
+- Ловушка **`allocated=0`**: см. ниже §13
+- Overlay ГЭМ после packing compare: `STATUS_OPEN_UPD` и `STATUS_MTO_ONLY`, титул 8950*; вся строка `match_matched`; справочник [gem_supply_codes.py](RFQ/tags_rfp_compare/gem_supply_codes.py). Непустой `IN_CABINET` — **не** overlay. Новые статусы «Есть в МТО/РКД, Поставлено, Нет в RFP» **не** в overlay.
+
+Provider: [packing_list_provider.py](RFQ/packing_list_provider.py) — `rfp_packing_match_key` / `rfp_row_actual_ds` / `packing_row_actual_ds`; `packing_match_key` 3-tuple не ломать (grouped DS).
+
+---
+
+## 12. Производительность step4
+
+[AI_performance.mdc](.cursor/rules/AI_performance.mdc). Сравнение прогонов: **`compare_step4_files.py`** (multiset).
+
+---
+
+## 13. DS vs MTO / GUI / parts net
+
+GUI: `python -m ds_compare_center`. Parts net layout: [AI_rfp_parts.mdc](.cursor/rules/AI_rfp_parts.mdc).
+
+**Ловушка `allocated=0` / нули в «Кол-во по УЛ»:** пустой `allocated` больше не пишет `0` и не ставит «Недопоставка»/«комплектна 0/0». Capacity для пустого RFP `CODE` берётся из `VALUES_MTO`/`VALUES_VO` (H1). «Чужой тег у того же кода» — pass 4 (FIFO внутри прохода), факт — **«Статус тегов УЛ»**; **не** может забрать тег, зарезервированный RFP-тегом соседней строки той же очереди. Handoff: `tmp/rfp_ul_fallback_handoff.md`.
+
+---
+
+## Verification (targeted smokes)
+
+```powershell
+$env:PYTHONUTF8='1'
+python tmp/test_units_convert_matrix_smoke.py
+python tmp/test_step4_units_gate_order_smoke.py
+python tmp/test_rfp_parts_unit_conversion_smoke.py
+python tmp/test_rfp_parts_net_step1_layout_smoke.py
+python tmp/test_rfp_parts_net_preflight_smoke.py
+python tmp/test_rfp_packing_compare_smoke.py
+python tmp/test_rfp_native_settings_smoke.py
+python tmp/test_rfp_progress_markers_smoke.py
+python tmp/test_rfp_supply_status_smoke.py
+python tmp/test_rfp_tag_count_mismatch_smoke.py
+```
+
+Collapse / MTO diff / light-copy UL: **`test_rfp_packing_compare_smoke.py`**. Статус поставки / skip match+УЛ: **`test_rfp_supply_status_smoke.py`**.
+
+JSON configs: `python -c "import json; json.load(open('RFQ/tags_rfp_compare/rfp_tags_compare_config.json',encoding='utf-8')); json.load(open('RFQ/tags_rfp_compare/rfp_tags_compare_config_asbuild.json',encoding='utf-8')); print('OK')"`

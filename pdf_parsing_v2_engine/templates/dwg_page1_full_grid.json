@@ -1,0 +1,525 @@
+{
+  "schema_version": 2,
+  "name": "DWG стр.1 (ГОСТ 21.1101, координаты elements_coordinates + cell_lists)",
+  "doc_types": [
+    "WIR",
+    "LAY",
+    "CAE",
+    "GA",
+    "PL",
+    "DW",
+    "NI"
+  ],
+  "page_selector": "first",
+  "priority": 10,
+  "origin": "frame_bottom_right",
+  "padding_mm": 0.5,
+  "grid_adapt": true,
+  "grid_tolerance_template_mm": 2.0,
+  "grid_tolerance_detected_mm": 0.5,
+  "snap_max_distance_mm": 5.0,
+  "max_shape_change_ratio": 2.5,
+  "cascade_score_threshold": 0.4,
+  "fields": [
+    {
+      "id": "51_Page_Format",
+      "label": "Формат страницы",
+      "bbox_mm": [
+        75.54437423044764,
+        -5.165053477825433,
+        -5.2356399930409605,
+        0.18532340989314228
+      ],
+      "clean": "page_format",
+      "expected": "optional",
+      "field_type": "data",
+      "outside_stamp": true
+    },
+    {
+      "id": "50_File_Name_Stamp",
+      "label": "Имя файла под штампом",
+      "bbox_mm": [
+        286.2700578366009,
+        -5.165053477825513,
+        75.95160028303651,
+        0.2700358415153578
+      ],
+      "clean": "file_name_stamp",
+      "expected": "required",
+      "field_type": "data",
+      "outside_stamp": true
+    },
+    {
+      "id": "18_3_3_Purpose_of_issue",
+      "label": "Назначение выпуска (блок 18.3) 3",
+      "bbox_mm": [
+        155.3322443790705,
+        104.45800105962289,
+        59.65201542235856,
+        110.32862511256634
+      ],
+      "clean": "purpose_of_issue_18_3",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "18_3_2_Purpose_of_issue",
+      "label": "Назначение выпуска (блок 18.3) 2",
+      "bbox_mm": [
+        155.3322443790705,
+        99.65988376451794,
+        59.65201542235856,
+        105.13536975943661
+      ],
+      "clean": "purpose_of_issue_18_3",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "18_3_1_Purpose_of_issue",
+      "label": "Назначение выпуска (блок 18.3) 1",
+      "bbox_mm": [
+        155.3322443790705,
+        94.66417590699133,
+        59.65201542235856,
+        100.33725246433158
+      ],
+      "clean": "purpose_of_issue_18_3",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "18_2_3_Revision_Date",
+      "label": "Дата ревизии (блок 18.2) 3",
+      "bbox_mm": [
+        175.31503274235828,
+        104.45800105962289,
+        154.65487567925683,
+        110.32862511256634
+      ],
+      "clean": "revision_date_18_2",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "18_2_2_Revision_Date",
+      "label": "Дата ревизии (блок 18.2) 2",
+      "bbox_mm": [
+        175.31503274235828,
+        99.65988376451794,
+        154.65487567925683,
+        105.13536975943661
+      ],
+      "clean": "revision_date_18_2",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "18_2_1_Revision_Date",
+      "label": "Дата ревизии (блок 18.2) 1",
+      "bbox_mm": [
+        175.31503274235828,
+        94.66417590699133,
+        154.65487567925683,
+        100.33725246433158
+      ],
+      "clean": "revision_date_18_2",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "18_1_3_Current_Revision",
+      "label": "Текущая ревизия (блок 18.1) 3",
+      "bbox_mm": [
+        185.34874007299504,
+        104.45800105962289,
+        174.63766404254463,
+        110.32862511256634
+      ],
+      "clean": "current_revision_18_1",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "18_1_2_Current_Revision",
+      "label": "Текущая ревизия (блок 18.1) 2",
+      "bbox_mm": [
+        185.34874007299504,
+        99.65988376451794,
+        174.63766404254463,
+        105.13536975943661
+      ],
+      "clean": "current_revision_18_1",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "18_1_1_Current_Revision",
+      "label": "Текущая ревизия (блок 18.1) 1",
+      "bbox_mm": [
+        185.34874007299504,
+        94.66417590699133,
+        174.63766404254463,
+        100.33725246433158
+      ],
+      "clean": "current_revision_18_1",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "10_5_Signatures_Date",
+      "label": "Дата подписи 5",
+      "bbox_mm": [
+        130.31141347585407,
+        24.63976880408916,
+        119.64267212780567,
+        30.312845361429424
+      ],
+      "clean": "signatures_date_10",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "10_4_Signatures_Date",
+      "label": "Дата подписи 4",
+      "bbox_mm": [
+        130.31141347585407,
+        19.644104013381025,
+        119.64267212780567,
+        25.317137503902895
+      ],
+      "clean": "signatures_date_10",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "10_3_Signatures_Date",
+      "label": "Дата подписи 3",
+      "bbox_mm": [
+        130.31141347585407,
+        14.648396155854414,
+        119.64267212780567,
+        20.321472713194677
+      ],
+      "clean": "signatures_date_10",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "10_2_Signatures_Date",
+      "label": "Дата подписи 2",
+      "bbox_mm": [
+        130.31141347585407,
+        9.652688298327803,
+        119.64267212780567,
+        15.325764855668066
+      ],
+      "clean": "signatures_date_10",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "10_1_Signatures_Date",
+      "label": "Дата подписи 1",
+      "bbox_mm": [
+        130.31141347585407,
+        4.656980440801352,
+        119.64267212780567,
+        10.330056998141615
+      ],
+      "clean": "signatures_date_10",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Surname_5",
+      "label": "Фамилия 5",
+      "bbox_mm": [
+        165.32361702730523,
+        24.63976880408916,
+        144.6634599642037,
+        30.312845361429424
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Surname_4",
+      "label": "Фамилия 4",
+      "bbox_mm": [
+        165.32361702730523,
+        19.644104013381025,
+        144.6634599642037,
+        25.317137503902895
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Surname_3",
+      "label": "Фамилия 3",
+      "bbox_mm": [
+        165.32361702730523,
+        14.648396155854414,
+        144.6634599642037,
+        20.321472713194677
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Surname_2",
+      "label": "Фамилия 2",
+      "bbox_mm": [
+        165.32361702730523,
+        9.652688298327803,
+        144.6634599642037,
+        15.325764855668066
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Surname_1",
+      "label": "Фамилия 1",
+      "bbox_mm": [
+        165.32361702730523,
+        4.656980440801352,
+        144.6634599642037,
+        10.330056998141615
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Position_5",
+      "label": "Должность 5",
+      "bbox_mm": [
+        185.34874007299504,
+        24.63976880408916,
+        164.6462483274915,
+        30.312845361429424
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Position_4",
+      "label": "Должность 4",
+      "bbox_mm": [
+        185.34874007299504,
+        19.644104013381025,
+        164.6462483274915,
+        25.317137503902895
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Position_3",
+      "label": "Должность 3",
+      "bbox_mm": [
+        185.34874007299504,
+        14.648396155854414,
+        164.6462483274915,
+        20.321472713194677
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Position_2",
+      "label": "Должность 2",
+      "bbox_mm": [
+        185.34874007299504,
+        9.652688298327803,
+        164.6462483274915,
+        15.325764855668066
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "Position_1",
+      "label": "Должность 1",
+      "bbox_mm": [
+        185.34874007299504,
+        4.656980440801352,
+        164.6462483274915,
+        10.330056998141615
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "26_Document_Revision",
+      "label": "Текущая ревизия документа",
+      "bbox_mm": [
+        20.113330780286415,
+        54.65630756483203,
+        -0.33868434990686636,
+        70.32075677040704
+      ],
+      "clean": "revision",
+      "expected": "required",
+      "field_type": "data"
+    },
+    {
+      "id": "7_Total_number_of_sheets",
+      "label": "Всего листов",
+      "bbox_mm": [
+        20.237500803775763,
+        14.648396155854414,
+        -0.33868434990686636,
+        25.317137503902895
+      ],
+      "clean": "total_number_of_sheets",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "6_2_Quantity_of_sheets",
+      "label": "Листов в документе",
+      "bbox_mm": [
+        35.30851015213764,
+        14.648396155854414,
+        19.814785268838396,
+        20.321472713194677
+      ],
+      "clean": "sheet_number_6_2",
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "6_1_Sheet_number",
+      "label": "Номер листа",
+      "bbox_mm": [
+        35.30851015213764,
+        19.644104013381025,
+        19.814785268838396,
+        25.317137503902895
+      ],
+      "clean": "sheet_number_6_1",
+      "expected": "required",
+      "field_type": "data"
+    },
+    {
+      "id": "5_Documentation_type",
+      "label": "Вид документации",
+      "bbox_mm": [
+        50.83952457319612,
+        14.648396155854414,
+        34.63114145232391,
+        25.317137503902895
+      ],
+      "clean": null,
+      "expected": "required",
+      "field_type": "data"
+    },
+    {
+      "id": "4_Document_name",
+      "label": "Наименование документа",
+      "bbox_mm": [
+        120.40471363776894,
+        -0.4233571600563171,
+        50.0773969295964,
+        15.410437665817517
+      ],
+      "clean": "document_name",
+      "expected": "required",
+      "field_type": "data",
+      "is_anchor": true
+    },
+    {
+      "id": "3_Unit_title_name",
+      "label": "Наименование установки",
+      "bbox_mm": [
+        120.32004082761948,
+        14.648396155854414,
+        50.16206973974577,
+        30.312845361429424
+      ],
+      "clean": "unit_title",
+      "expected": "required",
+      "field_type": "data",
+      "is_anchor": true
+    },
+    {
+      "id": "2_Facility_name",
+      "label": "Наименование объекта",
+      "bbox_mm": [
+        120.32004082761948,
+        29.635476661615613,
+        -0.33868434990686636,
+        45.342260549592616
+      ],
+      "clean": "facility_name",
+      "expected": "optional",
+      "field_type": "data",
+      "is_anchor": true
+    },
+    {
+      "id": "1_DOC_TITLE",
+      "label": "Обозначение документа (шифр)",
+      "bbox_mm": [
+        120.32004082761948,
+        44.66489184977897,
+        -0.33868434990686636,
+        55.33367626464576
+      ],
+      "clean": "doc_title",
+      "expected": "required",
+      "field_type": "data",
+      "is_anchor": true
+    },
+    {
+      "id": "static_empty",
+      "label": "Пустое поле",
+      "bbox_mm": [
+        185.34874007299504,
+        84.63046857635467,
+        174.63766404254463,
+        95.34154460680506
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "data"
+    },
+    {
+      "id": "static_empty",
+      "label": "Пустое поле",
+      "bbox_mm": [
+        40.30426107648249,
+        104.45800105962289,
+        21.8520105878498,
+        110.32862511256634
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "static_empty"
+    },
+    {
+      "id": "static_empty",
+      "label": "Пустое поле",
+      "bbox_mm": [
+        40.30426107648249,
+        99.65988376451794,
+        21.8520105878498,
+        105.13536975943661
+      ],
+      "clean": null,
+      "expected": "optional",
+      "field_type": "static_empty"
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+---
+description: "Правила движка привязки каркаса шаблона к PDF (grid alignment). Читать при работе с grid_matcher.py, adapt_debug, wireframe. Канон слоёв редактора — AI_v2_editor.mdc."
+globs:
+  - "pdf_parsing_v2/grid_matcher.py"
+  - "pdf_parsing_v2/grid_lines_utils.py"
+  - "pdf_template_editor/adapt_debug.py"
+  - "pdf_template_editor/wireframe_panel.py"
+  - "pdf_template_editor/grid_line_items.py"
+  - "pdf_parsing_v2/stamp_extractor.py"
+---
+
+# Grid Alignment Engine — правила и инварианты
+
+## 1. Ключевые принципы
+
+1. **Шаблон — источник правды по количеству линий.** Detected-линий в PDF может быть больше (split-артефакты) или меньше (тонкие/пунктирные не распознались). Шаблон определяет сколько линий ДОЛЖНО быть.
+2. **Sequential walk от границ + прогрессивная интерполяция.** Начинаем с надёжных boundary-линий (top/bottom/left/right) как первых якорей. Идём по порядку вглубь; после каждого match новая линия становится якорем. Интерполяция — по двум ближайшим якорям (piecewise-linear), не по глобальному аффинному преобразованию границ. Окно поиска адаптивно расширяется при больших delta.
+3. **Лишние PDF-линии = split-артефакты.** Серая заливка, подписи, объединённые ячейки → find_tables генерирует 2-3 лишние линии внутри одной ячейки. Фильтровать: вне stamp bbox, короткий span, между уже matched парой.
+4. **Обратная связь.** Движок ОБЯЗАН сообщить: verdict (ok/warning/fail), per-line match quality, список проблемных линий с причинами. Молчаливый skip запрещён.
+5. **Явность > тишина.** Все решения движка (skip, fallback, interpolated) логируются в alignment_log (.txt). Пользователь передаёт .txt в чат — AI сразу видит полную картину.
+6. **`h_top` допускает узкий top-preference.** Для `TPL:h_top` движок может выбрать верхний full-span кандидат чуть выше template позиции (`boundary-top-pref`), если он находится в разумном окне и почти не хуже "ближайшей" линии. Это локальная эвристика только для верхней границы, не общий пересчёт transform.
+7. **`virtual_left` / `virtual_right` для `extent_probe` должны опираться на full-height carriers.** Если `top` и `bottom` уже найдены, candidate pool для virtual vertical edges сначала ограничивается вертикалями, покрывающими этот диапазон; короткие боковые линии не должны сдвигать `proposed_bbox.x0/x1`.
+
+## 2. Инварианты алгоритма
+
+- **Каждая TPL-линия получает позицию** — либо matched detected, либо interpolated (с WARNING).
+- **Detected-линия используется максимум один раз** (no double-match).
+- **Порядок сохраняется**: если `TPL:h_A.pos < TPL:h_B.pos` в шаблоне, то `snapped[A] < snapped[B]` в результате.
+- **Boundary lines snap'ятся первыми**, остальные — через sequential walk.
+- **Прогрессивная интерполяция**: каждый match добавляется как якорь (`_insert_anchor`); для следующей линии `_progressive_interp` берёт ближайшую пару якорей (bisect). Якорь вставляется только если snapped_pos монотонен. interp принудительно ≥ prev_matched_pos + 0.5.
+- **Адаптивное окно**: `margin = max(snap_max_pts, 1.5 × max(recent_deltas[-5:]))`.
+- ~~**`_refine_grid_from_cells` ограничен**~~ *(disabled)* — refine и validate отключены; grid-bound (`expand_fields_by_bindings`) = единственный источник позиций полей.
+- **Grid-bound приоритет**: `expand_fields_by_bindings` использует snapped-позиции каркаса напрямую. Cell-assignment (Hungarian) используется только как fallback bbox для полей без полных bindings.
+
+## 3. Типичные проблемы PDF
+
+| Проблема | Проявление | Как фильтровать |
+|----------|-----------|-----------------|
+| Серая заливка ячейки | 2-3 лишних линии с коротким span | span < 30% extent → skip |
+| Подпись/штамп внутри ячейки | Доп. вертикальная линия | Между уже matched парой + короткий span |
+| Линии за пределами штампа | Рамка, колонтитулы | pos вне stamp bbox → фильтр |
+| Короткая боковая вертикаль | Ложно уводит `virtual_left` / `proposed_bbox.x0` | перед `virtual_left` фильтровать candidates по coverage между detected `top/bottom` |
+| Сдвинутая граница (Excel/Word) | Линия на 1-3mm от ожидаемой | snap_max_distance_mm допуск |
+| Пунктирная/тонкая линия | find_tables не видит | TPL-линия без match → WARNING |
+| Border-pair (двойная линия) | 2 линии на расстоянии <1mm | `_merge_border_pairs` (detected), `find_doubled_lines` (шаблон) |
+| Нелинейная деформация строк | PDF с равномерными строками, шаблон — неравномерные | Progressive interp адаптируется bracket-by-bracket |
+
+## 4. Именование линий
+
+- **Template:** `TPL:h_bottom`, `TPL:h_5.01`, `TPL:v_left`, `TPL:v_145` — ID из шаблона с префиксом `TPL:`.
+- **Detected (PDF):** `PDF:h_1`, `PDF:h_2`, ..., `PDF:v_1`, ... — порядковый номер (1-based) по позиции после merge + stamp filter.
+- Префиксы используются в: alignment_log (.txt), adapt_debug (.json), wireframe_panel (GUI), консоли редактора.
+
+## 5. alignment_log (.txt)
+
+Самодостаточный debug-тикет. Подробный формат, секции, параметры и паттерны проблем: **`AI_v2_grid_log.mdc`**.
+
+Краткое содержание: Header (template, PDF, scale, **params алгоритма**), VERDICT, COUNTS, WALK H/V (с `interp=`, `delta=`, `anchors=(lo,hi)` для каждого match), PROBLEMS, **SNAPPED POSITIONS** (итоговая таблица).
+
+Пользователь передаёт `@adapt_debug_XXXXXX.txt` в чат → AI читает `AI_v2_grid_log.mdc` → имеет полный контекст.
+
+## 6. Файлы движка
+
+- `grid_matcher.py` — `_align_grid_lines_ordered()` (sequential walk + progressive interp), `_progressive_interp()`, `_insert_anchor()`, `adapt_by_cell_assignment()` (оркестратор), `extent_probe` / `virtual_outer_*`, `expand_fields_by_bindings()`, `_refine_grid_from_cells()`, `AlignmentReport`
+- `grid_detected_prefilter.py` — префильтр островов detected-ячеек до extent / Hungarian / alignment (настройки `grid_detected_prefilter_*` в `pdf_v2_config.json`)
+- `test_progressive_interp.py` — юнит-тесты `_progressive_interp`, `_insert_anchor`, simulation walks
+- `grid_lines_utils.py` — `generate_grid_lines_from_fields()`, `auto_bind_fields_to_lines()`, `snap_fields_to_bindings()`, `find_doubled_lines()`, `collapse_doubled_lines()`
+- `stamp_extractor.py` — `_extract_with_template()` вызывает `adapt_by_cell_assignment` при `grid_adapt=True`, с тем же `cfg`, что и `extract_page` (редактор F5 и `v2_pipeline` передают конфиг)
+- `adapt_debug.py` — snapshot: fields, cells, grid_lines, snapped, alignment_log (.txt file)
+- `main_window.py` — `_on_adapt_to_grid()` (Тест-адаптация), wireframe refresh, detected grid overlay
+- **Оверлей prealign / adapt в редакторе:** панель **«Границы prealign / adapt»** (`prealign_overlay_panel.py`) — по умолчанию скрыта; тулбар **«Границы»** и меню **«Вид»**; док внизу левого стека (как каталог) с возможностью **открепить** в отдельное окно. Первое дерево — те же **`layer_id`**, что группы в PNG **`adapt_debug`** (`frame_and_search_bbox`, `extent_probe_boundaries`, `proposed_vs_effective_bbox`, `ordered_alignment_overlay`, …) плюс **`detected_prefilter_overlay`** (только редактор + JSON, без PNG): реестр **`prealign_overlay_layers.py`**, геометрия и координаты **`prealign_overlay_model.py`** (в т.ч. `environment.frame` как dict → displayed quad). Второе дерево — **«Рабочее поле (canvas)»**: stamp fields, wireframe, detected grid, adapt overlay, consolidation, origin markers; QSettings **`canvas_layer_visibility/*`**. Данные после **Тест-адаптация** — `stamp_prealign_debug` / bundle; после **F5** — `metadata["stamp_prealign_debug"]` при `cfg["editor_prealign_overlay"]=true`. **Новые ключи в debug-бандле** → расширить `PrealignLayerSpec` и модель; **новая графика на сцене** → строка в `CANVAS_LAYER_ROWS` + обработчики в `main_window.py`. Канон имён слоёв и таблицы для чатов — **`AI_v2_editor.mdc`** § «Слои на canvas».
+
+## 7. Verdict-пороги
+
+- `OK` — 0 no-match, avg_score >= 0.5
+- `WARNING` — no-match <= `max(5, int(total_tpl * 0.15))`, ИЛИ avg_score < 0.5
+- `FAIL` — превышен warn_threshold
+
+Порог пропорционален размеру шаблона: для 43 линий = 6, для 20 линий = 5.
+
+## 8. Правила для чатов
+
+1. **Перед правками** `grid_matcher.py` — прочитать этот файл.
+2. **При анализе `.txt` лога** — прочитать **`AI_v2_grid_log.mdc`** (формат, параметры, паттерны проблем).
+3. **Не ломать**: sequential walk order, boundary-first, refine max_delta.
+4. **Новые skip-причины** → добавить в alignment_log формат (`AI_v2_grid_log.mdc` §5) и в таблицу §3 этого файла.
+5. **После правок** → протестировать на OD и MTO debug JSON (`templates/test_pdf/`).
+6. **Обновить** этот файл если меняются инварианты; обновить `AI_v2_grid_log.mdc` если меняется формат лога.
+7. **v3.0 roadmap** (constraint solver / parametric model): **`AI_v3_constraint_solver_roadmap.mdc`** — читать при работе над глобальной заменой алгоритма.

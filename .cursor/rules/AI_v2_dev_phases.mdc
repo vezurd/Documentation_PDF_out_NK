@@ -1,0 +1,44 @@
+---
+description: Дорожная карта развития pdf_parsing_v2 (фазы; детали движка — AI_v2_engine.mdc).
+globs: ["pdf_parsing_v2/**"]
+alwaysApply: false
+---
+
+# PDF v2 — дорожная карта развития
+
+Краткие фазы; реализация и ревью по меткам **[C2]** / **[PREMIUM]** из планов сессий. Расшифровка шкалы **[C2]** / **[C2+V]** / **[PREMIUM]**, сессий и Plan mode — `AI_project_standards.mdc`.
+
+## Фаза 0 — инфраструктура контекста
+
+- `AI_memory_ARCHIVE`: не индексировать как alwaysApply; `.cursorignore` для тяжёлых шаблонов и `*_ARCHIVE*`.
+- Статус: выполняется в репозитории.
+
+## Фаза 1 — реорганизация правил
+
+- Разнести RFQ, PDF v2 engine, редактор, общий индекс (`AI_project_standards.mdc`, `AI_rfq_context.mdc`, сокращённый `AI_memory.mdc`).
+- Ревью компактности памяти — **[PREMIUM]** по необходимости.
+
+## Фаза 2 — изоляция редактора
+
+- Пакет верхнего уровня `pdf_template_editor/` (импорты из `pdf_parsing_v2.*` для движка без циклов).
+- Обновить точки входа: `main.py`, `_gen_project_context.py`, правила `globs`.
+
+## Фаза 3 — видимость API
+
+- Расширить `pdf_parsing_v2/__init__.py`: pipeline, `extract_page`, конфиг, загрузчики шаблонов (см. `INTERFACES.md`).
+
+## Фаза 4 — параллельная обработка
+
+Спека целиком — **`AI_v2_parallel.mdc`** (аудит, `parallel.py`, extraction/postprocess, DTO, воркеры). Здесь только номер фазы.
+
+## Фаза 5 — GUI мониторинга — ✅ реализовано (09.04.2026)
+
+Пакет `pdf_v2_monitor/` (PySide6). Детали — **`AI_v2_monitor.mdc`**. Параллелизация — **`AI_v2_parallel.mdc`**.
+
+## Фаза 5.5 — доменные модели v2 — ✅ реализовано (09.04.2026)
+
+`V2Document` + `V2PageData` в `pdf_parsing_v2_engine/document.py`. Замена v1 `doc_ATTRIBUTES` / `PageStampAttributes` в v2 pipeline. `get_files_single(factory=)` — обратная совместимость. Детали — **`AI_v2_engine.mdc`** (§ Доменные модели).
+
+## Фаза 6 — качество и оптимизация
+
+- Профили документов, библиотека шаблонов, итерации по edge cases — по бэклогу `AI_pdf_v2_roadmap_ARCHIVE.md` / editor roadmap.
