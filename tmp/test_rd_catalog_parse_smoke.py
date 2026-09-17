@@ -13,10 +13,13 @@ from rd_catalog.doc_bundle import folder_transfer_sequence, folder_tree_sort_key
 from rd_catalog.models import FileKind, FileRecord, ParseStatus, ReviewState, SourceKind
 from rd_catalog.parse import (
     constructed_kit_rd_mark_folder,
+    folder_hosts_filename_mark,
+    folder_matches_mark,
     has_canonical_rd_issued_path,
     is_transfer_folder_name,
     is_transfer_gate_folder_name,
     issued_package_dir,
+    issued_path_mark_folder,
     issued_path_title_folder,
     path_relative_to_transfer_gate,
     kit_rd_mark_folder_from_path,
@@ -194,6 +197,19 @@ def main() -> None:
     assert issued_package_dir(issued_pdf) == issued_folder
     assert issued_path_title_folder(issued_pdf) == "9110"
     assert issued_path_title_folder(issued_folder) == "9110"
+    assert issued_path_mark_folder(issued_pdf) == "06_KSB_21"
+    assert issued_path_mark_folder(issued_folder) == "06_KSB_21"
+    assert folder_matches_mark("POS1", "POS1")
+    assert folder_matches_mark("12_POS1", "POS1")
+    assert folder_matches_mark("04-SOT", "SOT")
+    assert not folder_matches_mark("12_POS2", "POS1")
+    assert folder_hosts_filename_mark("SOS", "SOS")
+    assert folder_hosts_filename_mark("06_KSB_21", "KSB1")
+    assert folder_hosts_filename_mark("06_KSB_21", "KSB")
+    assert folder_hosts_filename_mark("05_KSB", "KSB1")
+    assert folder_hosts_filename_mark("22_POS2", "POS2")
+    assert not folder_hosts_filename_mark("SOS", "SOT")
+    assert not folder_hosts_filename_mark("12_POS1", "POS2")
     assert r"\PDF" not in issued_package_dir(issued_pdf)
     assert path_relative_to_transfer_gate(issued_pdf) == (
         r"05_рев.0-AN02_AGCC.287-9110-KSB1\PDF"

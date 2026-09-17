@@ -2008,6 +2008,8 @@ def main() -> None:
     assert KitFlag.MIXED_TITLES in mixed_row.flags
     mixed_notes = "\n".join(mixed_row.mixed_title_notes)
     assert "папка 2612" in mixed_notes
+    assert "05_KSB" in mixed_notes
+    assert "титула или марки" in mixed_notes
     mixed_folders = mixed_title_rescan_folders(
         [
             _record(
@@ -2087,6 +2089,62 @@ def main() -> None:
     assert mixed_open[1].endswith(r"\PDF")
     assert r"\2869\\" in mixed_open[0].replace("/", "\\") or "\\2869\\" in mixed_open[0]
     assert "3140" in mixed_open[1]
+
+    mixed_mark_records = [
+        _record(
+            60,
+            source=SourceKind.RD,
+            title="7540",
+            mark="SOT",
+            revision="0",
+            appendix="01",
+            transfer_sequence=2,
+            transfer_name="02_рев.0-AN02_AGCC.287-7540-SOS",
+            file_kind="source_editable",
+            path=(
+                r"\\stub\RD\7540\SOS\Для передачи"
+                r"\02_рев.0-AN02_AGCC.287-7540-SOS"
+                r"\AGCC.287-7540-SOT.WIR-0005_0-AN01_RU.zip"
+            ),
+        ),
+    ]
+    mixed_marks = build_kit_matrix((), mixed_mark_records, {60})
+    mixed_mark_row = mixed_marks[0]
+    assert mixed_mark_row.summary is KitSummary.MIXED_TITLES
+    assert KitFlag.MIXED_TITLES in mixed_mark_row.flags
+    mixed_mark_notes = "\n".join(mixed_mark_row.mixed_title_notes)
+    assert r"папка 7540\SOS" in mixed_mark_notes
+    mixed_mark_folders = mixed_title_rescan_folders(
+        mixed_mark_records,
+        title="7540",
+        mark="SOT",
+        rd_root=r"\\stub\RD",
+    )
+    assert mixed_mark_folders == (r"\\stub\RD\7540\SOS",)
+
+    ksb1_home = build_kit_matrix(
+        (),
+        [
+            _record(
+                70,
+                source=SourceKind.RD,
+                title="9110",
+                mark="KSB1",
+                revision="0",
+                appendix="02",
+                transfer_sequence=5,
+                transfer_name="05_рев.0-AN02_AGCC.287-9110-KSB1",
+                path=(
+                    r"\\stub\RD\9110\06_KSB_21\Для передачи"
+                    r"\05_рев.0-AN02_AGCC.287-9110-KSB1\PDF"
+                    r"\AGCC.287-9110-KSB1.OD-0001_0-AN02_RU.pdf"
+                ),
+            ),
+        ],
+        {70},
+    )
+    assert ksb1_home[0].summary is not KitSummary.MIXED_TITLES
+    assert not ksb1_home[0].mixed_title_notes
 
     print("RD catalog Google kits: OK")
 

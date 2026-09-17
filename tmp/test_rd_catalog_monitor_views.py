@@ -568,6 +568,7 @@ class MonitorViewsTests(unittest.TestCase):
         )
         self.assertIn("2612", painted.cells["РД · рев."].tooltip)
         self.assertIn("смешанные титулы", painted.haystack)
+        self.assertIn("смешанные марки", painted.haystack)
 
     def test_rd_rev_yellow_when_disk_lags_letter_a_or_tdo(self) -> None:
         row = KitMatrixRow(

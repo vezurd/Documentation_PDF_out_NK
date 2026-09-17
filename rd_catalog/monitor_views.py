@@ -1259,7 +1259,7 @@ def kits_paint_legend(
                 sample(
                     "РД · рев.",
                     "01-AN01",
-                    "Файлы комплекта лежат в папке другого титула. "
+                    "Файлы комплекта лежат в папке другого титула или марки. "
                     "Сводка «Смешанные титулы». Файлы не отбрасываются.",
                     fill=mixed,
                 ),
@@ -1507,7 +1507,7 @@ def effective_kit_summary(
     even when an older filename still sits in an issued package. That is
     what the «Нет в РД» filter uses. ``GOOGLE_ONLY`` stays when there are
     no RD / robot / SQ files at all. Present RD files under another title
-    folder become ``MIXED_TITLES`` («Смешанные титулы»).
+    or mark folder become ``MIXED_TITLES`` («Смешанные титулы»).
 
     Args:
         row: Kit matrix row (flags stay the scan/Google facts).
@@ -4534,6 +4534,7 @@ def build_kits_monitor_row(
         lag_notes,
         row.mixed_title_notes,
         "смешанные титулы" if row.mixed_title_notes else None,
+        "смешанные марки" if row.mixed_title_notes else None,
         auto_cell.text,
         compare_status.text,
         an_cell.text,

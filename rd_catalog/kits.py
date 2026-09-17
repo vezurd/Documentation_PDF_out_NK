@@ -57,9 +57,11 @@ from rd_catalog.models import (
 from rd_catalog.overlay import revision_rank
 from rd_catalog.parse import (
     constructed_kit_rd_title_folder,
+    folder_hosts_filename_mark,
     is_package_media_folder,
     is_transfer_gate_folder_name,
     issued_package_dir,
+    issued_path_mark_folder,
     issued_path_title_folder,
     kit_rd_mark_folder_from_path,
     nearest_issued_package_hint,
@@ -247,8 +249,8 @@ _SUMMARY_HINTS: dict[KitSummary, str] = {
     ),
     KitSummary.MIXED_TITLES: (
         "У комплекта есть present-файлы РД, чей путь лежит в папке "
-        "другого четырёхзначного титула (имя AGCC — этот комплект, "
-        "сегмент пути — чужой титул).\n"
+        "другого четырёхзначного титула или другой марки "
+        "(имя AGCC — этот комплект, сегмент пути — чужой титул или марка).\n"
         "Файлы не отбрасываются.\n"
         "«Папка РД» может открыть чужое дерево, если такой пакет "
         "стал официальным NN."
@@ -2922,52 +2924,44 @@ def _merge_transfer_review_payloads(
 def _mixed_title_notes(
     records: Sequence[FileRecord],
 ) -> dict[tuple[str, str], tuple[str, ...]]:
-    """Return tooltip lines when RD files sit under another title folder.
+    """Return tooltip lines when RD files sit under another title or mark.
 
     Groups present parsed RD files whose issued-path title folder is not
-    the filename title. Does not drop those files from the catalog.
+    the filename title, or whose mark folder does not host the filename
+    mark. Does not drop those files from the catalog.
 
     Args:
         records: Contour (or raw) catalog files.
 
     Returns:
         Kit identity → note lines, empty when every file matches its
-        title folder.
+        title and mark folder.
     """
 
-    grouped: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    grouped: dict[tuple[str, str], list[tuple[str, str, str, str]]] = {}
     for record in records:
-        if record.source is not SourceKind.RD or not record.present:
+        hit = _mixed_folder_hit(record)
+        if hit is None:
             continue
-        mark = _record_mark(record)
-        if mark is None:
-            continue
-        parsed_title = str(record.data.get("title") or "").strip()
-        folder_title = issued_path_title_folder(record.path)
-        if not folder_title:
-            continue
-        if folder_title.casefold() == parsed_title.casefold():
-            continue
-        package = str(record.data.get("transfer_name") or "").strip()
-        if not package:
-            package = nearest_issued_package_hint(record.path)
-        name = str(record.data.get("name") or "").strip()
-        if not name:
-            name = PureWindowsPath(record.path).name
+        parsed_title, mark, folder_title, folder_mark, package, name = hit
         key = kit_identity_key(parsed_title, mark)
-        grouped.setdefault(key, []).append((folder_title, package, name))
+        grouped.setdefault(key, []).append(
+            (folder_title, folder_mark, package, name)
+        )
 
     notes: dict[tuple[str, str], tuple[str, ...]] = {}
     header = (
-        "Смешанные титулы: файлы комплекта лежат в папке другого титула."
+        "Смешанные титулы: файлы комплекта лежат в папке другого "
+        "титула или марки."
     )
     for key, items in grouped.items():
         lines = [header]
-        seen: set[tuple[str, str, str]] = set()
+        seen: set[tuple[str, str, str, str]] = set()
         shown = 0
-        for folder_title, package, name in items:
+        for folder_title, folder_mark, package, name in items:
             stamp = (
                 folder_title.casefold(),
+                folder_mark.casefold(),
                 package.casefold(),
                 name.casefold(),
             )
@@ -2975,7 +2969,9 @@ def _mixed_title_notes(
                 continue
             seen.add(stamp)
             extra = f" · {package}" if package else ""
-            lines.append(f"  папка {folder_title}{extra} · {name}")
+            lines.append(
+                f"  папка {folder_title}\\{folder_mark}{extra} · {name}"
+            )
             shown += 1
             if shown >= _MIXED_TITLE_NOTE_LIMIT:
                 remaining = len(items) - shown
@@ -2986,31 +2982,57 @@ def _mixed_title_notes(
     return notes
 
 
+def _mixed_folder_hit(
+    record: FileRecord,
+) -> tuple[str, str, str, str, str, str] | None:
+    """Return filename kit + issued folders when the path is mixed.
+
+    Returns:
+        ``(parsed_title, mark, folder_title, folder_mark, package, name)``
+        or ``None`` when the file matches its title and mark folders.
+    """
+
+    if record.source is not SourceKind.RD or not record.present:
+        return None
+    mark = _record_mark(record)
+    if mark is None:
+        return None
+    parsed_title = str(record.data.get("title") or "").strip()
+    folder_title = issued_path_title_folder(record.path)
+    folder_mark = issued_path_mark_folder(record.path)
+    if not folder_title or not folder_mark:
+        return None
+    title_ok = folder_title.casefold() == parsed_title.casefold()
+    mark_ok = folder_hosts_filename_mark(folder_mark, mark)
+    if title_ok and mark_ok:
+        return None
+    package = str(record.data.get("transfer_name") or "").strip()
+    if not package:
+        package = nearest_issued_package_hint(record.path)
+    name = str(record.data.get("name") or "").strip()
+    if not name:
+        name = PureWindowsPath(record.path).name
+    return parsed_title, mark, folder_title, folder_mark, package, name
+
+
 def _mixed_title_rd_records(
     records: Sequence[FileRecord],
     *,
     title: str,
     mark: str,
 ) -> list[FileRecord]:
-    """Return present RD files of this kit that sit under another title."""
+    """Return present RD files of this kit under another title or mark."""
 
     want = kit_identity_key(title, mark)
     if not want[0] or not want[1]:
         return []
     found: list[FileRecord] = []
     for record in records:
-        if record.source is not SourceKind.RD or not record.present:
+        hit = _mixed_folder_hit(record)
+        if hit is None:
             continue
-        record_mark = _record_mark(record)
-        if record_mark is None:
-            continue
-        parsed_title = str(record.data.get("title") or "").strip()
+        parsed_title, record_mark, _folder_title, _folder_mark, _pkg, _name = hit
         if kit_identity_key(parsed_title, record_mark) != want:
-            continue
-        folder_title = issued_path_title_folder(record.path)
-        if not folder_title:
-            continue
-        if folder_title.casefold() == parsed_title.casefold():
             continue
         found.append(record)
     return found
@@ -3070,8 +3092,8 @@ def mixed_title_rescan_folders(
     """Return foreign title/mark folders where this kit's RD files sit.
 
     A point RD rescan walks these folders so missing detection can clear
-    files that were moved or deleted under another title. Does not drop
-    mixed files from the catalog and never returns ``rd_root``.
+    files that were moved or deleted under another title or mark. Does not
+    drop mixed files from the catalog and never returns ``rd_root``.
 
     Prefers the mark folder under the foreign title
     (``rd_root / 2612 / 05_KSB``). Falls back to the foreign title folder

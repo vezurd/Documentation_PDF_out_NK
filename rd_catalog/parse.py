@@ -235,6 +235,13 @@ _LAYOUT_REASON_LABELS: dict[str, str] = {
 }
 # ``03_KSB4`` / ``14_POS``: an optional NN prefix in front of the mark token.
 _MARK_LEVEL_RE = re.compile(r"^\s*(?:\d{1,2}[_.\-\s]+)?(?P<mark>.+?)\s*$")
+# ``12_POS1`` / ``04-SOT``: required 1–2 digit prefix, remainder is the mark.
+_MARK_FOLDER_RE = re.compile(
+    r"^(?P<seq>\d{1,2})[_.\-\s]+(?P<mark>.+)$",
+    re.IGNORECASE,
+)
+_MARK_CORE_RE = re.compile(r"^(?P<letters>[a-z]+)(?P<digits>\d*)$")
+_FOLDER_SPLIT_RE = re.compile(r"[_.\-\s]+")
 _TITLE_PREFIX_RE = re.compile(r"^\s*(?P<title>\d{4})\b")
 _PLAUSIBLE_MARK_RE = re.compile(
     r"^(?:\d{1,2}[_.\-\s]+)?[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9]*"
@@ -554,6 +561,94 @@ def _mark_level_token(folder_name: str) -> str:
     return (match.group("mark") if match else normalized).casefold()
 
 
+def folder_matches_mark(folder_name: str, mark: str) -> bool:
+    """Return whether a directory name is this kit's mark folder.
+
+    Accepts ``POS1`` and ``12_POS1`` / ``04-SOT``. Does not match a different
+    mark glued onto the same prefix.
+
+    Args:
+        folder_name: One path segment.
+        mark: Latin AGCC mark.
+
+    Returns:
+        True when the folder belongs to ``mark``.
+    """
+
+    folded = normalize_unicode_dashes(folder_name).strip().casefold()
+    want = mark.strip().casefold()
+    if not folded or not want:
+        return False
+    if folded == want:
+        return True
+    match = _MARK_FOLDER_RE.match(folded)
+    return bool(match and match.group("mark").casefold() == want)
+
+
+def _latin_mark_core(text: str) -> tuple[str, str] | None:
+    compact = _FOLDER_SPLIT_RE.sub(
+        "", normalize_unicode_dashes(text).strip().casefold()
+    )
+    match = _MARK_CORE_RE.fullmatch(compact)
+    if match is None:
+        return None
+    return match.group("letters"), match.group("digits")
+
+
+def _mark_cores_compatible(
+    folder_core: tuple[str, str], mark_core: tuple[str, str]
+) -> bool:
+    folder_letters, folder_digits = folder_core
+    mark_letters, mark_digits = mark_core
+    if folder_letters != mark_letters:
+        return False
+    if not folder_digits or not mark_digits:
+        return True
+    return folder_digits.startswith(mark_digits) or mark_digits.startswith(
+        folder_digits
+    )
+
+
+def folder_hosts_filename_mark(folder_name: str, mark: str) -> bool:
+    """Return whether an issued mark folder hosts this filename mark.
+
+    ``POS1`` / ``12_POS1`` / ``04-SOT`` match that mark. ``06_KSB_21``
+    hosts ``KSB`` and ``KSB1`` (same Latin stem; folder digits may extend
+    the mark digits). ``SOS`` does not host ``SOT``; ``12_POS1`` does not
+    host ``POS2``.
+
+    Args:
+        folder_name: Mark-level path segment.
+        mark: Latin AGCC mark from the filename.
+
+    Returns:
+        True when the folder is this mark, not a stray sibling.
+    """
+
+    if folder_matches_mark(folder_name, mark):
+        return True
+    want = mark.strip()
+    if not want:
+        return False
+    mark_core = _latin_mark_core(want)
+    if mark_core is None:
+        return False
+    folded = normalize_unicode_dashes(folder_name).strip().casefold()
+    if not folded:
+        return False
+    seen: set[str] = set()
+    for token in (folded, *_FOLDER_SPLIT_RE.split(folded)):
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        if token == want.casefold():
+            return True
+        core = _latin_mark_core(token)
+        if core is not None and _mark_cores_compatible(core, mark_core):
+            return True
+    return False
+
+
 def _repeats_title_or_mark(dirs: Sequence[str]) -> bool:
     """Return whether ``dirs[2]`` repeats the title or the mark level.
 
@@ -793,6 +888,42 @@ def list_layout_violations(
     return tuple(rows)
 
 
+def _issued_path_layout_dirs(path: str) -> tuple[str, str, str, str] | None:
+    """Return ``title / mark / gate / NN_`` from a canonical issued path."""
+
+    raw = (path or "").strip()
+    if not raw:
+        return None
+    parts = list(_windows_path_parts(raw))
+    if not parts:
+        return None
+    leaf = parts[-1]
+    under_gate = any(is_transfer_gate_folder_name(name) for name in parts[:-1])
+    if not is_transfer_folder_name(leaf, under_gate=under_gate):
+        parts.pop()
+        if parts and is_package_media_folder(parts[-1]):
+            parts.pop()
+    if len(parts) < 4:
+        return None
+    title_folder, mark_folder, gate_folder, transfer_folder = parts[-4:]
+    if not _TITLE_ONLY_FOLDER_RE.fullmatch(
+        normalize_unicode_dashes(title_folder).strip()
+    ):
+        return None
+    if is_transfer_gate_folder_name(mark_folder):
+        return None
+    if not is_transfer_gate_folder_name(gate_folder):
+        return None
+    if not is_transfer_folder_name(transfer_folder, under_gate=True):
+        return None
+    return (
+        title_folder.strip(),
+        mark_folder.strip(),
+        gate_folder.strip(),
+        transfer_folder.strip(),
+    )
+
+
 def issued_path_title_folder(path: str) -> str:
     """Return the 4-digit title folder of a canonical issued RD path.
 
@@ -808,32 +939,25 @@ def issued_path_title_folder(path: str) -> str:
         Title folder name, or empty when the path is not that shape.
     """
 
-    raw = (path or "").strip()
-    if not raw:
-        return ""
-    parts = list(_windows_path_parts(raw))
-    if not parts:
-        return ""
-    leaf = parts[-1]
-    under_gate = any(is_transfer_gate_folder_name(name) for name in parts[:-1])
-    if not is_transfer_folder_name(leaf, under_gate=under_gate):
-        parts.pop()
-        if parts and is_package_media_folder(parts[-1]):
-            parts.pop()
-    if len(parts) < 4:
-        return ""
-    title_folder, mark_folder, gate_folder, transfer_folder = parts[-4:]
-    if not _TITLE_ONLY_FOLDER_RE.fullmatch(
-        normalize_unicode_dashes(title_folder).strip()
-    ):
-        return ""
-    if is_transfer_gate_folder_name(mark_folder):
-        return ""
-    if not is_transfer_gate_folder_name(gate_folder):
-        return ""
-    if not is_transfer_folder_name(transfer_folder, under_gate=True):
-        return ""
-    return title_folder.strip()
+    dirs = _issued_path_layout_dirs(path)
+    return dirs[0] if dirs else ""
+
+
+def issued_path_mark_folder(path: str) -> str:
+    """Return the mark folder of a canonical issued RD path.
+
+    Lexical; no disk IO. Same layout as :func:`issued_path_title_folder`.
+
+    Args:
+        path: Local or UNC file path, or an issued package directory.
+
+    Returns:
+        Mark folder name (``SOS``, ``06_KSB_21``, ``22_POS2``), or empty
+        when the path is not that shape.
+    """
+
+    dirs = _issued_path_layout_dirs(path)
+    return dirs[1] if dirs else ""
 
 
 def issued_package_dir(path: str) -> str:

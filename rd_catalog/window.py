@@ -6964,7 +6964,7 @@ class CatalogWindow(QMainWindow):
         """Return the kit folder plus foreign mixed-title mark folders.
 
         Extra folders come from present RD files of this kit whose issued
-        path sits under another title. Never the RD root, never a gate.
+        path sits under another title or mark. Never the RD root, never a gate.
 
         Args:
             primary: Mark or title folder already chosen for this kit.

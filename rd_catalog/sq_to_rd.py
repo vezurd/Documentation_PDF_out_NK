@@ -8,7 +8,6 @@ title+mark folder is moved (not copied) under
 from __future__ import annotations
 
 import os
-import re
 import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ from rd_catalog.kits import format_revision, kit_identity_key
 from rd_catalog.models import FileRecord, SourceKind, make_path_key
 from rd_catalog.overlay import revision_rank
 from rd_catalog.parse import (
+    folder_matches_mark,
     is_transfer_folder_name,
     is_transfer_gate_folder_name,
     normalize_unicode_dashes,
@@ -28,10 +28,6 @@ from rd_catalog.path_actions import path_is_under
 from rd_catalog.perf_log import perf_span
 
 _PDF_DWG_NAMES = frozenset({"pdf", "dwg"})
-_MARK_FOLDER_RE = re.compile(
-    r"^(?P<seq>\d{1,2})[_.\-\s]+(?P<mark>.+)$",
-    re.IGNORECASE,
-)
 _DEFAULT_GATE_NAME = "Для передачи"
 
 
@@ -70,30 +66,6 @@ class SqToRdResult:
     destination_folder: str
     moved_names: tuple[str, ...]
     source_removed: bool
-
-
-def folder_matches_mark(folder_name: str, mark: str) -> bool:
-    """Return whether a directory name is this kit's mark folder.
-
-    Accepts ``POS1`` and ``12_POS1`` / ``04-SOT``. Does not match a different
-    mark glued onto the same prefix.
-
-    Args:
-        folder_name: One path segment.
-        mark: Latin AGCC mark.
-
-    Returns:
-        True when the folder belongs to ``mark``.
-    """
-
-    folded = normalize_unicode_dashes(folder_name).strip().casefold()
-    want = mark.strip().casefold()
-    if not folded or not want:
-        return False
-    if folded == want:
-        return True
-    match = _MARK_FOLDER_RE.match(folded)
-    return bool(match and match.group("mark").casefold() == want)
 
 
 def next_transfer_sequence(existing: Iterable[int]) -> int:
