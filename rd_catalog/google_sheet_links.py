@@ -8,6 +8,9 @@ come from the last Google snapshot, not a live A+B locate.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +21,10 @@ from rd_catalog.config import CatalogConfig
 from rd_catalog.kits import GoogleKit, IssuanceKit
 
 PINS_FILENAME = "google_sheet_pins.json"
-GOOGLE_HREF_TIP = "Клик открывает эту ячейку в Google Sheets."
+GOOGLE_HREF_TIP = (
+    "Клик открывает эту ячейку в Google Sheets. "
+    "Двойной клик — копирование текста."
+)
 KITS_SHEET_TITLE_FALLBACK = "Контроль выдачи"
 _SHEETS_PREFIX = "https://docs.google.com/spreadsheets/d/"
 
@@ -101,7 +107,9 @@ def google_sheet_cell_url(
 
     When ``sheet_id`` (gid) is known, the range is the bare A1 on that
     tab. Otherwise the range includes ``'Title'!A1`` so Google can switch
-    sheets without a gid.
+    sheets without a gid. ``range`` is always in the query string (and
+    repeated in the hash) so Windows can drop the fragment and still
+    land on the cell.
 
     Args:
         spreadsheet_id: Spreadsheet id from catalog config.
@@ -117,10 +125,14 @@ def google_sheet_cell_url(
     cell = (a1 or "").strip()
     if not sid or not cell:
         return ""
+    # ``range`` must live in the query string. Windows often drops the
+    # ``#fragment``, and ``webbrowser``/``start`` may split on ``&`` in the
+    # hash, so ``#gid=…&range=F12`` opens the tab but never selects the cell.
     if sheet_id is not None:
         gid = int(sheet_id)
-        encoded = quote(cell, safe="")
-        return f"{_SHEETS_PREFIX}{sid}/edit?gid={gid}#gid={gid}&range={encoded}"
+        query = f"gid={gid}&range={cell}"
+        fragment = f"gid={gid}&range={cell}"
+        return f"{_SHEETS_PREFIX}{sid}/edit?{query}#{fragment}"
     title = sheet_title or ""
     if title:
         escaped = title.replace("'", "''")
@@ -128,7 +140,7 @@ def google_sheet_cell_url(
     else:
         range_body = cell
     encoded = quote(range_body, safe="!:'")
-    return f"{_SHEETS_PREFIX}{sid}/edit#range={encoded}"
+    return f"{_SHEETS_PREFIX}{sid}/edit?range={encoded}#range={encoded}"
 
 
 def is_google_sheets_url(url: str) -> bool:
@@ -145,11 +157,21 @@ def open_google_sheet_url(url: str) -> bool:
         url: Value from :func:`google_sheet_cell_url`.
 
     Returns:
-        True when the URL looked valid and ``webbrowser.open`` was called.
+        True when the URL looked valid and a browser launch was attempted.
     """
 
     if not is_google_sheets_url(url):
         return False
+    if sys.platform == "win32":
+        try:
+            os.startfile(url)
+            return True
+        except OSError:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", url],
+                close_fds=True,
+            )
+            return True
     webbrowser.open(url)
     return True
 

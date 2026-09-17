@@ -93,21 +93,26 @@ def main() -> None:
         "abc", "F12", sheet_id=77, sheet_title="ignored"
     )
     assert with_gid == (
-        "https://docs.google.com/spreadsheets/d/abc/edit?gid=77#gid=77&range=F12"
+        "https://docs.google.com/spreadsheets/d/abc/"
+        "edit?gid=77&range=F12#gid=77&range=F12"
     ), with_gid
     named = google_sheet_cell_url(
         "abc", "B40", sheet_title="Выдача РД ПД"
     )
+    assert named.startswith(
+        "https://docs.google.com/spreadsheets/d/abc/edit?range="
+    ), named
     assert "range=" in named
     assert "Выдача" in named or "%D0%92%D1%8B%D0%B4%D0%B0%D1%87%D0%B0" in named
+    assert "B40" in named
     assert is_google_sheets_url(with_gid)
     assert not is_google_sheets_url("https://example.com/")
     assert google_sheet_cell_url("", "F12") == ""
 
     links = _links()
     hrefs = kits_google_hrefs(google=_google(), issuance=_issuance(), links=links)
+    assert "?gid=77&range=F12" in hrefs["Google · TRM F"]
     assert hrefs["Google · TRM F"].endswith("range=F12")
-    assert "gid=77" in hrefs["Google · TRM F"]
     assert "B40" in hrefs["Выдача · TRM отпр."]
     assert "Q40" in hrefs["Выдача · TRM подтв."]
     for header in KITS_GOOGLE_COLUMNS:
