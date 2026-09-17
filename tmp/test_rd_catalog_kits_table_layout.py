@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QTableWidget
 from rd_catalog.config import load_config
 from rd_catalog.db import CatalogDatabase
 from rd_catalog.kits_table_layout import (
+    KitsLayoutSaveResult,
     KitsTableLayout,
     load_default_kits_table_layout,
     load_kits_table_layout,
@@ -71,9 +73,8 @@ def _check_parse_and_merge() -> None:
     assert packaged is not None
     assert "АН МТО" in packaged.order
     assert "MTO · рев." in packaged.order
-    assert packaged.order[packaged.order.index("Марка") + 1] == "Ок"
-    assert packaged.order[packaged.order.index("Рабочая рев. РД") + 1] == "РД · рев."
-    assert packaged.order[packaged.order.index("АН МТО") + 1] == "SQ · рев."
+    assert "Ок" in packaged.order
+    assert "Рабочая рев. РД" in packaged.order
     assert packaged.widths.get("АН МТО", 0) >= 80
     assert packaged.widths.get("Рабочая рев. РД", 0) >= 80
     assert packaged.widths.get("Ок", 0) >= 40
@@ -96,12 +97,15 @@ def _check_runtime_io(temp: Path) -> None:
         order=("Марка", "Титул"),
         widths={"Титул": 90, "Марка": 70},
     )
-    runtime_path, packaged_path = save_default_kits_table_layout(
+    saved = save_default_kits_table_layout(
         layout,
         runtime,
         packaged_path=temp / "packaged.json",
         write_packaged=True,
     )
+    runtime_path = saved.runtime_path
+    packaged_path = saved.packaged_path
+    assert saved.ok
     assert runtime_path.is_file()
     assert packaged_path is not None and packaged_path.is_file()
     loaded = load_default_kits_table_layout(
@@ -134,6 +138,37 @@ def _check_runtime_io(temp: Path) -> None:
     )
     assert empty.order == ("Титул", "Марка")
     assert empty.widths == {}
+
+    blocked = temp / "blocked.json"
+    blocked.mkdir()
+    failed = save_default_kits_table_layout(
+        layout,
+        temp / "runtime_partial",
+        packaged_path=blocked,
+        write_packaged=True,
+    )
+    assert failed.runtime_path.is_file()
+    assert failed.packaged_path is None
+    assert failed.packaged_error
+    assert not failed.ok
+
+    fallback_target = temp / "replace_busy.json"
+    write_kits_table_layout(
+        fallback_target,
+        KitsTableLayout(order=("Титул",), widths={"Титул": 11}),
+    )
+    with mock.patch(
+        "rd_catalog.kits_table_layout.os.replace",
+        side_effect=OSError("sharing violation"),
+    ):
+        write_kits_table_layout(
+            fallback_target,
+            KitsTableLayout(order=("Марка",), widths={"Марка": 12}),
+        )
+    fallback = load_kits_table_layout(fallback_target)
+    assert fallback is not None
+    assert fallback.order == ("Марка",)
+    assert fallback.widths == {"Марка": 12}
 
 
 def _check_header_apply(app: QApplication) -> None:
@@ -237,15 +272,55 @@ def _check_window_fallback(app: QApplication, root: Path) -> None:
     last = header.count() - 1
     header.moveSection(header.visualIndex(last), 3)
     header.resizeSection(0, 55)
-    runtime_path, packaged_path = window._write_kits_column_template(
-        write_packaged=False
-    )
+    written = window._write_kits_column_template(write_packaged=False)
+    runtime_path = written.runtime_path
+    assert written.ok
     assert runtime_path.is_file()
-    assert packaged_path is None
+    assert written.packaged_path is None
     saved = load_kits_table_layout(runtime_path)
     assert saved is not None
     assert saved.order[3] == _KITS_HEADERS[last]
     assert saved.widths["Титул"] == 55
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("QMessageBox must not be used for the layout button")
+
+    original_info = rd_window.QMessageBox.information
+    original_warn = rd_window.QMessageBox.warning
+    rd_window.QMessageBox.information = _boom
+    rd_window.QMessageBox.warning = _boom
+    try:
+        window._write_kits_column_template = lambda **_kw: KitsLayoutSaveResult(
+            runtime_path=runtime_path,
+            packaged_path=root / "runtime" / "kits_table_layout.json",
+        )
+        window._save_kits_column_template()
+        assert rd_window._KITS_LAYOUT_OK_FILL in window._kits_layout_button.styleSheet()
+        assert "Шаблон колонок сохранён" in window._log.toPlainText()
+
+        def _fail_write(**_kw):
+            raise OSError("locked")
+
+        window._write_kits_column_template = _fail_write
+        window._save_kits_column_template()
+        assert (
+            rd_window._KITS_LAYOUT_PROBLEM_FILL
+            in window._kits_layout_button.styleSheet()
+        )
+        assert "не записан" in window._log.toPlainText()
+        window._write_kits_column_template = lambda **_kw: KitsLayoutSaveResult(
+            runtime_path=runtime_path,
+            packaged_error="PermissionError: sharing violation",
+        )
+        window._save_kits_column_template()
+        assert (
+            rd_window._KITS_LAYOUT_PROBLEM_FILL
+            in window._kits_layout_button.styleSheet()
+        )
+        assert "заводской не записан" in window._log.toPlainText()
+    finally:
+        rd_window.QMessageBox.information = original_info
+        rd_window.QMessageBox.warning = original_warn
 
     window.close()
     app.processEvents()

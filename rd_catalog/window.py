@@ -174,6 +174,7 @@ from rd_catalog.sheet_de_sync_dialog import (
     SheetDeSyncDialog,
 )
 from rd_catalog.kits_table_layout import (
+    KitsLayoutSaveResult,
     KitsTableLayout,
     canonical_kits_header_name,
     load_default_kits_table_layout,
@@ -454,10 +455,12 @@ _KITS_MTO_REV_TOOLTIP = KITS_MTO_REV_TOOLTIP
 _KITS_WORKING_REV_TOOLTIP = KITS_WORKING_REV_TOOLTIP
 _KITS_PKG_STRETCH_COLS = frozenset({1, 4, 5})
 _KITS_LAYOUT_BUTTON = "Сохранить шаблон колонок"
-_KITS_LAYOUT_TITLE = "Шаблон колонок"
+_KITS_LAYOUT_OK_FILL = "#C5E8C4"
+_KITS_LAYOUT_PROBLEM_FILL = "#F7E8BE"
 _KITS_LAYOUT_TOOLTIP = (
-    "Запомнить текущий порядок и ширины колонок как шаблон по умолчанию. "
-    "После сброса настроек (новая версия колонок) таблица возьмёт этот шаблон."
+    "Запомнить текущий порядок и ширины колонок как шаблон по умолчанию "
+    "(runtime и заводской JSON). Зелёная кнопка — оба файла записаны, "
+    "жёлтая — смотрите Журнал. После сброса настроек таблица возьмёт этот шаблон."
 )
 _KITS_XLSX_BUTTON = KITS_XLSX_BUTTON
 _KITS_XLSX_TITLE = "Выгрузка Комплекты"
@@ -2134,14 +2137,14 @@ class CatalogWindow(QMainWindow):
         self,
         *,
         write_packaged: bool = True,
-    ) -> tuple[Path, Path | None]:
+    ) -> KitsLayoutSaveResult:
         """Persist the current Комплекты layout as the default template.
 
         Args:
             write_packaged: Also overwrite the factory JSON in the package.
 
         Returns:
-            Runtime path and packaged path (or ``None``).
+            Runtime path and optional factory path/error.
 
         Raises:
             OSError: If the runtime file cannot be written.
@@ -2153,6 +2156,18 @@ class CatalogWindow(QMainWindow):
             self.config.runtime_dir,
             write_packaged=write_packaged,
         )
+
+    def _flash_kits_layout_button(self, *, ok: bool) -> None:
+        """Paint the template button green on success or yellow on problems."""
+
+        fill = _KITS_LAYOUT_OK_FILL if ok else _KITS_LAYOUT_PROBLEM_FILL
+        button = self._kits_layout_button
+        button.setStyleSheet(
+            f"QPushButton {{ background-color: {fill}; color: #202124; }}"
+        )
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
 
     def _show_kits_paint_legend(self) -> None:
         """Button: examples of Комплекты MTO/revision fill and bold."""
@@ -2240,25 +2255,33 @@ class CatalogWindow(QMainWindow):
         """Button: write the current Комплекты order and widths as default."""
 
         try:
-            runtime_path, packaged_path = self._write_kits_column_template()
+            saved = self._write_kits_column_template()
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(
-                self,
-                _KITS_LAYOUT_TITLE,
-                f"Не удалось сохранить шаблон колонок:\n{exc}",
+            self._append_log(
+                f"Шаблон колонок: не записан ({type(exc).__name__}: {exc})"
             )
+            self._flash_kits_layout_button(ok=False)
+            return
+        except Exception as exc:
+            self._append_log(
+                f"Шаблон колонок: ошибка ({type(exc).__name__}: {exc})"
+            )
+            self._flash_kits_layout_button(ok=False)
+            return
+        if saved.packaged_error:
+            self._append_log(
+                f"Шаблон колонок: runtime {saved.runtime_path}; "
+                f"заводской не записан ({saved.packaged_error})"
+            )
+            self._flash_kits_layout_button(ok=False)
             return
         extra = (
-            f"\nЗаводской шаблон: {packaged_path}"
-            if packaged_path is not None
+            f"; заводской {saved.packaged_path}"
+            if saved.packaged_path is not None
             else ""
         )
-        QMessageBox.information(
-            self,
-            _KITS_LAYOUT_TITLE,
-            "Порядок и ширины колонок сохранены как шаблон по умолчанию.\n"
-            f"{runtime_path}{extra}",
-        )
+        self._append_log(f"Шаблон колонок сохранён: {saved.runtime_path}{extra}")
+        self._flash_kits_layout_button(ok=True)
 
     def _copy_kits_header_widths_from_v5(self) -> None:
         """Keep v5 column widths after the v6 logical reorder."""

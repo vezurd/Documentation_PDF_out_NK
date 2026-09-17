@@ -17,6 +17,8 @@ Qt-only until the user clicks «Сохранить шаблон колонок»
 from __future__ import annotations
 
 import json
+import os
+import stat
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,6 +53,29 @@ class KitsTableLayout:
 
     order: tuple[str, ...]
     widths: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class KitsLayoutSaveResult:
+    """Outcome of writing the runtime template and optional factory file.
+
+    Attributes:
+        runtime_path: Always written when the call returns.
+        packaged_path: Factory file when that write succeeded.
+        packaged_error: ``Type: message`` when the factory write was
+            attempted and failed. Empty skip (``write_packaged=False``)
+            leaves both ``packaged_path`` and ``packaged_error`` empty.
+    """
+
+    runtime_path: Path
+    packaged_path: Path | None = None
+    packaged_error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """True when runtime is written and factory was not a failed attempt."""
+
+        return not self.packaged_error
 
 
 def runtime_layout_path(runtime_dir: str | Path) -> Path:
@@ -227,8 +252,20 @@ def resolve_kits_table_layout(
     return KitsTableLayout(order=order, widths=widths)
 
 
+def _clear_readonly(path: Path) -> None:
+    """Drop the Windows read-only bit so ``os.replace`` can overwrite."""
+
+    try:
+        path.chmod(path.stat().st_mode | stat.S_IWRITE)
+    except OSError:
+        pass
+
+
 def write_kits_table_layout(path: str | Path, layout: KitsTableLayout) -> Path:
     """Atomically write a layout JSON file.
+
+    On Windows ``os.replace`` can fail when the destination is open in an
+    editor. The function then writes the target in place.
 
     Args:
         path: Target JSON path.
@@ -254,9 +291,21 @@ def write_kits_table_layout(path: str | Path, layout: KitsTableLayout) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    tmp_path = target.with_name(target.name + ".tmp")
+    tmp_path = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     tmp_path.write_text(text, encoding="utf-8")
-    tmp_path.replace(target)
+    try:
+        if target.exists():
+            _clear_readonly(target)
+        os.replace(tmp_path, target)
+    except OSError:
+        try:
+            if target.exists():
+                _clear_readonly(target)
+            target.write_text(text, encoding="utf-8")
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        tmp_path.unlink(missing_ok=True)
     return target
 
 
@@ -266,7 +315,7 @@ def save_default_kits_table_layout(
     *,
     packaged_path: Path | None = None,
     write_packaged: bool = True,
-) -> tuple[Path, Path | None]:
+) -> KitsLayoutSaveResult:
     """Write the runtime template and, when possible, the packaged factory.
 
     Args:
@@ -276,8 +325,8 @@ def save_default_kits_table_layout(
         write_packaged: When False, skip the factory file (tests).
 
     Returns:
-        ``(runtime_path, packaged_path_or_none)``. Packaged is ``None`` when
-        skipped or the write failed.
+        Paths and an optional factory-write error. Runtime failure still
+        raises; a factory failure is captured on the result.
 
     Raises:
         OSError: If the runtime file cannot be written.
@@ -285,9 +334,13 @@ def save_default_kits_table_layout(
 
     runtime = write_kits_table_layout(runtime_layout_path(runtime_dir), layout)
     if not write_packaged:
-        return runtime, None
+        return KitsLayoutSaveResult(runtime_path=runtime)
     factory = PACKAGED_LAYOUT_PATH if packaged_path is None else packaged_path
     try:
-        return runtime, write_kits_table_layout(factory, layout)
-    except OSError:
-        return runtime, None
+        written = write_kits_table_layout(factory, layout)
+    except OSError as exc:
+        return KitsLayoutSaveResult(
+            runtime_path=runtime,
+            packaged_error=f"{type(exc).__name__}: {exc}",
+        )
+    return KitsLayoutSaveResult(runtime_path=runtime, packaged_path=written)
