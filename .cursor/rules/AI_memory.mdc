@@ -24,7 +24,7 @@ alwaysApply: true
 - PDF v2 control center -> `AI_v2_monitor.mdc`
 - PDF v2 ОД (ведомость) -> `AI_v2_od.mdc`
 - PDF v2 анализ тегов (MTO / payload) -> `AI_v2_tag_analysis.mdc`
-- RD catalog GUI/overlay / вкладка АН (dump, не overlay) / вкладка РД (xlsx dump по `rd_root`) -> `AI_rd_catalog.mdc`; SQLite schema 13 / pipeline / матрица ревизий MTO / карточка комплекта / `an_mto_file` / `rd_dump_mto_file` -> `AI_rd_catalog_db.mdc`; Статус рассмотрения / согласования, подписи ячеек, Подсказки → `AI_rd_catalog_pipeline_status.mdc`; WEB-монитор + dual GUI → `AI_rd_catalog_web.mdc`; GUI hangs / `perf_span` → `AI_rd_catalog_perf.mdc`
+- RD catalog GUI/overlay / вкладка АН (dump, не overlay) / вкладка РД (xlsx + OD dump по `rd_root`) -> `AI_rd_catalog.mdc`; SQLite schema 13 / pipeline / матрица ревизий MTO / карточка комплекта / `an_mto_file` / `rd_dump_mto_file` -> `AI_rd_catalog_db.mdc`; Статус рассмотрения / согласования, подписи ячеек, Подсказки → `AI_rd_catalog_pipeline_status.mdc`; WEB-монитор + dual GUI → `AI_rd_catalog_web.mdc`; GUI hangs / `perf_span` → `AI_rd_catalog_perf.mdc`
 - Выгрузка ПИ заказчика (xlsb→pickle, BCC) -> `AI_rd_catalog_customer_pi.mdc`
 - TB вынесен в отдельный проект: `C:\Users\ydruzev\PycharmProjects\TB` (не часть release zip PDF/RFQ).
 

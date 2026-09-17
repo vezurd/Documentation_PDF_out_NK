@@ -1,4 +1,4 @@
-"""Read-only RD-tree MTO dump walker. Persists ``rd_dump_mto_file`` only."""
+"""Read-only RD-tree dump walker (MTO xlsx + OD doc/docx). Persists ``rd_dump_mto_file`` only."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from rd_catalog.an_index import AnMtoFile
 from rd_catalog.config import CatalogConfig
 from rd_catalog.db import CatalogDatabase
 from rd_catalog.perf_log import perf_span
-from rd_catalog.rd_dump_index import parse_rd_dump_mto_file
+from rd_catalog.rd_dump_index import parse_rd_dump_file
 from rd_catalog.skip_dirs import is_skipped_dir_name
 
 
@@ -30,9 +30,10 @@ class RdDumpScanProgress:
 class RdDumpScanOutcome:
     """Result of one RD MTO dump walk.
 
-    ``files_seen`` counts non-lock ``.xlsx`` candidates. ``accepted`` is the
-    number of names that ``parse_rd_dump_mto_file`` kept. ``skipped`` is
-    ``files_seen - accepted`` (junk workbooks and stat failures).
+    ``files_seen`` counts non-lock ``.xlsx`` / ``.doc`` / ``.docx``
+    candidates. ``accepted`` is the number of names that
+    ``parse_rd_dump_file`` kept. ``skipped`` is ``files_seen - accepted``
+    (junk names and stat failures).
     """
 
     files: tuple[AnMtoFile, ...]
@@ -57,8 +58,11 @@ def _is_excel_lock_name(name: str) -> bool:
     return Path(name).name.startswith("~$")
 
 
-def _is_xlsx_name(name: str) -> bool:
-    return Path(name).suffix.casefold() == ".xlsx"
+_DUMP_SUFFIXES = frozenset({".xlsx", ".doc", ".docx"})
+
+
+def _is_dump_candidate_name(name: str) -> bool:
+    return Path(name).suffix.casefold() in _DUMP_SUFFIXES
 
 
 def _rd_root_disabled(root: Path) -> bool:
@@ -172,11 +176,12 @@ def scan_rd_dump(
     is_cancelled: Callable[[], bool] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> RdDumpScanOutcome:
-    """Walk ``config.rd_root`` for AGCC MTO xlsx, including non-canonical paths.
+    """Walk ``config.rd_root`` for AGCC MTO xlsx and OD doc/docx.
 
-    Read-only on the share. Writes only the local SQLite
-    ``rd_dump_mto_file`` table. Does not touch ``file_entry``, overlay,
-    or ``SourceKind``. Skip-dirs prune directory names the same way as АН.
+    Includes non-canonical paths. Read-only on the share. Writes only the
+    local SQLite ``rd_dump_mto_file`` table. Does not touch ``file_entry``,
+    overlay, or ``SourceKind``. Skip-dirs prune directory names the same
+    way as АН.
 
     An empty or missing root sets ``failure`` and does **not** call
     ``replace_rd_dump_snapshot``. A mid-walk cancel also leaves the last
@@ -186,7 +191,7 @@ def scan_rd_dump(
         config: Resolved catalog configuration (``rd_root``, ``skip_dirs``,
             ``db_path``).
         persist: When true, replace the snapshot after a complete walk.
-        progress: Optional per-xlsx-candidate callback.
+        progress: Optional per-candidate callback.
         is_cancelled: Cooperative cancellation predicate.
         log: Optional human-readable status lines.
 
@@ -220,7 +225,7 @@ def scan_rd_dump(
             emit(failure)
             return _outcome(failure=failure, scanned_at=scanned_at)
 
-        emit(f"Scanning RD MTO dump: {root_text}")
+        emit(f"Scanning RD dump (xlsx/doc): {root_text}")
         accepted: list[AnMtoFile] = []
         errors: list[str] = []
         files_seen = 0
@@ -244,7 +249,7 @@ def scan_rd_dump(
                 if _is_cancelled(is_cancelled):
                     cancelled = True
                     break
-                if _is_excel_lock_name(name) or not _is_xlsx_name(name):
+                if _is_excel_lock_name(name) or not _is_dump_candidate_name(name):
                     continue
                 files_seen += 1
                 path = os.path.join(current_root, name)
@@ -255,7 +260,7 @@ def scan_rd_dump(
                     skipped += 1
                     report(path, files_seen)
                     continue
-                parsed = parse_rd_dump_mto_file(
+                parsed = parse_rd_dump_file(
                     path,
                     size=stat.st_size,
                     mtime_ns=stat.st_mtime_ns,

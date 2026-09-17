@@ -13,12 +13,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rd_catalog.config import CatalogConfig
 from rd_catalog.db import CatalogDatabase
 from rd_catalog.kits import kit_identity_key
-from rd_catalog.rd_dump_index import rd_dump_is_canonical, rd_dump_layout_token
+from rd_catalog.rd_dump_index import (
+    KIND_OD,
+    parse_rd_dump_file,
+    rd_dump_is_canonical,
+    rd_dump_kind,
+    rd_dump_layout_token,
+)
 from rd_catalog.rd_dump_scan import RdDumpScanOutcome, scan_rd_dump
 
 _VALID_NAME = "AGCC.287-1600-POS.MTO-0001_02-AN01_RU.xlsx"
 _LOOSE_NAME = "AGCC.287-1600-POS.MTO-0001_02_RU.xlsx"
+_OD_NAME = "AGCC.287-1600-POS.OD-0001_02-AN01_RU.docx"
+_OD_LOOSE_NAME = "AGCC.287-1600-POS.OD-0001_02_RU.doc"
 _LOCK_NAME = "~$AGCC.287-1600-POS.MTO-0001_02_RU.xlsx"
+_OD_LOCK_NAME = "~$AGCC.287-1600-POS.OD-0001_02_RU.docx"
 _FORBIDDEN_NAMES = (
     "scan_catalog",
     "execute_scan",
@@ -74,10 +83,29 @@ def _assert_cli_help() -> None:
 
 
 def main() -> None:
-    """Walk a local RD tree, keep non-canonical xlsx, and skip skip-dirs."""
+    """Walk a local RD tree, keep non-canonical xlsx/doc, and skip skip-dirs."""
 
     _assert_no_scan_catalog_imports()
     _assert_cli_help()
+
+    parsed_od = parse_rd_dump_file(
+        rf"dummy\{_OD_NAME}",
+        size=1,
+        mtime_ns=1,
+    )
+    assert parsed_od is not None
+    assert rd_dump_kind(parsed_od) == KIND_OD
+    assert parsed_od.revision_text == "02-AN01"
+    assert parse_rd_dump_file(
+        rf"dummy\{_OD_LOCK_NAME}",
+        size=1,
+        mtime_ns=1,
+    ) is None
+    assert parse_rd_dump_file(
+        r"dummy\AGCC.287-1600-POS.OD-0001_02_RU.pdf",
+        size=1,
+        mtime_ns=1,
+    ) is None
 
     with tempfile.TemporaryDirectory(prefix="rd_catalog_rd_dump_") as temp:
         root = Path(temp)
@@ -95,12 +123,27 @@ def main() -> None:
             / _VALID_NAME
         )
         loose = rd_root / "1600" / "POS" / _LOOSE_NAME
+        canonical_od = (
+            rd_root
+            / "1600"
+            / "POS"
+            / "Для передачи"
+            / "01_рев.02-AN01"
+            / "DWG"
+            / _OD_NAME
+        )
+        loose_od = rd_root / "1600" / "POS" / _OD_LOOSE_NAME
         _write(canonical)
         _write(loose)
+        _write(canonical_od)
+        _write(loose_od)
         _write(rd_root / "notes.xlsx")
+        _write(rd_root / "notes.docx")
         _write(rd_root / _LOCK_NAME)
+        _write(rd_root / _OD_LOCK_NAME)
         _write(rd_root / "ignore.pdf", b"%PDF")
         _write(rd_root / "old" / _LOOSE_NAME)
+        _write(rd_root / "old" / _OD_LOOSE_NAME)
         _write(rd_root / "архив" / _VALID_NAME)
         _write(junk_root / "notes.xlsx")
 
@@ -117,21 +160,24 @@ def main() -> None:
         assert first.failure is None, first.failure
         assert first.cancelled is False
         names = {Path(item.path).name for item in first.files}
-        assert names == {_VALID_NAME, _LOOSE_NAME}, names
-        assert first.accepted == 2, first
-        # valid + loose + notes.xlsx; lock/pdf/skipped-dir excluded
-        assert first.files_seen == 3, first
-        assert first.skipped == 1
+        assert names == {_VALID_NAME, _LOOSE_NAME, _OD_NAME, _OD_LOOSE_NAME}, names
+        assert first.accepted == 4, first
+        # mto valid+loose+notes.xlsx, od canonical+loose+notes.docx; locks/pdf/skip-dirs excluded
+        assert first.files_seen == 6, first
+        assert first.skipped == 2
         by_kit = database.list_rd_dump_files_by_kit()
         pos_files = by_kit[kit_identity_key("1600", "POS")]
-        assert len(pos_files) == 2
+        assert len(pos_files) == 4
         hidden_names = {Path(item.path).name for item in database.list_rd_dump_mto_files()}
         assert _LOCK_NAME not in hidden_names
+        assert _OD_LOCK_NAME not in hidden_names
         stored_paths = {item.path for item in database.list_rd_dump_mto_files()}
         assert str(canonical) in stored_paths or any(
             Path(path).name == _VALID_NAME for path in stored_paths
         )
         assert any(Path(path).name == _LOOSE_NAME for path in stored_paths)
+        assert any(Path(path).name == _OD_NAME for path in stored_paths)
+        assert any(Path(path).name == _OD_LOOSE_NAME for path in stored_paths)
         assert not any("old" in path.casefold() for path in stored_paths)
         an_kept = database.list_an_mto_files()
         assert an_kept == ()
@@ -143,20 +189,20 @@ def main() -> None:
         )
         assert cancelled.cancelled is True
         assert cancelled.failure is None
-        assert len(database.list_rd_dump_mto_files()) == 2
+        assert len(database.list_rd_dump_mto_files()) == 4
 
         empty_root = scan_rd_dump(replace(config, rd_root=Path("")), persist=True)
         assert empty_root.failure
         assert empty_root.accepted == 0
         kept = database.list_rd_dump_mto_files()
-        assert len(kept) == 2
+        assert len(kept) == 4
 
         missing_root = scan_rd_dump(
             replace(config, rd_root=root / "missing_rd"),
             persist=True,
         )
         assert missing_root.failure
-        assert len(database.list_rd_dump_mto_files()) == 2
+        assert len(database.list_rd_dump_mto_files()) == 4
 
         junk = scan_rd_dump(replace(config, rd_root=junk_root), persist=True)
         assert junk.failure is None, junk.failure

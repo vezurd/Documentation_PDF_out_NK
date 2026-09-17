@@ -212,7 +212,7 @@ Read APIs: `list_an_mto_files`, `list_an_files_by_kit`.
 
 ### `rd_dump_mto_file`
 
-Dump index of AGCC MTO xlsx under `rd_root`, **including non-canonical paths**. Not overlay. Not `SourceKind`. Not `file_entry`.
+Dump index of AGCC MTO xlsx **and OD `.doc` / `.docx`** under `rd_root`, **including non-canonical paths**. Not overlay. Not `SourceKind`. Not `file_entry`. Same table; `discipline_block` is `MTO-…` or `OD-…`.
 
 Same columns as `an_mto_file`: `path` UNIQUE, `path_key`, `title`, `mark`, `revision_text`, `core_stem`, `discipline_block`, `name`, `parent_dir`, `mtime_ns`, `size`, `scanned_at`. Canonical / layout flags are **not** stored — the tab computes them from `rd_root`.
 

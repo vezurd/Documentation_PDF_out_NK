@@ -1,4 +1,4 @@
-"""RD-tree MTO dump finder tab: one row per AGCC MTO xlsx under ``rd_root``.
+"""RD-tree dump finder tab: MTO xlsx and OD doc/docx under ``rd_root``.
 
 Qt monitor only. Matching stays in ``an_index``; this widget does not walk UNC.
 Canonical / layout flags are lexical against the configured RD root.
@@ -68,12 +68,16 @@ from rd_catalog.kits import kit_identity_key
 from rd_catalog.path_actions import open_path
 from rd_catalog.rd_dump_index import (
     CANON_HEADER,
+    KIND_HEADER,
+    KIND_OD,
     LAYOUT_HEADER,
     RD_DUMP_AGREED_ROW_HEADERS,
     RD_DUMP_CANON_NO_FILL,
     RD_DUMP_CANON_YES_FILL,
     RD_DUMP_HEADERS,
     rd_dump_is_canonical,
+    rd_dump_is_od,
+    rd_dump_kind,
     rd_dump_layout_short,
     rd_dump_layout_token,
     rd_dump_layout_tooltip,
@@ -86,6 +90,7 @@ _COL_VS_AUTO = RD_DUMP_HEADERS.index("vs Авто МТО")
 _COL_VS_RD = RD_DUMP_HEADERS.index("vs MTO РД")
 _COL_DATE = RD_DUMP_HEADERS.index("Дата")
 _COL_AGREED = RD_DUMP_HEADERS.index(AN_AGREED_HEADER)
+_COL_KIND = RD_DUMP_HEADERS.index(KIND_HEADER)
 _COL_CANON = RD_DUMP_HEADERS.index(CANON_HEADER)
 _COL_LAYOUT = RD_DUMP_HEADERS.index(LAYOUT_HEADER)
 _VS_AUTO_HEADER_TIP = (
@@ -99,6 +104,7 @@ _CANON_HEADER_TIP = (
     "Неканоничные файлы каталог не хранит — эта вкладка их показывает."
 )
 _LAYOUT_HEADER_TIP = "Почему путь не канонический (или «канон»)."
+_KIND_HEADER_TIP = "MTO — xlsx; OD — ведомость документов (.doc / .docx)."
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,7 +259,8 @@ class RdDumpTab(QWidget):
         scores: dict[tuple[str, str], dict[str, AnAgreedScore]] = {}
         for key, files in grouped.items():
             targets = kit_targets.get(key, KitAnTargets())
-            hits[key] = match_an_to_kit(tuple(files), targets)
+            mto_files = tuple(item for item in files if not rd_dump_is_od(item))
+            hits[key] = match_an_to_kit(mto_files, targets)
             scores[key] = score_an_files_for_agreed(tuple(files), targets)
         built: list[_RdDumpTabRow] = []
         for file in rows:
@@ -383,6 +390,9 @@ class RdDumpTab(QWidget):
                     settings, "window/rd_dump_tab_noncanonical", False
                 )
             )
+            self._only_od.setChecked(
+                _settings_bool(settings, "window/rd_dump_tab_only_od", False)
+            )
         finally:
             self._filter.blockSignals(False)
             for box in boxes:
@@ -404,6 +414,7 @@ class RdDumpTab(QWidget):
         settings.setValue(
             "window/rd_dump_tab_noncanonical", self._noncanonical.isChecked()
         )
+        settings.setValue("window/rd_dump_tab_only_od", self._only_od.isChecked())
 
     def showEvent(self, event) -> None:
         """Start pending content compares when the tab becomes visible."""
@@ -422,6 +433,8 @@ class RdDumpTab(QWidget):
         added = 0
         for row in self._rows:
             if self._kit_is_hidden(row.file.title, row.file.mark):
+                continue
+            if rd_dump_is_od(row.file):
                 continue
             auto_path = str(row.targets.auto_mto_path or "").strip()
             rd_path = str(row.targets.rd_mto_path or "").strip()
@@ -603,7 +616,7 @@ class RdDumpTab(QWidget):
         filters = QHBoxLayout()
         self._scan_button = QPushButton("Сканировать РД", self)
         self._scan_button.setToolTip(
-            "Обойти всё дерево РД и собрать AGCC MTO xlsx, "
+            "Обойти всё дерево РД и собрать AGCC MTO xlsx и OD doc/docx, "
             "включая неканоничные пути. Skip-папки как у каталога. "
             "В file_entry / «Все документы» не пишет."
         )
@@ -621,6 +634,8 @@ class RdDumpTab(QWidget):
             "Скрыть файлы в титул/марка/шлюз/NN_. "
             "Оставить копии вне выданного контура."
         )
+        self._only_od = QCheckBox("только OD", self)
+        self._only_od.setToolTip("Только ведомость документов (.doc / .docx).")
         self._closes = QCheckBox("закрывают Авто МТО", self)
         self._closes.setToolTip(
             "Комплекты, где файлы дампа закрывают расхождение Авто МТО с MTO РД."
@@ -631,6 +646,7 @@ class RdDumpTab(QWidget):
         self._not_in_kits = QCheckBox("нет в Комплектах", self)
         for box in (
             self._noncanonical,
+            self._only_od,
             self._closes,
             self._no_rd_match,
             self._not_in_kits,
@@ -653,6 +669,9 @@ class RdDumpTab(QWidget):
         canon_header = self._table.horizontalHeaderItem(_COL_CANON)
         if canon_header is not None:
             canon_header.setToolTip(_CANON_HEADER_TIP)
+        kind_header = self._table.horizontalHeaderItem(_COL_KIND)
+        if kind_header is not None:
+            kind_header.setToolTip(_KIND_HEADER_TIP)
         layout_header = self._table.horizontalHeaderItem(_COL_LAYOUT)
         if layout_header is not None:
             layout_header.setToolTip(_LAYOUT_HEADER_TIP)
@@ -687,6 +706,7 @@ class RdDumpTab(QWidget):
     def _filter_checkboxes(self) -> tuple[QCheckBox, ...]:
         return (
             self._noncanonical,
+            self._only_od,
             self._closes,
             self._no_rd_match,
             self._not_in_kits,
@@ -714,12 +734,14 @@ class RdDumpTab(QWidget):
         targets = row.targets
         vs_auto, vs_rd = self._vs_cell_texts(row)
         agreed_text = format_an_agreed_cell(row.agreed_score)
+        kind_text = rd_dump_kind(file)
         canon_text = "да" if row.is_canonical else "нет"
         layout_text = rd_dump_layout_short(row.layout_token)
         values = {
             "Титул": file.title,
             "Марка": file.mark,
             "Ревизия": file.revision_text or "—",
+            KIND_HEADER: kind_text,
             CANON_HEADER: canon_text,
             LAYOUT_HEADER: layout_text,
             AN_AGREED_HEADER: agreed_text,
@@ -761,6 +783,9 @@ class RdDumpTab(QWidget):
             elif column == _COL_CANON:
                 item = _SortItem(text)
                 item.setData(_ROLE_SORT, 0 if row.is_canonical else 1)
+            elif column == _COL_KIND:
+                item = _SortItem(text)
+                item.setData(_ROLE_SORT, 0 if kind_text == KIND_OD else 1)
             else:
                 item = QTableWidgetItem(text)
             item.setData(_ROLE_ROW, row)
@@ -788,15 +813,16 @@ class RdDumpTab(QWidget):
         file = row.file
         targets = row.targets
         pair = self._content_by_key.get(file.path_key)
+        compare_content = not rd_dump_is_od(file)
         vs_auto = format_an_vs_cell(
             revision_texts_match(file.revision_text, targets.auto_mto),
             pair.vs_auto if pair is not None else None,
-            has_counterpart=bool(targets.auto_mto_path),
+            has_counterpart=compare_content and bool(targets.auto_mto_path),
         )
         vs_rd = format_an_vs_cell(
             revision_texts_match(file.revision_text, targets.rd_mto),
             pair.vs_rd if pair is not None else None,
-            has_counterpart=bool(targets.rd_mto_path),
+            has_counterpart=compare_content and bool(targets.rd_mto_path),
         )
         return vs_auto, vs_rd
 
@@ -887,6 +913,7 @@ class RdDumpTab(QWidget):
             file.title,
             file.mark,
             file.revision_text,
+            rd_dump_kind(file),
             "да" if row.is_canonical else "нет",
             "канон" if row.is_canonical else "неканон",
             rd_dump_layout_short(row.layout_token),
@@ -905,10 +932,15 @@ class RdDumpTab(QWidget):
     def _row_matches_filters(self, row: _RdDumpTabRow) -> bool:
         if self._noncanonical.isChecked() and row.is_canonical:
             return False
-        if self._closes.isChecked() and not row.hit.closes_auto_mto:
+        if self._only_od.isChecked() and not rd_dump_is_od(row.file):
             return False
-        if self._no_rd_match.isChecked() and not (
-            row.hit.files and row.hit.match_rd_mto is not True
+        if self._closes.isChecked() and (
+            rd_dump_is_od(row.file) or not row.hit.closes_auto_mto
+        ):
+            return False
+        if self._no_rd_match.isChecked() and (
+            rd_dump_is_od(row.file)
+            or not (row.hit.files and row.hit.match_rd_mto is not True)
         ):
             return False
         if self._not_in_kits.isChecked():

@@ -4897,7 +4897,7 @@ class CatalogDatabase:
         or ``kit_annulled_flag``.
 
         Args:
-            files: Parsed RD-dump MTO workbooks from the last walk.
+            files: Parsed RD-dump MTO / OD files from the last walk.
             scanned_at: ISO timestamp stored on every inserted row.
         """
 
@@ -4931,7 +4931,7 @@ class CatalogDatabase:
             )
 
     def list_rd_dump_mto_files(self) -> tuple[AnMtoFile, ...]:
-        """Return every stored RD-dump MTO file.
+        """Return every stored RD-dump MTO / OD file.
 
         Returns:
             Rows ordered by title, mark, revision text, and path.

@@ -23,7 +23,7 @@ def _emit(payload: dict[str, Any]) -> None:
 
 def _arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="RD catalog RD-tree MTO dump scan worker"
+        description="RD catalog RD-tree dump scan worker (MTO xlsx + OD doc)"
     )
     parser.add_argument(
         "--job",

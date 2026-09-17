@@ -53,7 +53,7 @@ class RdDumpScanThread(QThread):
                 self._cancel_path.write_text("1", encoding="utf-8")
             except OSError:
                 pass
-        self.log.emit("Запрошена отмена скана РД (xlsx). Завершаем текущую операцию…")
+        self.log.emit("Запрошена отмена скана РД. Завершаем текущую операцию…")
 
     def run(self) -> None:
         """Launch the RD dump scan worker process and pump stdout until exit."""
@@ -127,7 +127,7 @@ class RdDumpScanThread(QThread):
             exit_code = process.wait()
             if self.failure is None and exit_code not in (0, 1):
                 detail = stderr_text or f"код {exit_code}"
-                self.failure = f"Процесс скана РД (xlsx) завершился: {detail}"
+                self.failure = f"Процесс скана РД завершился: {detail}"
                 self.error.emit(self.failure)
             elif stderr_text and self.failure is None:
                 self.log.emit(stderr_text)
