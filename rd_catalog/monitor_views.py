@@ -9,6 +9,8 @@ WEB may pass ``sheets=WEB_MONITOR_SHEETS`` to skip heatmap/journal DTO.
 from __future__ import annotations
 
 import json
+import re
+import textwrap
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from datetime import datetime
@@ -133,15 +135,24 @@ from rd_catalog.pipeline import (
     pipeline_approval_color_key,
     pipeline_approval_label,
     pipeline_approval_relation,
+    pipeline_approval_shows_letter,
+    pipeline_display_code_a,
+    pipeline_display_review_status,
+    pipeline_review_display,
     pipeline_review_label,
-    pipeline_send_date_text,
-    pipeline_tdo_passed_date_text,
     revision_texts_equivalent,
     working_revision_for_display,
     APPROVAL_REL_AHEAD,
     APPROVAL_REL_NO_REV,
     APPROVAL_REL_OTHER,
     APPROVAL_REL_PREVIOUS,
+    PIPELINE_DISPLAY_V2,
+    PIPELINE_DISPLAY_V3,
+    PIPELINE_DISPLAY_VERSION,
+    PIPELINE_FACE_DE,
+    PIPELINE_FACE_F,
+    PIPELINE_FACE_ISSUANCE,
+    PIPELINE_FACE_RD,
 )
 from rd_catalog.skip_dirs import load_runtime_skip_dirs, path_has_skipped_dir
 from rd_catalog.status_colors import (
@@ -232,6 +243,12 @@ ISSUANCE_SHEET_LABEL = "Выдача РД ПД"
 KITS_TIPS_CTRL_CLICK_HINT = (
     "Ctrl+клик по ячейке таблицы комплектов прокручивает "
     "блок этого столбца к верху панели."
+)
+KITS_TIPS_WRAP_WIDTH = 100
+# UNC anywhere; drive / ``//`` only at the start of a token so ``https://``
+# is not treated as a filesystem path.
+_FS_PATH_START_RE = re.compile(
+    r"(?:\\\\|(?:(?<=\s)|^)(?:[A-Za-z]:[\\/]|//))"
 )
 _REVIEW_PASS_STAGES = frozenset({"tdo_passed", "incoming_passed"})
 _REVIEW_SEND_STAGES = frozenset({"tdo_sent", "incoming_sent"})
@@ -627,8 +644,8 @@ def kit_ok_reasons(
         summary_aligned: Сводка is «Совпадает».
         match_flags: From ``kit_revision_match_flags``.
         lag_notes: Disk RD behind letter A / TDO-passed rev.
-        review_agreed: ``pipeline.status == "agreed"``.
-        code_a: Current letter A (not stale).
+        review_agreed: Displayed review status is ``agreed``.
+        code_a: Current letter A of the displayed cycle.
 
     Returns:
         Blocker lines, empty when the kit is «Ок».
@@ -2030,7 +2047,10 @@ def format_kits_row_tooltips(
         cells: Painted cells keyed by ``KITS_HEADERS``.
 
     Returns:
-        Monospace-friendly plain text for the Подсказки pane.
+        Monospace-friendly plain text for the Подсказки pane. Long prose
+        is wrapped to :data:`KITS_TIPS_WRAP_WIDTH`; tab tables and
+        filesystem paths (including spaces in folder names) stay on one
+        line.
     """
 
     blocks: list[str] = [f"{title}-{mark}"]
@@ -2051,7 +2071,106 @@ def format_kits_row_tooltips(
         blocks.append("\n".join(parts))
     if len(blocks) == 1:
         blocks.append("Нет подсказок для этой строки.")
-    return "\n\n".join(blocks) + "\n"
+    return wrap_kits_tips_text("\n\n".join(blocks) + "\n")
+
+
+def tooltip_has_fs_path(text: str) -> bool:
+    """Return True when ``text`` contains a UNC or drive filesystem path."""
+
+    return bool(text) and _FS_PATH_START_RE.search(text) is not None
+
+
+def _kits_tips_leading_indent(line: str) -> str:
+    return line[: len(line) - len(line.lstrip(" "))]
+
+
+def _kits_tips_path_split(line: str) -> tuple[str, str] | None:
+    """Split a tips line into ``(prefix, path_tail)`` when a path is present.
+
+    The path runs to the end of the line so folder names with spaces
+    (``На отправку``, ``Ответы на SQ-запросы``) stay intact.
+    """
+
+    match = _FS_PATH_START_RE.search(line)
+    if match is None:
+        return None
+    return line[: match.start()], line[match.start() :]
+
+
+def _kits_tips_keep_raw(line: str, width: int) -> bool:
+    """Return True when a Подсказки line must stay unwrapped."""
+
+    stripped = line.strip()
+    if not stripped or len(line) <= width:
+        return True
+    if stripped.startswith("===") and stripped.endswith("==="):
+        return True
+    if "\t" in line:
+        return True
+    if tooltip_has_fs_path(line):
+        return True
+    return False
+
+
+def _wrap_kits_tips_prose(line: str, width: int) -> str:
+    if len(line) <= width:
+        return line
+    indent = _kits_tips_leading_indent(line)
+    return textwrap.fill(
+        line.strip(),
+        width=width,
+        initial_indent=indent,
+        subsequent_indent=indent,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+
+def wrap_kits_tips_text(
+    text: str, width: int = KITS_TIPS_WRAP_WIDTH
+) -> str:
+    """Wrap long prose in Подсказки; keep tables, headers, and paths.
+
+    Filesystem paths are peeled onto their own line and never wrapped,
+    even when a folder name contains spaces.
+
+    Args:
+        text: Pane text from :func:`format_kits_row_tooltips`.
+        width: Target line length in characters. Default 100 — readable
+            on the bottom pane without wrapping so tightly that Russian
+            phrases break every few words.
+
+    Returns:
+        The same text with prose lines filled to ``width``.
+    """
+
+    if not text:
+        return text
+    trailing = text.endswith("\n")
+    wrapped: list[str] = []
+    for line in text.splitlines():
+        if "\t" in line:
+            wrapped.append(line)
+            continue
+        split = _kits_tips_path_split(line)
+        if split is not None:
+            prefix, path = split
+            prefix_body = prefix.rstrip()
+            if prefix_body:
+                wrapped.append(_wrap_kits_tips_prose(prefix_body, width))
+                indent = _kits_tips_leading_indent(line)
+                wrapped.append(f"{indent}{path}")
+            else:
+                wrapped.append(line)
+            continue
+        if _kits_tips_keep_raw(line, width):
+            wrapped.append(line)
+            continue
+        wrapped.append(_wrap_kits_tips_prose(line, width))
+    result = "\n".join(wrapped)
+    if trailing:
+        result += "\n"
+    return result
 
 
 def format_kits_tips_pane(body: str, *, with_ctrl_click_hint: bool = False) -> str:
@@ -2322,10 +2441,13 @@ def kits_an_cell(hit: Any) -> MonitorCell:
                 and file.path_key == hit.shown_file.path_key
                 else ""
             )
-            lines.append(
-                f"  {file.revision_text}  {file.name}  {date}  "
-                f"{file.parent_dir}{mark}"
-            )
+            identity = f"  {file.revision_text}  {file.name}  {date}"
+            folder = (file.parent_dir or "").strip()
+            if folder:
+                lines.append(identity)
+                lines.append(f"  {folder}{mark}")
+            else:
+                lines.append(f"{identity}{mark}")
     else:
         lines.append("Нет файлов АН.")
     return MonitorCell(
@@ -2698,23 +2820,38 @@ def paint_kit_card(
     colors = dict(palette or {})
     google = card.google if card is not None else None
     issuance = card.issuance if card is not None else None
+    review_status = (
+        pipeline_display_review_status(
+            pipeline, google=google, issuance=issuance
+        )
+        if pipeline is not None
+        else None
+    )
     review = _pipeline_badge_cell(
         _pipeline_review_text(
             pipeline,
             google=google,
             issuance=issuance,
         ),
-        color_for(colors, pipeline.status) if pipeline is not None else None,
+        color_for(colors, review_status) if review_status is not None else None,
         pipeline,
         kind="review",
         google=google,
         issuance=issuance,
     )
     approval_key = (
-        pipeline_approval_color_key(pipeline) if pipeline is not None else None
+        pipeline_approval_color_key(
+            pipeline, google=google, issuance=issuance
+        )
+        if pipeline is not None
+        else None
     )
     approval = _pipeline_badge_cell(
-        pipeline_approval_label(pipeline) if pipeline is not None else "—",
+        pipeline_approval_label(
+            pipeline, google=google, issuance=issuance
+        )
+        if pipeline is not None
+        else "—",
         color_for(colors, approval_key) if approval_key else None,
         pipeline,
         kind="approval",
@@ -2995,7 +3132,7 @@ def _pipeline_review_text(
         return "—"
     events = google.events if google is not None else ()
     return pipeline_review_label(
-        pipeline, events=events, issuance=issuance
+        pipeline, events=events, issuance=issuance, google=google
     )
 
 
@@ -3119,6 +3256,16 @@ def _google_de_agreed(google: GoogleKit | None) -> bool:
     return "не соглас" not in text
 
 
+def _pipeline_face_source_label(source: str) -> str:
+    labels = {
+        PIPELINE_FACE_ISSUANCE: ISSUANCE_SHEET_LABEL,
+        PIPELINE_FACE_DE: KITS_DE_SHEET_LABEL,
+        PIPELINE_FACE_F: KITS_F_SHEET_LABEL,
+        PIPELINE_FACE_RD: "папка РД (колонка «РД · рев.»)",
+    }
+    return labels.get(source, source)
+
+
 def pipeline_review_tooltip(
     pipeline: KitPipelineRow,
     *,
@@ -3137,35 +3284,95 @@ def pipeline_review_tooltip(
     """
 
     events = google.events if google is not None else ()
+    view = pipeline_review_display(
+        pipeline, events=events, issuance=issuance, google=google
+    )
     label = pipeline_review_label(
-        pipeline, events=events, issuance=issuance
+        pipeline, events=events, issuance=issuance, google=google
     )
     official = (pipeline.official_revision_text or "").strip()
-    pass_date = pipeline_tdo_passed_date_text(
-        pipeline, events=events, issuance=issuance
-    )
-    send_date = pipeline_send_date_text(
-        pipeline, events=events, issuance=issuance
-    )
-    lines = [
-        label,
-        "",
-        "Эта колонка — этап актуальной рев. в папке РД (колонка «РД · рев.»).",
-        "Не столбцы D/E («Google · рев.», «РД Согласовано»).",
-        "Не рабочая папка. Не последнее письмо A/B/C — это соседняя колонка.",
-        "Коды B и C не делают статус «Согласован» (нужен A или F «согласовано» на этом цикле).",
-        "",
-        "Как читать подпись:",
-        "  статус [(дата прохождения ТДО)] · РД {рев.}[ · отпр. {дата}][ (AB)]",
-        "РД — актуальный пакет в папке РД, то же что «РД · рев.».",
-        "Дата в скобках — прохождение ТДО / вх.контроля этой РД-рев.",
-        "отпр. — отправка этой же РД-рев. (не письма на более новую выдачу).",
-        f"РД рев.: {official or '—'}",
-    ]
+    pass_date = view.pass_date
+    send_date = view.send_date
+    anchor_rev = view.face_revision if view.uses_sheet_face else official
+    version = PIPELINE_DISPLAY_VERSION
+    if version >= PIPELINE_DISPLAY_V3:
+        column_lines = [
+            "Эта колонка — статус рассмотрения по Google-таблицам, не по папке РД.",
+            (
+                "Якорь рев.: последняя эффективная "
+                f"{ISSUANCE_SHEET_LABEL}, иначе {KITS_DE_SHEET_LABEL}, "
+                f"иначе последняя рев. в {KITS_F_SHEET_LABEL}, иначе папка РД."
+            ),
+            "Подпись D/E «Согласовано» сама по себе не делает статус «Согласован».",
+            "Не рабочая папка.",
+            (
+                "B/C табличного цикла — здесь. Письмо не этого табличного "
+                "цикла — соседняя колонка «Статус согласования»."
+            ),
+            "Коды B и C не делают статус «Согласован» (нужен A или F «согласовано» на этом цикле).",
+        ]
+        how_lines = [
+            "Как читать подпись:",
+            "  статус [(дата прохождения ТДО)][ · B|C] · {выдача|D/E|F|РД} {рев.}[ · отпр. {дата}][ (AB)]",
+            "выдача / D/E / F — рев. из таблиц. «РД» в подписи — только когда таблицы совпадают с папкой РД.",
+            "Дата в скобках — прохождение ТДО / вх.контроля этого табличного цикла.",
+            "отпр. — отправка этой же табличной рев.",
+            (
+                f"Табличный цикл: {_pipeline_face_source_label(view.face_source)} · "
+                f"{view.face_revision or '—'}"
+            ),
+            f"РД на диске: {official or '—'} — колонка «РД · рев.», не этот статус.",
+        ]
+    elif version == PIPELINE_DISPLAY_V2:
+        column_lines = [
+            "Эта колонка — этап актуальной рев. в папке РД (колонка «РД · рев.»).",
+            "Не столбцы D/E («Google · рев.», «РД Согласовано»).",
+            "Не рабочая папка.",
+            (
+                "Текущие B/C этого цикла — здесь. Письмо не этого цикла — "
+                "соседняя колонка «Статус согласования»."
+            ),
+            "Коды B и C не делают статус «Согласован» (нужен A или F «согласовано» на этом цикле).",
+        ]
+        how_lines = [
+            "Как читать подпись:",
+            "  статус [(дата прохождения ТДО)][ · B|C] · РД {рев.}[ · отпр. {дата}][ (AB)]",
+            "РД — актуальный пакет в папке РД, то же что «РД · рев.».",
+            "Дата в скобках — прохождение ТДО / вх.контроля этой РД-рев.",
+            "отпр. — отправка этой же РД-рев. (не письма на более новую выдачу).",
+            f"РД рев.: {official or '—'}",
+        ]
+    else:
+        column_lines = [
+            "Эта колонка — этап актуальной рев. в папке РД (колонка «РД · рев.»).",
+            "Не столбцы D/E («Google · рев.», «РД Согласовано»).",
+            "Не рабочая папка.",
+            "Не последнее письмо A/B/C — это соседняя колонка.",
+            "Коды B и C не делают статус «Согласован» (нужен A или F «согласовано» на этом цикле).",
+        ]
+        how_lines = [
+            "Как читать подпись:",
+            "  статус [(дата прохождения ТДО)] · РД {рев.}[ · отпр. {дата}][ (AB)]",
+            "РД — актуальный пакет в папке РД, то же что «РД · рев.».",
+            "Дата в скобках — прохождение ТДО / вх.контроля этой РД-рев.",
+            "отпр. — отправка этой же РД-рев. (не письма на более новую выдачу).",
+            f"РД рев.: {official or '—'}",
+        ]
+    lines = [label, "", *column_lines, "", *how_lines]
+    cycle_letter = view.cycle_letter
+    if cycle_letter:
+        lines.append(
+            f"Буква {cycle_letter} — этого цикла, поэтому в этой колонке, "
+            "не в «Статус согласования»."
+        )
     working = _displayed_working_revision(pipeline)
     if working:
         lines.append(f"Рабочая рев. РД: {working} — не входит в этот статус")
-    if _google_de_agreed(google) and pipeline.status != "agreed" and google is not None:
+    if (
+        _google_de_agreed(google)
+        and view.status != "agreed"
+        and google is not None
+    ):
         d_rev = google.sheet_revision_text or "—"
         d_status = google.status_sheet or "—"
         lines.append("")
@@ -3173,8 +3380,8 @@ def pipeline_review_tooltip(
         lines.append(f"  источник: {KITS_DE_SHEET_LABEL}")
         lines.append(f"  на листе: {d_status} · рев. {d_rev}")
         lines.append(
-            f"  рассмотрение смотрит цикл РД {official or '—'}, "
-            "а не подпись D/E."
+            "  рассмотрение не берёт подпись D/E как «Согласован»; "
+            f"показан цикл {view.face_revision or official or '—'}."
         )
     if (
         issuance is not None
@@ -3187,11 +3394,18 @@ def pipeline_review_tooltip(
             f"выдача {issuance.revision_text or '—'}, "
             f"РД на диске {official}."
         )
+    elif view.uses_sheet_face and official and view.face_revision:
+        lines.append("")
+        lines.append(
+            "Диск отстаёт от табличного цикла: "
+            f"{_pipeline_face_source_label(view.face_source)} "
+            f"{view.face_revision}, РД на диске {official}."
+        )
     if pass_date:
         lines.append("")
         lines.append(f"Прохождение {pass_date}:")
         pass_event = _pick_event_on_date(
-            events, pass_date, official, _REVIEW_PASS_STAGES
+            events, pass_date, anchor_rev, _REVIEW_PASS_STAGES
         )
         if pass_event is not None:
             lines.extend(f"  {item}" for item in _f_event_source_lines(pass_event))
@@ -3203,11 +3417,11 @@ def pipeline_review_tooltip(
     if send_date:
         lines.append("")
         lines.append(f"Отправка {send_date}:")
-        if _issuance_matches_send_date(issuance, send_date, official) and issuance is not None:
+        if _issuance_matches_send_date(issuance, send_date, anchor_rev) and issuance is not None:
             lines.extend(f"  {item}" for item in _issuance_source_lines(issuance))
         else:
             send_event = _pick_event_on_date(
-                events, send_date, official, _REVIEW_SEND_STAGES
+                events, send_date, anchor_rev, _REVIEW_SEND_STAGES
             )
             if send_event is not None:
                 lines.extend(
@@ -3230,7 +3444,7 @@ def pipeline_review_tooltip(
     if issuance is None:
         lines.append(f"{ISSUANCE_SHEET_LABEL}: нет строки")
     elif not send_date or not _issuance_matches_send_date(
-        issuance, send_date, official
+        issuance, send_date, anchor_rev
     ):
         lines.append("")
         lines.append("Последняя эффективная выдача:")
@@ -3255,14 +3469,41 @@ def pipeline_approval_tooltip(
         Plain-text tooltip for Qt, WEB, and the Подсказки pane.
     """
 
-    label = pipeline_approval_label(pipeline)
+    events = google.events if google is not None else ()
+    label = pipeline_approval_label(
+        pipeline, google=google, issuance=issuance, events=events
+    )
     relation = pipeline_approval_relation(pipeline)
     official = pipeline.official_revision_text or "—"
+    shows_letter = pipeline_approval_shows_letter(
+        pipeline, google=google, issuance=issuance, events=events
+    )
+    view = pipeline_review_display(
+        pipeline, events=events, issuance=issuance, google=google
+    )
+    if PIPELINE_DISPLAY_VERSION >= PIPELINE_DISPLAY_V3:
+        column_lines = [
+            "Эта колонка — письмо A/B/C не этого табличного цикла "
+            "(новее диска / прошлый цикл / без рев.).",
+            "B/C табличного цикла — в «Статус рассмотрения». "
+            "A табличного цикла уже есть в статусе «Согласован».",
+        ]
+    elif PIPELINE_DISPLAY_VERSION == PIPELINE_DISPLAY_V2:
+        column_lines = [
+            "Эта колонка — письмо A/B/C не этого цикла "
+            "(новее диска / прошлый цикл / без рев.).",
+            "Текущие B/C — в «Статус рассмотрения». "
+            "Текущий A уже есть в статусе «Согласован».",
+        ]
+    else:
+        column_lines = [
+            "Эта колонка — последнее письмо A/B/C во всём журнале F.",
+            "Не этап рассмотрения и не подпись D/E.",
+        ]
     lines = [
         label,
         "",
-        "Эта колонка — последнее письмо A/B/C во всём журнале F.",
-        "Не этап рассмотрения и не подпись D/E.",
+        *column_lines,
         f"источник: {KITS_F_SHEET_LABEL}",
         f"{ISSUANCE_SHEET_LABEL} букву A/B/C не задаёт.",
         f"{KITS_DE_SHEET_LABEL} на букву не влияют.",
@@ -3273,6 +3514,16 @@ def pipeline_approval_tooltip(
             lines.append("")
             lines.extend(_f_journal_lines(google.events))
         return "\n".join(lines)
+    if not shows_letter:
+        letter = (pipeline.code or "").upper()
+        if letter in {"B", "C"}:
+            lines.append(
+                f"Письмо {letter} этого цикла показано в «Статус рассмотрения»."
+            )
+        else:
+            lines.append(
+                "Код A этого цикла = «Согласован»; колонку не дублируем."
+            )
     if relation:
         meaning = {
             APPROVAL_REL_AHEAD: (
@@ -3288,6 +3539,11 @@ def pipeline_approval_tooltip(
             APPROVAL_REL_OTHER: "письмо не привязано к официальному циклу.",
         }.get(relation, "")
         lines.append(f"отношение: {relation} — {meaning}".rstrip(" —"))
+    elif view.uses_sheet_face:
+        lines.append(
+            "отношение: этот табличный цикл — письмо принадлежит "
+            f"{view.face_revision or '—'}, не папке РД."
+        )
     else:
         lines.append("отношение: этот цикл — письмо принадлежит актуальной РД на диске.")
     lines.append(
@@ -3295,7 +3551,11 @@ def pipeline_approval_tooltip(
         f"{pipeline.code_revision_text or '—'} · "
         f"{pipeline.code_date or '—'}"
     )
-    events = google.events if google is not None else ()
+    if view.uses_sheet_face:
+        lines.append(
+            f"Табличный цикл: {_pipeline_face_source_label(view.face_source)} · "
+            f"{view.face_revision or '—'}"
+        )
     letter = None
     for event in events:
         if event.stage in _APPROVAL_CODE_STAGES:
@@ -3598,11 +3858,22 @@ def build_kits_monitor_row(
     google = row.google
     issuance = row.issuance
     event_date, event_stage, event_rev, event_trm = last_event_parts(google)
+    review_view = (
+        pipeline_review_display(
+            pipeline, google=google, issuance=issuance
+        )
+        if pipeline is not None
+        else None
+    )
     review_text = _pipeline_review_text(
         pipeline, google=google, issuance=issuance
     )
     approval_text = (
-        pipeline_approval_label(pipeline) if pipeline is not None else "—"
+        pipeline_approval_label(
+            pipeline, google=google, issuance=issuance
+        )
+        if pipeline is not None
+        else "—"
     )
     rd_rev_text = official_rd_rev_text(row, pipeline)
     display_summary = effective_kit_summary(row, pipeline)
@@ -3706,16 +3977,18 @@ def build_kits_monitor_row(
     }
     match_flags = kit_revision_match_flags(row)
     origin = kit_robot_origin(row, rd_content_equal=mto_content_equal)
-    code_a = (
+    code_a = bool(
         pipeline is not None
-        and pipeline.code == "A"
-        and not pipeline.code_stale
+        and pipeline_display_code_a(
+            pipeline, google=google, issuance=issuance
+        )
     )
+    review_status = review_view.status if review_view is not None else ""
     ok_reasons = kit_ok_reasons(
         summary_aligned=display_summary is KitSummary.ALIGNED,
         match_flags=match_flags,
         lag_notes=lag_notes,
-        review_agreed=pipeline is not None and pipeline.status == "agreed",
+        review_agreed=review_status == "agreed",
         code_a=code_a,
     )
     kit_ok = not ok_reasons
@@ -3743,13 +4016,15 @@ def build_kits_monitor_row(
             cell = _pipeline_fill_cell(
                 review_text,
                 palette,
-                pipeline.status,
+                review_status or pipeline.status,
                 tooltip=pipeline_review_tooltip(
                     pipeline, google=google, issuance=issuance
                 ),
             )
         elif header == "Статус согласования" and pipeline is not None:
-            color_key = pipeline_approval_color_key(pipeline)
+            color_key = pipeline_approval_color_key(
+                pipeline, google=google, issuance=issuance
+            )
             tooltip = pipeline_approval_tooltip(
                 pipeline, google=google, issuance=issuance
             )
@@ -3901,8 +4176,14 @@ def build_kits_monitor_row(
             if pipeline is not None
             else None
         ),
-        pipeline_approval_label(pipeline) if pipeline else None,
+        pipeline_approval_label(
+            pipeline, google=google, issuance=issuance
+        )
+        if pipeline
+        else None,
         pipeline.status if pipeline else None,
+        review_status or None,
+        review_view.face_revision if review_view is not None else None,
         pipeline.code if pipeline else None,
         pipeline_approval_relation(pipeline) if pipeline else None,
         "stale устар" if pipeline and pipeline.code_stale else None,
@@ -3937,9 +4218,7 @@ def build_kits_monitor_row(
         ok_cell.text,
         "хороший" if kit_ok else None,
     ).casefold()
-    kit_tdo = (
-        pipeline is not None and pipeline.status in KITS_TDO_STATUSES
-    )
+    kit_tdo = review_status in KITS_TDO_STATUSES
     as_build = bool(
         (pipeline is not None and pipeline.review_as_build) or row.rd.as_build
     )
@@ -4295,20 +4574,16 @@ def _worklist_link_tooltip(row: MtoWorklistRow) -> str:
             "Google F и отправки в «Выдача РД ПД»."
         )
     if row.package_path:
-        lines.append(
-            "РД✓ — физически найдена папка пакета package_path: "
-            f"{row.package_path}"
-        )
+        lines.append("РД✓ — физически найдена папка пакета:")
+        lines.append(f"  {row.package_path}")
     else:
         lines.append(
             "РД✗ — package_path пуст: папка пакета РД физически "
             "не найдена."
         )
     if row.mto_path:
-        lines.append(
-            "MTO✓ — физически найден MTO-файл mto_path: "
-            f"{row.mto_path}"
-        )
+        lines.append("MTO✓ — физически найден MTO-файл:")
+        lines.append(f"  {row.mto_path}")
     else:
         lines.append(
             "MTO✗ — mto_path пуст: MTO-файл физически не найден."

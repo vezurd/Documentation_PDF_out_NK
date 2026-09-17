@@ -37,6 +37,7 @@ from rd_catalog.monitor_views import (
     KITS_OK_HEADER,
     KITS_TDO_STATUSES,
     KITS_TIPS_CTRL_CLICK_HINT,
+    KITS_TIPS_WRAP_WIDTH,
     OFFICIAL_FOLDER_MTO_MISSING,
     RD_AB_SUFFIX,
     RD_MISSING_TRANSFER_KEY,
@@ -52,6 +53,8 @@ from rd_catalog.monitor_views import (
     format_kits_progress_stats,
     format_kits_row_tooltips,
     format_kits_tips_pane,
+    wrap_kits_tips_text,
+    tooltip_has_fs_path,
     join_haystack,
     jsonify_value,
     kit_an_targets,
@@ -1490,8 +1493,8 @@ class PipelineStatusTooltipTests(unittest.TestCase):
         self.assertIn(KITS_DE_SHEET_LABEL, review.tooltip)
         self.assertIn(ISSUANCE_SHEET_LABEL, review.tooltip)
         self.assertIn("Как читать подпись", review.tooltip)
-        self.assertIn("Эта колонка — этап актуальной рев.", review.tooltip)
-        self.assertIn("актуальный пакет в папке РД", review.tooltip)
+        self.assertIn("Google-таблицам", review.tooltip)
+        self.assertIn("РД на диске", review.tooltip)
         self.assertIn("Внимание: расхождение с D/E", review.tooltip)
         self.assertIn("AGCC.287-BCC-NPG-TRM-003144", review.tooltip)
         self.assertIn("PGS-AGCC-TRM-011199", review.tooltip)
@@ -1521,6 +1524,107 @@ class PipelineStatusTooltipTests(unittest.TestCase):
                 pipeline, google=google, issuance=issuance
             ),
         )
+
+    def test_v2_current_b_lives_on_review_column(self) -> None:
+        google = _google_kit(
+            title="7700",
+            mark="POS",
+            sheet="01",
+            lines=(
+                "10.06.2026 прошла ТДО AGCC-BCC-TRM-000200",
+                "12.06.2026 код B рев. 01 AGCC-BCC-TRM-000200",
+            ),
+        )
+        issuance = replace(
+            _issuance_kit(title="7700", mark="POS", rev="01"),
+            send_date="01.06.2026",
+            send_transmittal="AGCC-BCC-TRM-000200",
+        )
+        pipeline = KitPipelineRow(
+            title="7700",
+            mark="POS",
+            status="tdo_review",
+            official_revision_text="01",
+            tdo_date="10.06.2026",
+            code="B",
+            code_stale=False,
+            code_revision_text="01",
+            code_date="12.06.2026",
+        )
+        row = KitMatrixRow(
+            title="7700",
+            mark="POS",
+            title_system="7700-POS",
+            rd=SourceKitSnapshot(present=True, revision_text="01"),
+            robot=SourceKitSnapshot(),
+            sq=SourceKitSnapshot(),
+            google=google,
+            issuance=issuance,
+            flags=(),
+            summary=KitSummary.ALIGNED,
+        )
+        painted = _paint_kits(row, pipeline)
+        review = painted.cells["Статус рассмотрения"]
+        approval = painted.cells["Статус согласования"]
+        self.assertIn(" · B · ", review.text)
+        self.assertEqual(approval.text, "—")
+        self.assertFalse(approval.fill)
+        self.assertIn("этого цикла", review.tooltip)
+        self.assertIn("Статус рассмотрения", approval.tooltip)
+
+    def test_v3_google_face_ahead_puts_b_on_review(self) -> None:
+        google = _google_kit(
+            title="6550",
+            mark="SKUD",
+            sheet="0-AN02",
+            lines=(
+                "01.06.2026 отправлена на ТДО рев. 0-AN02 AGCC-BCC-TRM-000300",
+                "10.06.2026 прошла ТДО рев. 0-AN02 AGCC-BCC-TRM-000300",
+                "12.06.2026 код B рев. 0-AN02 AGCC-BCC-TRM-000300",
+            ),
+        )
+        issuance = replace(
+            _issuance_kit(title="6550", mark="SKUD", rev="0-AN02"),
+            send_date="01.06.2026",
+            send_transmittal="AGCC-BCC-TRM-000300",
+            incoming_control_date="10.06.2026",
+        )
+        pipeline = KitPipelineRow(
+            title="6550",
+            mark="SKUD",
+            status="tdo_review",
+            official_revision_text="0-AN01",
+            tdo_date="09.10.2023",
+            code="B",
+            code_stale=True,
+            code_revision_text="0-AN02",
+            code_date="12.06.2026",
+        )
+        row = KitMatrixRow(
+            title="6550",
+            mark="SKUD",
+            title_system="6550-SKUD",
+            rd=SourceKitSnapshot(present=True, revision_text="0-AN01"),
+            robot=SourceKitSnapshot(),
+            sq=SourceKitSnapshot(),
+            google=google,
+            issuance=issuance,
+            flags=(),
+            summary=KitSummary.ALIGNED,
+        )
+        painted = _paint_kits(row, pipeline)
+        review = painted.cells["Статус рассмотрения"]
+        approval = painted.cells["Статус согласования"]
+        self.assertIn(" · B · ", review.text)
+        self.assertIn("выдача 0-AN02", review.text)
+        self.assertNotIn("0-AN01", review.text)
+        self.assertNotIn("09.10.2023", review.text)
+        self.assertIn("10.06.2026", review.text)
+        self.assertEqual(approval.text, "—")
+        self.assertFalse(approval.fill)
+        self.assertIn("Google-таблицам", review.tooltip)
+        self.assertTrue(painted.kit_tdo_passed)
+        self.assertEqual(review.palette_key, "tdo_review")
 
     def test_tooltip_section_start_and_ctrl_hint(self) -> None:
         cells = {
@@ -1559,6 +1663,66 @@ class PipelineStatusTooltipTests(unittest.TestCase):
         self.assertIsNone(kits_tooltip_header_offset(body, "Марка"))
         self.assertIsNone(kits_tooltip_header_offset("", "Сводка"))
         self.assertEqual(format_kits_tips_pane(""), "")
+
+    def test_wrap_kits_tips_text_prose_not_tables(self) -> None:
+        prose = " ".join(["слово"] * 40)
+        table = "NN\tроль\tпуть\\\\bcc\\eng\\very\\long\\folder\\file.xlsx"
+        unc = "\\\\bcc\\eng\\" + ("dir\\" * 20) + "file.xlsx"
+        body = f"=== РД · рев. ===\n{prose}\n{table}\n{unc}\n"
+        wrapped = wrap_kits_tips_text(body)
+        self.assertIn("=== РД · рев. ===", wrapped)
+        self.assertIn(table, wrapped)
+        self.assertIn(unc, wrapped)
+        for line in wrapped.splitlines():
+            if not line.strip() or line.startswith("==="):
+                continue
+            if "\t" in line or tooltip_has_fs_path(line):
+                continue
+            self.assertLessEqual(len(line), KITS_TIPS_WRAP_WIDTH, line)
+        cells = {
+            "Сводка": MonitorCell(text="Проверить передачи", tooltip=prose),
+        }
+        pane = format_kits_row_tooltips("6816", "KSB", cells)
+        self.assertGreater(pane.count("\n"), 3)
+        for line in pane.splitlines():
+            if line.startswith("===") or not line.strip():
+                continue
+            if tooltip_has_fs_path(line):
+                continue
+            self.assertLessEqual(len(line), KITS_TIPS_WRAP_WIDTH, line)
+
+    def test_wrap_kits_tips_does_not_split_unc_with_spaces(self) -> None:
+        identity = (
+            "  0-AN01  AGCC.287-7416-SKUD.1.MTO-0001_0-AN01_RU.xlsx  "
+            "2025-07-23"
+        )
+        send_path = (
+            r"\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\АН_RFQ\_АН\7590\На "
+            r"отправку\SKUD\01_рев_AN01_AGCC.287‐7590‐SKUD\DWG"
+        )
+        sq_path = (
+            r"\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\АН_RFQ\_АН\Ответы на "
+            r"SQ-запросы\SQ-UIO-AGCC-SOT-20763-0\DWG\7416\SKUD"
+        )
+        body = (
+            "Файлы АН:\n"
+            f"{identity}  {send_path}\n"
+            f"{identity}  {sq_path}\n"
+        )
+        wrapped = wrap_kits_tips_text(body)
+        self.assertIn(send_path, wrapped)
+        self.assertIn(sq_path, wrapped)
+        self.assertNotIn("На\n", wrapped)
+        self.assertNotIn("на\n", wrapped)
+        path_lines = [
+            line.strip()
+            for line in wrapped.splitlines()
+            if tooltip_has_fs_path(line)
+        ]
+        self.assertEqual(path_lines, [send_path, sq_path])
+        for line in wrapped.splitlines():
+            if tooltip_has_fs_path(line):
+                self.assertNotIn("0-AN01", line)
 
 
 if __name__ == "__main__":

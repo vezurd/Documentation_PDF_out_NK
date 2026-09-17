@@ -65,6 +65,29 @@ from rd_catalog.perf_log import perf_span
 PIPELINE_STATUS_ALGORITHM_VERSION = 10
 REVISION_MATRIX_ALGORITHM_VERSION = 1
 
+PIPELINE_DISPLAY_V1 = 1
+PIPELINE_DISPLAY_V2 = 2
+PIPELINE_DISPLAY_V3 = 3
+# Комплекты «Статус рассмотрения / согласования» (Qt + WEB). Не схема БД.
+# 1 — текущее A/B/C всегда в «Статус согласования»; рассмотрение без буквы B/C.
+# 2 — текущие B/C в рассмотрении (``Прошел ТДО · B``); согласование только
+#     для письма не этого цикла (stale vs диск). Текущий A не дублируется.
+# 3 — рассмотрение по циклу Google-таблиц (Выдача → D/E → F), не по папке РД.
+#     Когда табличная рев. = РД, подпись как v2 (``РД {рев.}``). Переключить:
+#     2 или 1, если v3 не зайдёт.
+PIPELINE_DISPLAY_VERSION = PIPELINE_DISPLAY_V3
+
+PIPELINE_FACE_RD = "rd"
+PIPELINE_FACE_ISSUANCE = "issuance"
+PIPELINE_FACE_DE = "de"
+PIPELINE_FACE_F = "f"
+_PIPELINE_FACE_TOKEN = {
+    PIPELINE_FACE_RD: "РД",
+    PIPELINE_FACE_ISSUANCE: "выдача",
+    PIPELINE_FACE_DE: "D/E",
+    PIPELINE_FACE_F: "F",
+}
+
 
 def pipeline_algorithm_needs_rebuild(
     pipelines: Sequence[KitPipelineRow],
@@ -363,98 +386,145 @@ def pipeline_approval_relation(row: KitPipelineRow) -> str:
     return APPROVAL_REL_PREVIOUS
 
 
-def pipeline_review_label(
-    row: KitPipelineRow,
-    *,
-    events: Sequence[KitEvent] = (),
-    issuance: IssuanceKit | None = None,
-) -> str:
-    """Return the review label for one pipeline row.
+@dataclass(frozen=True, slots=True)
+class PipelineReviewDisplay:
+    """Display-only review cell facts (does not persist ``kit_pipeline``).
 
-    Args:
-        row: Derived ``kit_pipeline`` row.
-        events: Optional F events for the send date.
-        issuance: Optional last send for the send date.
-
-    Returns:
-        ``{status}[(pass date)] · РД {rev}[ · отпр. {date}][ (AB)]``.
-        ``РД`` is the official package in the RD folder (same as the
-        «РД · рев.» column), not the working folder and not Google D/E.
-        The TDO/incoming pass date is in parentheses after the status
-        when ``status`` is ``tdo_review``.
+    ``uses_sheet_face`` is True on v3 when the Google-table revision
+    differs from the RD-folder official revision.
     """
 
-    label = pipeline_status_label(row.status)
-    pass_date = pipeline_tdo_passed_date_text(
-        row, events=events, issuance=issuance
-    )
-    if pass_date:
-        label = f"{label} ({pass_date})"
-    if row.official_revision_text:
-        label = f"{label} · РД {row.official_revision_text}"
-    send_date = pipeline_send_date_text(
-        row, events=events, issuance=issuance
-    )
-    if send_date:
-        label = f"{label} · отпр. {send_date}"
-    if row.review_as_build:
-        label = f"{label} (AB)"
-    return label
+    status: str
+    face_revision: str
+    face_source: str
+    uses_sheet_face: bool
+    pass_date: str
+    send_date: str
+    cycle_letter: str
 
 
-def pipeline_tdo_passed_date_text(
+def _display_version(version: int | None) -> int:
+    if version is None:
+        return PIPELINE_DISPLAY_VERSION
+    return version
+
+
+def _resolve_pipeline_events(
+    google: GoogleKit | None,
+    events: Sequence[KitEvent],
+) -> tuple[KitEvent, ...]:
+    if events:
+        return tuple(events)
+    if google is not None:
+        return tuple(google.events)
+    return ()
+
+
+def pipeline_sheet_face_revision(
     row: KitPipelineRow,
     *,
-    events: Sequence[KitEvent] = (),
+    google: GoogleKit | None = None,
     issuance: IssuanceKit | None = None,
-) -> str:
-    """Return ``DD.MM.YYYY`` of the official-cycle TDO/incoming pass.
+    events: Sequence[KitEvent] = (),
+) -> tuple[str, str]:
+    """Return ``(revision_text, source)`` for the Google-facing review cycle.
+
+    Order: last effective issuance, else D/E ``sheet_revision_text``, else
+    last F event with a revision, else the RD-folder official revision.
 
     Args:
-        row: Derived ``kit_pipeline`` row.
-        events: F events used when ``row.tdo_date`` is empty.
-        issuance: Last send used when ``row.tdo_date`` and F dates are empty.
+        row: Derived ``kit_pipeline`` row (disk fallback).
+        google: КСБ ИД kit (D/E + F).
+        issuance: Latest effective «Выдача РД ПД» send.
+        events: Optional F events; empty uses ``google.events``.
 
     Returns:
-        Normalized date text, or ``""``.
+        Face revision text and one of ``issuance`` / ``de`` / ``f`` / ``rd``.
     """
 
-    if row.status != KitPipelineStatus.TDO_REVIEW.value:
-        return ""
-    stored = _code_date_text(row.tdo_date)
-    if stored:
-        return stored
-    return _code_date_text(
-        _tdo_passed_date_from_facts(
-            events=events,
-            issuance=issuance,
-            official_revision=row.official_revision_text,
-        )
-    )
-
-
-def pipeline_send_date_text(
-    row: KitPipelineRow,
-    *,
-    events: Sequence[KitEvent] = (),
-    issuance: IssuanceKit | None = None,
-) -> str:
-    """Return ``DD.MM.YYYY`` of the official-rev send.
-
-    Prefers ``issuance.send_date`` when the send revision matches the
-    official revision (or either side is empty). Otherwise uses the last
-    F ``tdo_sent`` / ``incoming_sent`` on that official rev.
-
-    Args:
-        row: Derived ``kit_pipeline`` row.
-        events: F events used when issuance does not match the official rev.
-        issuance: Last send of the kit.
-
-    Returns:
-        Normalized date text, or ``""``.
-    """
-
+    if issuance is not None:
+        text = (issuance.revision_text or "").strip()
+        if text:
+            return text, PIPELINE_FACE_ISSUANCE
+    if google is not None:
+        sheet = (google.sheet_revision_text or "").strip()
+        if sheet:
+            return sheet, PIPELINE_FACE_DE
+    for event in reversed(_resolve_pipeline_events(google, events)):
+        rev = format_revision(event.revision, event.appendix)
+        if rev:
+            return rev, PIPELINE_FACE_F
     official = (row.official_revision_text or "").strip()
+    return official, PIPELINE_FACE_RD
+
+
+def pipeline_display_uses_sheet_face(
+    row: KitPipelineRow,
+    face_revision: str,
+) -> bool:
+    """Return whether v3 should paint the Google cycle instead of disk.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        face_revision: Google-facing revision from
+            :func:`pipeline_sheet_face_revision`.
+
+    Returns:
+        True when the table cycle has a revision that is not the same as
+        ``official_revision_text``.
+    """
+
+    face = (face_revision or "").strip()
+    if not face:
+        return False
+    official = (row.official_revision_text or "").strip()
+    if not official:
+        return True
+    return not revision_texts_equivalent(face, official)
+
+
+def pipeline_letter_on_sheet_face(
+    row: KitPipelineRow,
+    face_revision: str,
+) -> bool:
+    """Return whether the stored F letter belongs to the Google face cycle.
+
+    Same-rev stale vs disk (9000-KSB: later TDO of the same rev) is not
+    the table face letter. A letter on a newer table rev (6550-SKUD)
+    is on the face even when ``code_stale`` vs disk.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        face_revision: Google-facing revision.
+
+    Returns:
+        True when the letter revision matches the face and is not a
+        previous cycle of the same disk rev.
+    """
+
+    code_rev = (row.code_revision_text or "").strip()
+    face = (face_revision or "").strip()
+    if not code_rev or not face:
+        return False
+    if not revision_texts_equivalent(code_rev, face):
+        return False
+    official = (row.official_revision_text or "").strip()
+    if (
+        row.code_stale
+        and official
+        and revision_texts_equivalent(code_rev, official)
+    ):
+        return False
+    return True
+
+
+def _send_date_for_revision(
+    revision_text: str,
+    *,
+    events: Sequence[KitEvent],
+    issuance: IssuanceKit | None,
+) -> str:
+    official = (revision_text or "").strip()
     if issuance is not None:
         send_date = (issuance.send_date or "").strip()
         if send_date:
@@ -483,20 +553,467 @@ def pipeline_send_date_text(
     return ""
 
 
-def pipeline_approval_label(row: KitPipelineRow) -> str:
+def _disk_tdo_passed_date_text(
+    row: KitPipelineRow,
+    *,
+    events: Sequence[KitEvent],
+    issuance: IssuanceKit | None,
+) -> str:
+    if row.status != KitPipelineStatus.TDO_REVIEW.value:
+        return ""
+    stored = _code_date_text(row.tdo_date)
+    if stored:
+        return stored
+    return _code_date_text(
+        _tdo_passed_date_from_facts(
+            events=events,
+            issuance=issuance,
+            official_revision=row.official_revision_text,
+        )
+    )
+
+
+def _sheet_review_status(
+    *,
+    face_revision: str,
+    events: Sequence[KitEvent],
+    issuance: IssuanceKit | None,
+) -> str:
+    """Return a display status for the Google face rev (not persisted)."""
+
+    numbered = list(enumerate(events, start=1))
+    last_send: IssuanceKit | None = None
+    if issuance is not None:
+        send_rev = (issuance.revision_text or "").strip()
+        face = (face_revision or "").strip()
+        if not face or not send_rev or revision_texts_equivalent(send_rev, face):
+            last_send = issuance
+    status = _review_status(
+        official_revision=face_revision,
+        last_send=last_send,
+        last_cycle=None,
+        events=numbered,
+        has_official_send=last_send is not None,
+        allow_agreed=True,
+    )
+    if (
+        status in {KitPipelineStatus.NOT_UPLOADED, KitPipelineStatus.SENT_TDO}
+        and last_send is not None
+        and _issuance_accepted(last_send)
+    ):
+        return KitPipelineStatus.TDO_REVIEW.value
+    return status.value
+
+
+def _cycle_letter_for_display(
+    row: KitPipelineRow,
+    *,
+    version: int,
+    uses_sheet_face: bool,
+    face_revision: str,
+) -> str:
+    if version == PIPELINE_DISPLAY_V1:
+        return ""
+    letter = (row.code or "").strip().upper()
+    if letter not in {"B", "C"}:
+        return ""
+    if uses_sheet_face:
+        return letter if pipeline_letter_on_sheet_face(row, face_revision) else ""
+    if row.code_stale:
+        return ""
+    return letter
+
+
+def pipeline_review_display(
+    row: KitPipelineRow,
+    *,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+    version: int | None = None,
+) -> PipelineReviewDisplay:
+    """Return display-only review facts for Комплекты cells.
+
+    v1/v2 and v3-when-tables-match-disk use stored ``kit_pipeline.status``
+    and the RD-folder official revision. v3 with a different Google face
+    recomputes the stage from F + issuance on that face. Does not write
+    the database.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        events: Optional F events; empty uses ``google.events``.
+        issuance: Latest effective send.
+        google: КСБ ИД kit (D/E revision + F).
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+
+    Returns:
+        Face revision, display status, pass/send dates, and B/C suffix.
+    """
+
+    ver = _display_version(version)
+    resolved = _resolve_pipeline_events(google, events)
+    face, source = pipeline_sheet_face_revision(
+        row, google=google, issuance=issuance, events=resolved
+    )
+    uses_sheet = ver >= PIPELINE_DISPLAY_V3 and pipeline_display_uses_sheet_face(
+        row, face
+    )
+    if uses_sheet:
+        status = _sheet_review_status(
+            face_revision=face, events=resolved, issuance=issuance
+        )
+        pass_date = ""
+        if status == KitPipelineStatus.TDO_REVIEW.value:
+            matched = issuance
+            send_rev = (issuance.revision_text or "").strip() if issuance else ""
+            if (
+                issuance is not None
+                and face
+                and send_rev
+                and not revision_texts_equivalent(send_rev, face)
+            ):
+                matched = None
+            pass_date = _code_date_text(
+                _tdo_passed_date_from_facts(
+                    events=resolved,
+                    issuance=matched,
+                    official_revision=face,
+                )
+            )
+        send_date = _send_date_for_revision(
+            face, events=resolved, issuance=issuance
+        )
+        return PipelineReviewDisplay(
+            status=status,
+            face_revision=face,
+            face_source=source,
+            uses_sheet_face=True,
+            pass_date=pass_date,
+            send_date=send_date,
+            cycle_letter=_cycle_letter_for_display(
+                row,
+                version=ver,
+                uses_sheet_face=True,
+                face_revision=face,
+            ),
+        )
+    official = (row.official_revision_text or "").strip()
+    return PipelineReviewDisplay(
+        status=row.status,
+        face_revision=official,
+        face_source=PIPELINE_FACE_RD,
+        uses_sheet_face=False,
+        pass_date=_disk_tdo_passed_date_text(
+            row, events=resolved, issuance=issuance
+        ),
+        send_date=_send_date_for_revision(
+            official, events=resolved, issuance=issuance
+        ),
+        cycle_letter=_cycle_letter_for_display(
+            row,
+            version=ver,
+            uses_sheet_face=False,
+            face_revision=official,
+        ),
+    )
+
+
+def pipeline_display_review_status(
+    row: KitPipelineRow,
+    *,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+    version: int | None = None,
+) -> str:
+    """Return the review fill/filter status for the active display version.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        events: Optional F events.
+        issuance: Latest effective send.
+        google: КСБ ИД kit.
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+
+    Returns:
+        ``not_uploaded`` / ``sent_tdo`` / ``tdo_review`` / ``agreed``.
+    """
+
+    return pipeline_review_display(
+        row,
+        events=events,
+        issuance=issuance,
+        google=google,
+        version=version,
+    ).status
+
+
+def pipeline_display_code_a(
+    row: KitPipelineRow,
+    *,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+    version: int | None = None,
+) -> bool:
+    """Return whether filters should treat the kit as current letter A.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        events: Optional F events.
+        issuance: Latest effective send.
+        google: КСБ ИД kit.
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+
+    Returns:
+        v1/v2 and v3-aligned: ``code == A`` and not ``code_stale``.
+        v3 sheet face: ``code == A`` on the Google face cycle.
+    """
+
+    if (row.code or "").strip().upper() != "A":
+        return False
+    view = pipeline_review_display(
+        row,
+        events=events,
+        issuance=issuance,
+        google=google,
+        version=version,
+    )
+    if view.uses_sheet_face:
+        return pipeline_letter_on_sheet_face(row, view.face_revision)
+    return not row.code_stale
+
+
+def pipeline_review_cycle_letter(
+    row: KitPipelineRow,
+    *,
+    version: int | None = None,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+) -> str:
+    """Return a current-cycle B/C to show on the review label.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+        events: Optional F events for the v3 face.
+        issuance: Latest effective send for the v3 face.
+        google: КСБ ИД kit for the v3 face.
+
+    Returns:
+        ``B`` / ``C`` when the letter belongs to the displayed cycle.
+        Never ``A``. Empty on v1 and when the letter is missing or of
+        another cycle.
+    """
+
+    return pipeline_review_display(
+        row,
+        events=events,
+        issuance=issuance,
+        google=google,
+        version=version,
+    ).cycle_letter
+
+
+def pipeline_approval_shows_letter(
+    row: KitPipelineRow,
+    *,
+    version: int | None = None,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+) -> bool:
+    """Return whether the approval column should show the F letter.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+        events: Optional F events for the v3 face.
+        issuance: Latest effective send for the v3 face.
+        google: КСБ ИД kit for the v3 face.
+
+    Returns:
+        v1: True when a letter exists. v2 and v3-aligned: True only when
+        ``code_stale``. v3 sheet face: True when the letter is not of the
+        Google face cycle.
+    """
+
+    if not row.code:
+        return False
+    ver = _display_version(version)
+    if ver == PIPELINE_DISPLAY_V1:
+        return True
+    view = pipeline_review_display(
+        row,
+        events=events,
+        issuance=issuance,
+        google=google,
+        version=ver,
+    )
+    if view.uses_sheet_face:
+        if not pipeline_letter_on_sheet_face(row, view.face_revision):
+            return True
+        letter = (row.code or "").strip().upper()
+        if letter in {"B", "C"}:
+            return False
+        if letter == "A" and view.status == KitPipelineStatus.AGREED.value:
+            return False
+        return True
+    return bool(row.code_stale)
+
+
+def _format_review_label(row: KitPipelineRow, view: PipelineReviewDisplay) -> str:
+    label = pipeline_status_label(view.status)
+    if view.pass_date:
+        label = f"{label} ({view.pass_date})"
+    if view.cycle_letter:
+        label = f"{label} · {view.cycle_letter}"
+    if view.face_revision:
+        token = (
+            _PIPELINE_FACE_TOKEN.get(view.face_source, "F")
+            if view.uses_sheet_face
+            else "РД"
+        )
+        label = f"{label} · {token} {view.face_revision}"
+    if view.send_date:
+        label = f"{label} · отпр. {view.send_date}"
+    if row.review_as_build:
+        label = f"{label} (AB)"
+    return label
+
+
+def pipeline_review_label(
+    row: KitPipelineRow,
+    *,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+    version: int | None = None,
+) -> str:
+    """Return the review label for one pipeline row.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        events: Optional F events for dates and the v3 face.
+        issuance: Optional last send for dates and the v3 face.
+        google: Optional КСБ ИД kit (D/E revision when events are empty).
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+
+    Returns:
+        ``{status}[(pass date)][ · B|C] · {РД|выдача|D/E|F} {rev}[ · отпр. {date}][ (AB)]``.
+        On v1/v2 and when Google matches disk, ``РД`` is the official
+        package (same as «РД · рев.»). v3 with a different table cycle
+        uses ``выдача`` / ``D/E`` / ``F`` and the table revision.
+        B/C never make the status «Согласован».
+    """
+
+    view = pipeline_review_display(
+        row,
+        events=events,
+        issuance=issuance,
+        google=google,
+        version=version,
+    )
+    return _format_review_label(row, view)
+
+
+def pipeline_tdo_passed_date_text(
+    row: KitPipelineRow,
+    *,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+    version: int | None = None,
+) -> str:
+    """Return ``DD.MM.YYYY`` of the displayed-cycle TDO/incoming pass.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        events: F events used when ``row.tdo_date`` is empty, or for v3 face.
+        issuance: Last send used when stored/F dates are empty.
+        google: КСБ ИД kit for the v3 face.
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+
+    Returns:
+        Normalized date text, or ``""``.
+    """
+
+    return pipeline_review_display(
+        row,
+        events=events,
+        issuance=issuance,
+        google=google,
+        version=version,
+    ).pass_date
+
+
+def pipeline_send_date_text(
+    row: KitPipelineRow,
+    *,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+    version: int | None = None,
+) -> str:
+    """Return ``DD.MM.YYYY`` of the displayed-cycle send.
+
+    Prefers ``issuance.send_date`` when the send revision matches the
+    displayed face (v3) or the official revision (v1/v2). Otherwise uses
+    the last F ``tdo_sent`` / ``incoming_sent`` on that rev.
+
+    Args:
+        row: Derived ``kit_pipeline`` row.
+        events: F events used when issuance does not match the face.
+        issuance: Last send of the kit.
+        google: КСБ ИД kit for the v3 face.
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+
+    Returns:
+        Normalized date text, or ``""``.
+    """
+
+    return pipeline_review_display(
+        row,
+        events=events,
+        issuance=issuance,
+        google=google,
+        version=version,
+    ).send_date
+
+
+def pipeline_approval_label(
+    row: KitPipelineRow,
+    *,
+    version: int | None = None,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+) -> str:
     """Return the approval letter label for one pipeline row.
 
     Args:
         row: Derived ``kit_pipeline`` row.
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+        events: Optional F events for the v3 face.
+        issuance: Latest effective send for the v3 face.
+        google: КСБ ИД kit for the v3 face.
 
     Returns:
-        ``—`` when no code; otherwise ``A · {rev} · {DD.MM.YYYY}``.
-        A stale letter appends ``новее диска`` / ``прошлый цикл`` /
-        ``без рев. в F`` / ``не этого цикла``. Current vs stale is still
-        also a color.
+        ``—`` when no code, and when the letter belongs to the displayed
+        review cycle (current A is «Согласован»; current B/C sit on
+        review). Otherwise ``A · {rev} · {DD.MM.YYYY}``. A letter not of
+        this cycle appends ``новее диска`` / ``прошлый цикл`` /
+        ``без рев. в F`` / ``не этого цикла``.
     """
 
-    if not row.code:
+    if not pipeline_approval_shows_letter(
+        row,
+        version=version,
+        events=events,
+        issuance=issuance,
+        google=google,
+    ):
         return "—"
     parts = [row.code]
     if row.code_revision_text:
@@ -510,18 +1027,36 @@ def pipeline_approval_label(row: KitPipelineRow) -> str:
     return " · ".join(parts)
 
 
-def pipeline_approval_color_key(row: KitPipelineRow) -> str:
+def pipeline_approval_color_key(
+    row: KitPipelineRow,
+    *,
+    version: int | None = None,
+    events: Sequence[KitEvent] = (),
+    issuance: IssuanceKit | None = None,
+    google: GoogleKit | None = None,
+) -> str:
     """Return the GUI color key for the approval letter badge.
 
     Args:
         row: Derived ``kit_pipeline`` row.
+        version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
+        events: Optional F events for the v3 face.
+        issuance: Latest effective send for the v3 face.
+        google: КСБ ИД kit for the v3 face.
 
     Returns:
-        Empty string when no code; ``approval_stale`` when stale; otherwise
-        ``code_a`` / ``code_b`` / ``code_c``.
+        Empty string when the approval cell is ``—``;
+        ``approval_stale`` when stale vs disk; otherwise ``code_a`` /
+        ``code_b`` / ``code_c`` (v1 current letters).
     """
 
-    if not row.code:
+    if not pipeline_approval_shows_letter(
+        row,
+        version=version,
+        events=events,
+        issuance=issuance,
+        google=google,
+    ):
         return ""
     if row.code_stale:
         return "approval_stale"

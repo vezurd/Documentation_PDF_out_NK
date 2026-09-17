@@ -53,6 +53,8 @@ from rd_catalog.pipeline import (
     APPROVAL_REL_NO_REV,
     APPROVAL_REL_OTHER,
     APPROVAL_REL_PREVIOUS,
+    PIPELINE_DISPLAY_V1,
+    PIPELINE_DISPLAY_V2,
     pipeline_approval_label,
     pipeline_approval_relation,
     pipeline_review_label,
@@ -161,6 +163,7 @@ def _google(
     revision: str | None = "0",
     appendix: str | None = "02",
     row_index: int = 1,
+    status_sheet: str = "",
 ) -> GoogleKit:
     return GoogleKit(
         title=title,
@@ -170,7 +173,7 @@ def _google(
         sheet_revision=revision,
         sheet_appendix=appendix,
         sheet_revision_text=format_revision(revision, appendix),
-        status_sheet="",
+        status_sheet=status_sheet,
         comment_raw="\n".join(event.raw for event in events),
         events=events,
         last_event=events[-1] if events else None,
@@ -517,7 +520,10 @@ def test_code_a_customer(temp: Path) -> None:
     assert row.code_stale is False
     assert row.code_origin == "customer"
     assert pipeline_status_label(row.status) == "Согласован"
-    assert pipeline_approval_label(row) == "A · 01-AN02 · 20.05.2026"
+    assert pipeline_approval_label(row, version=PIPELINE_DISPLAY_V1) == (
+        "A · 01-AN02 · 20.05.2026"
+    )
+    assert pipeline_approval_label(row) == "—"
 
 
 def test_code_b_origin_pi_and_customer(temp: Path) -> None:
@@ -915,7 +921,10 @@ def test_working_disk_keeps_issued_agreed_status(temp: Path) -> None:
     assert pipeline_review_label(row, issuance=send) == (
         "Согласован · РД 01-AN01 · отпр. 18.11.2025"
     )
-    assert pipeline_approval_label(row) == "A · 01-AN01 · 21.11.2025"
+    assert pipeline_approval_label(row, version=PIPELINE_DISPLAY_V1) == (
+        "A · 01-AN01 · 21.11.2025"
+    )
+    assert pipeline_approval_label(row) == "—"
     cells = list_revision_matrix(database)
     working_cells = [
         cell
@@ -2183,7 +2192,16 @@ def test_current_b_no_later_cycle(temp: Path) -> None:
     assert row.status == KitPipelineStatus.TDO_REVIEW
     assert row.code == "B"
     assert row.code_stale is False
-    assert pipeline_approval_label(row) == "B · 01 · 12.06.2026"
+    assert pipeline_approval_label(row, version=PIPELINE_DISPLAY_V1) == (
+        "B · 01 · 12.06.2026"
+    )
+    assert pipeline_approval_label(row) == "—"
+    assert pipeline_review_label(row, issuance=send) == (
+        "Прошел ТДО (10.06.2026) · B · РД 01 · отпр. 01.06.2026"
+    )
+    assert pipeline_review_label(row, issuance=send, version=PIPELINE_DISPLAY_V1) == (
+        "Прошел ТДО (10.06.2026) · РД 01 · отпр. 01.06.2026"
+    )
 
 
 def test_kit_keys_under_folders(temp: Path) -> None:
@@ -2591,9 +2609,16 @@ def test_review_label_appends_send_date_for_all_statuses() -> None:
         appendix="01",
     )
     assert pipeline_review_label(
-        agreed, events=(f_sent,), issuance=other_rev
+        agreed, events=(f_sent,), issuance=other_rev, version=PIPELINE_DISPLAY_V2
     ) == "Согласован · РД 01-AN01 · отпр. 03.08.2026"
-    assert pipeline_send_date_text(agreed, events=(f_sent,)) == "03.08.2026"
+    v3_ahead = pipeline_review_label(
+        agreed, events=(f_sent,), issuance=other_rev
+    )
+    assert "выдача 02" in v3_ahead
+    assert "РД 01-AN01" not in v3_ahead
+    assert pipeline_send_date_text(
+        agreed, events=(f_sent,), version=PIPELINE_DISPLAY_V2
+    ) == "03.08.2026"
 
 
 def test_pipeline_approval_relation_suffix() -> None:
@@ -2607,7 +2632,10 @@ def test_pipeline_approval_relation_suffix() -> None:
         official_revision_text="01-AN01",
     )
     assert pipeline_approval_relation(current) == ""
-    assert pipeline_approval_label(current) == "A · 01-AN01 · 04.03.2026"
+    assert pipeline_approval_label(current, version=PIPELINE_DISPLAY_V1) == (
+        "A · 01-AN01 · 04.03.2026"
+    )
+    assert pipeline_approval_label(current) == "—"
     ahead = replace(
         current,
         code_stale=True,
@@ -2642,6 +2670,145 @@ def test_pipeline_approval_relation_suffix() -> None:
     other = replace(current, code_stale=True, official_revision_text="")
     assert pipeline_approval_relation(other) == APPROVAL_REL_OTHER
     assert pipeline_approval_label(other).endswith("не этого цикла")
+
+
+def test_pipeline_display_v2_current_bc_on_review() -> None:
+    tdo_b = KitPipelineRow(
+        title="7700",
+        mark="POS",
+        status=KitPipelineStatus.TDO_REVIEW.value,
+        code="B",
+        code_revision_text="01",
+        code_date="12.06.2026",
+        official_revision_text="01",
+        tdo_date="10.06.2026",
+    )
+    assert pipeline_review_label(tdo_b) == "Прошел ТДО (10.06.2026) · B · РД 01"
+    assert pipeline_approval_label(tdo_b) == "—"
+    assert pipeline_review_label(tdo_b, version=PIPELINE_DISPLAY_V1) == (
+        "Прошел ТДО (10.06.2026) · РД 01"
+    )
+    assert pipeline_approval_label(tdo_b, version=PIPELINE_DISPLAY_V1) == (
+        "B · 01 · 12.06.2026"
+    )
+    stale_ahead = replace(
+        tdo_b,
+        code_stale=True,
+        code_revision_text="0-AN02",
+        official_revision_text="0-AN01",
+    )
+    assert pipeline_review_label(stale_ahead) == (
+        "Прошел ТДО (10.06.2026) · РД 0-AN01"
+    )
+    assert pipeline_approval_label(stale_ahead).endswith("новее диска")
+    agreed_a = KitPipelineRow(
+        title="2000",
+        mark="KSB",
+        status=KitPipelineStatus.AGREED.value,
+        code="A",
+        code_revision_text="01-AN01",
+        code_date="21.11.2025",
+        official_revision_text="01-AN01",
+    )
+    assert " · A" not in pipeline_review_label(agreed_a)
+    assert pipeline_approval_label(agreed_a) == "—"
+
+
+def test_pipeline_display_v3_google_face_ahead_of_disk() -> None:
+    events = (
+        _event(
+            date="01.06.2026",
+            stage="tdo_sent",
+            stage_label="отправлена на ТДО",
+            revision="0",
+            appendix="02",
+            transmittals=("TRM-300",),
+        ),
+        _event(
+            date="10.06.2026",
+            stage="tdo_passed",
+            stage_label="прошла ТДО",
+            revision="0",
+            appendix="02",
+            transmittals=("TRM-300",),
+        ),
+        _event(
+            date="12.06.2026",
+            stage="code_b",
+            stage_label="код B",
+            revision="0",
+            appendix="02",
+            transmittals=("TRM-300",),
+        ),
+    )
+    google = _google("6550", "SKUD", events, revision="0", appendix="02")
+    send = _send(
+        title="6550",
+        mark="SKUD",
+        revision="0",
+        appendix="02",
+        status="На рассмотрении",
+        send_date="01.06.2026",
+        incoming="10.06.2026",
+        transmittal="TRM-300",
+    )
+    row = KitPipelineRow(
+        title="6550",
+        mark="SKUD",
+        status=KitPipelineStatus.TDO_REVIEW.value,
+        official_revision_text="0-AN01",
+        tdo_date="09.10.2023",
+        code="B",
+        code_stale=True,
+        code_revision_text="0-AN02",
+        code_date="12.06.2026",
+    )
+    label = pipeline_review_label(row, google=google, issuance=send)
+    assert label == (
+        "Прошел ТДО (10.06.2026) · B · выдача 0-AN02 · отпр. 01.06.2026"
+    )
+    assert "0-AN01" not in label
+    assert "09.10.2023" not in label
+    assert pipeline_approval_label(row, google=google, issuance=send) == "—"
+    v2_review = pipeline_review_label(
+        row, google=google, issuance=send, version=PIPELINE_DISPLAY_V2
+    )
+    assert v2_review == "Прошел ТДО (09.10.2023) · РД 0-AN01"
+    assert pipeline_approval_label(
+        row, google=google, issuance=send, version=PIPELINE_DISPLAY_V2
+    ).endswith("новее диска")
+    v1_review = pipeline_review_label(
+        row, google=google, issuance=send, version=PIPELINE_DISPLAY_V1
+    )
+    assert " · B" not in v1_review
+    assert "РД 0-AN01" in v1_review
+
+
+def test_pipeline_display_v3_de_caption_does_not_force_agreed() -> None:
+    google = _google(
+        "7417",
+        "SOS",
+        (),
+        revision="0",
+        appendix="02",
+        status_sheet="РД Согласовано",
+    )
+    row = KitPipelineRow(
+        title="7417",
+        mark="SOS",
+        status=KitPipelineStatus.TDO_REVIEW.value,
+        official_revision_text="0-AN01",
+        tdo_date="09.10.2023",
+        code="A",
+        code_stale=True,
+        code_revision_text="0-AN02",
+        code_date="29.05.2026",
+    )
+    label = pipeline_review_label(row, google=google)
+    assert label.startswith("Не загружен в СР")
+    assert "D/E 0-AN02" in label
+    assert not label.startswith("Согласован")
+    assert pipeline_approval_label(row, google=google).endswith("новее диска")
 
 
 def test_index_records_by_kit_groups_and_omits() -> None:
@@ -3076,6 +3243,7 @@ def main() -> None:
     test_tdo_review_label_uses_passed_date()
     test_review_label_appends_send_date_for_all_statuses()
     test_pipeline_approval_relation_suffix()
+    test_pipeline_display_v2_current_bc_on_review()
     with tempfile.TemporaryDirectory(prefix="rd_catalog_pipeline_") as raw:
         root = Path(raw)
         test_9110_tdo_review_package_path(root)
