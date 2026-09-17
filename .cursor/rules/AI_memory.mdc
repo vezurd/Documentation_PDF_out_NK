@@ -13,6 +13,7 @@ alwaysApply: true
 ## Индекс зон
 
 - Стандарты, планы, делегирование -> `AI_project_standards.mdc`
+- GitHub backup (чаты сами commit+push) -> `AI_github_backup.mdc`
 - RFQ / tags / step4 / performance -> `AI_rfq_context.mdc`
 - RFP Запуск, финальный Excel Step4 (столбцы / цвета / УЛ) -> `AI_rfp_step4_excel.mdc`
 - RFP из частей (RFP_Зиновьев → сумма в свод) -> `AI_rfp_parts.mdc`
@@ -96,8 +97,9 @@ alwaysApply: true
 
 ## 17. GitHub backup (аккаунт [vezurd](https://github.com/vezurd))
 
-- Репозиторий **private**: `https://github.com/vezurd/Documentation_PDF_out_NK`
+Поведение чатов: [AI_github_backup.mdc](.cursor/rules/AI_github_backup.mdc) (после законченной задачи — сами `commit` + `push`).
+
+- Репозиторий **private**: `https://github.com/vezurd/Documentation_PDF_out_NK`, ветка `main`
 - Git смотрит **только** на эту папку проекта, не на весь диск. Не делать `git init` в `C:\Users\...` или `PycharmProjects`.
 - На GitHub уходит исходный код и конфиги. Не уходят: `cache/`, `tmp/` (кроме скриптов), PDF/xlsx, pickle, `rd_catalog/База заказчика/`, ключи `base_check/client_secret.json`.
 - Ручная выгрузка: двойной щелчок `backup_to_github.bat`
-- В чате после порции правок можно попросить: «сохрани на GitHub».

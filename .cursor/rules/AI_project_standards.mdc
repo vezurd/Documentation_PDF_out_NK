@@ -104,6 +104,7 @@ alwaysApply: true
 | PDF v2 control center / монитор | `AI_v2_monitor.mdc` |
 | Редактор шаблонов PySide6 | `AI_v2_editor.mdc`, `AI_v2_grid.mdc`, `AI_v2_grid_log.mdc` |
 | PDF v1 (удалён из репо) | архив: `AI_pdf_stamp_recognition.mdc`, `AI_pdf_parsing_optimization.mdc` |
+| GitHub backup (commit+push после задачи) | `AI_github_backup.mdc`, `AI_memory.mdc` §17 |
 | Релиз ZIP | `AI_memory.mdc` §13 |
 | Полный снимок / история | `AI_memory_ARCHIVE.md` (не alwaysApply) |
 
