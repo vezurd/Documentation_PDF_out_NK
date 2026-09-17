@@ -24,6 +24,7 @@ from rd_catalog.kits import (
     KitSummary,
     SourceKitSnapshot,
     kit_identity_key,
+    last_event_parts,
     parse_history_line,
     parse_sheet_revision,
 )
@@ -68,6 +69,7 @@ from rd_catalog.monitor_views import (
     monitor_to_json,
     build_kits_monitor_row,
     effective_kit_summary,
+    format_kits_google_f_rev,
     kits_official_folder_mto_text,
     official_rd_rev_text,
     pipeline_approval_tooltip,
@@ -847,6 +849,7 @@ class MonitorViewsTests(unittest.TestCase):
         )
         trm = painted.cells["Google · TRM F"]
         self.assertTrue(trm.href.endswith("range=F12"), trm.href)
+        self.assertIn("?gid=77&range=F12", trm.href)
         self.assertIn("gid=77", trm.href)
         self.assertIn("Клик открывает", trm.tooltip)
         send = painted.cells["Выдача · TRM отпр."]
@@ -1029,6 +1032,20 @@ class MonitorViewsTests(unittest.TestCase):
         )
         self.assertEqual(lag.fill, REV_DIFF_FILL)
         self.assertFalse(lag.bold)
+        f_od = next(
+            item
+            for item in samples
+            if item.column == "Google · рев. F" and item.text == "01-AN01"
+        )
+        self.assertEqual(f_od.fill, REV_DIFF_FILL)
+        f_mto = next(
+            item
+            for item in samples
+            if item.column == "Google · рев. F" and "MTO 03" in item.text
+        )
+        self.assertEqual(f_mto.text, "04 · MTO 03")
+        self.assertEqual(f_mto.fill, REV_DIFF_FILL)
+        self.assertIn("MTO", f_mto.meaning)
         ok_samples = [item for item in samples if item.column == KITS_OK_HEADER]
         self.assertEqual({item.text for item in ok_samples}, {"да", "нет"})
         self.assertFalse(any(item.bold for item in ok_samples))
@@ -1848,6 +1865,163 @@ class PipelineStatusTooltipTests(unittest.TestCase):
         for line in wrapped.splitlines():
             if tooltip_has_fs_path(line):
                 self.assertNotIn("0-AN01", line)
+
+
+class GoogleFMtoPaintTests(unittest.TestCase):
+    """Комплекты F-cell MTO suffix vs official-folder MTO."""
+
+    def _paint(
+        self,
+        *,
+        line: str,
+        rd_rev: str,
+        disk_mto: str | None,
+        snapshot_mto: str | None = None,
+        pipeline: KitPipelineRow | None = None,
+    ):
+        if snapshot_mto is not None:
+            snap_mto = snapshot_mto
+        elif disk_mto is not None:
+            snap_mto = disk_mto
+        else:
+            snap_mto = rd_rev
+        google = _google_kit(
+            title="2210",
+            mark="KSB",
+            sheet=rd_rev,
+            lines=(line,),
+        )
+        row = KitMatrixRow(
+            title="2210",
+            mark="KSB",
+            title_system="2210-KSB",
+            rd=_rd_snap(rd_rev, mto=snap_mto),
+            robot=SourceKitSnapshot(),
+            sq=SourceKitSnapshot(),
+            google=google,
+            issuance=None,
+            flags=(),
+            summary=KitSummary.ALIGNED,
+        )
+        overlay: dict[tuple[str, str], tuple[str, str]] = {}
+        if disk_mto is not None:
+            overlay[kit_identity_key("2210", "KSB")] = (
+                r"C:\rd\AGCC.287-2210-KSB.MTO-0001.xlsx",
+                disk_mto,
+            )
+        return _paint_kits(row, pipeline, overlay_mto=overlay)
+
+    def test_f_mto_match_keeps_od_fill(self) -> None:
+        painted = self._paint(
+            line="09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03",
+            rd_rev="04",
+            disk_mto="03",
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertIn("MTO 03", f_cell.text)
+        self.assertEqual(f_cell.text, "04 · MTO 03")
+        self.assertEqual(f_cell.fill, REV_MATCH_FILL)
+        self.assertIn("F · рев. 04 совпала с РД · рев.", f_cell.tooltip)
+        self.assertIn("F MTO 03 совпала с MTO · рев.", f_cell.tooltip)
+        self.assertIn("mto 03", painted.haystack)
+        mismatched_od = self._paint(
+            line="09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03",
+            rd_rev="01-AN01",
+            disk_mto="03",
+        )
+        self.assertEqual(
+            mismatched_od.cells["Google · рев. F"].fill, REV_DIFF_FILL
+        )
+        self.assertIn("MTO 03", mismatched_od.cells["Google · рев. F"].text)
+
+    def test_f_mto_mismatch_yellow_wins(self) -> None:
+        painted = self._paint(
+            line="09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03",
+            rd_rev="04",
+            disk_mto="04",
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(f_cell.text, "04 · MTO 03")
+        self.assertEqual(f_cell.fill, REV_DIFF_FILL)
+        self.assertIn("расходится с MTO · рев. 04", f_cell.tooltip)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.text, "04")
+        self.assertEqual(mto_cell.fill, REV_DIFF_FILL)
+        self.assertIn("MTO на диске 04", mto_cell.tooltip)
+        self.assertIn("в F указано MTO 03", mto_cell.tooltip)
+        ok_row = _ok_kit_row(
+            google=_google_kit(
+                title="2210",
+                mark="KSB",
+                sheet="01",
+                lines=("04.12.2025 код А на рев. 01-AN01 MTO 03",),
+            ),
+        )
+        key = kit_identity_key("2210", "KSB")
+        ok_painted = _paint_kits(
+            ok_row,
+            _ok_pipeline(),
+            overlay_mto={key: (r"C:\rd\mto.xlsx", "04")},
+        )
+        self.assertEqual(ok_painted.cells["Google · рев. F"].fill, REV_DIFF_FILL)
+        self.assertTrue(ok_painted.kit_ok)
+
+    def test_f_without_suffix_is_event_rev_only(self) -> None:
+        painted = self._paint(
+            line="09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999",
+            rd_rev="04",
+            disk_mto="03",
+        )
+        parts = last_event_parts(painted.matrix_row.google)
+        self.assertEqual(len(parts), 4)
+        event_rev = parts[2]
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(event_rev, "04")
+        self.assertEqual(f_cell.text, event_rev)
+        self.assertEqual(
+            format_kits_google_f_rev(painted.matrix_row.google.last_event),
+            event_rev,
+        )
+        self.assertEqual(f_cell.fill, REV_MATCH_FILL)
+        self.assertNotIn("MTO", f_cell.text)
+        self.assertFalse(f_cell.tooltip)
+
+    def test_auto_in_text_does_not_yellow(self) -> None:
+        painted = self._paint(
+            line="09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 auto",
+            rd_rev="04",
+            disk_mto="03",
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(f_cell.text, "04 auto")
+        self.assertEqual(f_cell.fill, REV_MATCH_FILL)
+        self.assertIn("Строка F записана автоматом (робот).", f_cell.tooltip)
+        self.assertIn("auto", painted.haystack)
+        with_mto = self._paint(
+            line=(
+                "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03 auto"
+            ),
+            rd_rev="04",
+            disk_mto="03",
+        )
+        auto_cell = with_mto.cells["Google · рев. F"]
+        self.assertEqual(auto_cell.text, "04 · MTO 03 auto")
+        self.assertEqual(auto_cell.fill, REV_MATCH_FILL)
+        self.assertIn("auto", with_mto.haystack)
+
+    def test_f_mto_when_disk_missing_is_yellow(self) -> None:
+        painted = self._paint(
+            line="09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03",
+            rd_rev="04",
+            disk_mto=None,
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(f_cell.fill, REV_DIFF_FILL)
+        self.assertIn("нет файла MTO", f_cell.tooltip)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.text, OFFICIAL_FOLDER_MTO_MISSING)
+        self.assertEqual(mto_cell.palette_key, "no_mto")
+        self.assertIn("F указано MTO 03", mto_cell.tooltip)
 
 
 if __name__ == "__main__":

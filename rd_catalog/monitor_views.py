@@ -324,6 +324,7 @@ KITS_WORKING_REV_TOOLTIP = (
 _MTO_COMPARE_PENDING_TIP = (
     "Сверка MTO ещё не завершена; показано по дате файла"
 )
+KITS_F_ROBOT_AUTO_TIP = "Строка F записана автоматом (робот)."
 
 WORKLIST_HEADERS = (
     "Титул",
@@ -1215,6 +1216,13 @@ def kits_paint_legend(
                     "Ревизия F другая, чем у «РД · рев.». Без жирного.",
                     fill=REV_DIFF_FILL,
                 ),
+                sample(
+                    "Google · рев. F",
+                    "04 · MTO 03",
+                    "MTO в F другая, чем «MTO · рев.» на диске, "
+                    "даже если ревизия F совпала с «РД · рев.».",
+                    fill=REV_DIFF_FILL,
+                ),
             ),
         ),
         PaintLegendSection(
@@ -1828,6 +1836,123 @@ def kits_official_folder_mto_text(
     if rd_present:
         return OFFICIAL_FOLDER_MTO_MISSING
     return "—"
+
+
+def format_kits_google_f_rev(event: KitEvent | None) -> str:
+    """Return Комплекты «Google · рев. F» text.
+
+    OD revision stays the same as ``last_event_parts`` (still a 4-tuple).
+    When the F line has an MTO suffix, append `` · MTO <rev>`` using
+    ``format_revision``. When ``from_robot_auto`` is set, append `` auto``.
+
+    Args:
+        event: Last Google F event, or ``None``.
+
+    Returns:
+        Display text such as ``04``, ``04 · MTO 03``, ``04 · MTO 03 auto``,
+        or ``—`` when there is nothing to show.
+    """
+
+    if event is None:
+        return "—"
+    od_text = format_revision(event.revision, event.appendix)
+    mto_text = format_revision(event.mto_revision, event.mto_appendix)
+    parts: list[str] = []
+    if od_text:
+        parts.append(od_text)
+    if mto_text:
+        parts.append(f"MTO {mto_text}")
+    text = " · ".join(parts)
+    if event.from_robot_auto:
+        text = f"{text} auto".strip()
+    return text or "—"
+
+
+def _official_folder_mto_shown(text: str) -> bool:
+    stripped = (text or "").strip()
+    return stripped not in {"", "—", OFFICIAL_FOLDER_MTO_MISSING}
+
+
+def _kits_rev_yellow_wins(cell: MonitorCell) -> MonitorCell:
+    """Force mismatch yellow over OD-match green; keep existing yellow."""
+
+    if cell.fill == REV_DIFF_FILL:
+        return cell
+    fill = REV_DIFF_FILL
+    return replace(
+        cell,
+        fill=fill,
+        foreground=contrast_foreground(fill),
+    )
+
+
+def _paint_kits_google_f_rev_cell(
+    cell: MonitorCell,
+    *,
+    event: KitEvent | None,
+    event_rev: str,
+    rd_rev: str,
+    od_match: bool | None,
+    f_mto_text: str,
+    disk_mto_text: str,
+) -> MonitorCell:
+    """Fill and tooltip for «Google · рев. F» (OD plus optional F MTO)."""
+
+    tips: list[str] = []
+    od_text = (event_rev or "").strip()
+    rd_text = (rd_rev or "").strip()
+    if f_mto_text:
+        if od_text and rd_text:
+            if od_match is True:
+                tips.append(f"F · рев. {od_text} совпала с РД · рев.")
+            elif od_match is False:
+                tips.append(
+                    f"F · рев. {od_text} расходится с РД · рев. {rd_text}"
+                )
+        if not _official_folder_mto_shown(disk_mto_text):
+            cell = _kits_rev_yellow_wins(cell)
+            tips.append(
+                f"В F указано MTO {f_mto_text}, "
+                "в официальной папке нет файла MTO."
+            )
+        elif revision_texts_match(f_mto_text, disk_mto_text) is True:
+            tips.append(f"F MTO {f_mto_text} совпала с MTO · рев.")
+        else:
+            cell = _kits_rev_yellow_wins(cell)
+            shown_disk = (disk_mto_text or "").strip() or "—"
+            tips.append(
+                f"F MTO {f_mto_text} расходится с MTO · рев. {shown_disk}"
+            )
+    if event is not None and event.from_robot_auto:
+        tips.append(KITS_F_ROBOT_AUTO_TIP)
+    for tip in tips:
+        cell = _append_tooltip(cell, tip)
+    return cell
+
+
+def _apply_f_mto_to_official_mto_cell(
+    cell: MonitorCell,
+    *,
+    f_mto_text: str,
+    disk_mto_text: str,
+) -> MonitorCell:
+    """Yellow-win «MTO · рев.» when F names a different MTO revision."""
+
+    if not f_mto_text:
+        return cell
+    if not _official_folder_mto_shown(disk_mto_text):
+        return _append_tooltip(
+            cell,
+            f"В F указано MTO {f_mto_text}, файла в официальной папке нет.",
+        )
+    if revision_texts_match(f_mto_text, disk_mto_text) is True:
+        return _append_tooltip(cell, "F MTO совпала")
+    shown_disk = (disk_mto_text or "").strip() or "—"
+    cell = _kits_rev_yellow_wins(cell)
+    return _append_tooltip(
+        cell,
+        f"MTO на диске {shown_disk}, в F указано MTO {f_mto_text}",
+    )
 
 
 def _official_package_path_by_kit(
@@ -3966,6 +4091,13 @@ def build_kits_monitor_row(
     google = row.google
     issuance = row.issuance
     event_date, event_stage, event_rev, event_trm = last_event_parts(google)
+    event = google.last_event if google is not None else None
+    google_f_text = format_kits_google_f_rev(event)
+    f_mto_text = (
+        format_revision(event.mto_revision, event.mto_appendix)
+        if event is not None
+        else ""
+    )
     review_view = (
         pipeline_review_display(
             pipeline, google=google, issuance=issuance
@@ -4059,7 +4191,7 @@ def build_kits_monitor_row(
         ),
         "Google · дата F": event_date or "—",
         "Google · этап F": event_stage or "—",
-        "Google · рев. F": event_rev or "—",
+        "Google · рев. F": google_f_text,
         "Google · TRM F": event_trm or "—",
         "Выдача · статус": (
             issuance.status if issuance and issuance.status else "—"
@@ -4183,12 +4315,27 @@ def build_kits_monitor_row(
                         ]
                     ),
                 )
+            cell = _apply_f_mto_to_official_mto_cell(
+                cell,
+                f_mto_text=f_mto_text,
+                disk_mto_text=mto_rev_text,
+            )
         elif header == "Авто МТО":
             cell = auto_cell
         elif header == AUTO_MTO_COMPARE_STATUS_HEADER:
             cell = _compare_status_cell(compare_status)
         elif header == "АН МТО":
             cell = an_cell
+        if header == "Google · рев. F":
+            cell = _paint_kits_google_f_rev_cell(
+                cell,
+                event=event,
+                event_rev=event_rev,
+                rd_rev=row.rd.revision_text if row.rd.present else "",
+                od_match=match_flags.get("google_f"),
+                f_mto_text=f_mto_text,
+                disk_mto_text=mto_rev_text,
+            )
         if header == "Робот МТО · рев.":
             if origin.matched is True:
                 cell = replace(
@@ -4313,6 +4460,7 @@ def build_kits_monitor_row(
         event_date,
         event_stage,
         event_rev,
+        google_f_text,
         event_trm,
         last_event_text(google),
         google.comment_raw if google else None,
