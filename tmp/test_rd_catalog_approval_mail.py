@@ -140,7 +140,7 @@ def main() -> None:
     assert mail.date == "02.12.2024"
     assert mail.send_transmittal == "AGCC-BCC-TRM-000582"
     assert mail.f_line == (
-        "02.12.2024 код А на рев. 04 AGCC-BCC-TRM-000582 MTO 03"
+        "02.12.2024 код А на рев. 04 AGCC-BCC-TRM-000582 MTO 03 auto"
     )
     assert mail.sheet_revision == "Рев. 04"
     assert mail.status_sheet == "РД Согласовано"
@@ -148,7 +148,8 @@ def main() -> None:
     assert mail_event.stage == "code_a"
     assert mail_event.revision == "04"
     assert mail_event.mto_revision == "03"
-    assert mail_event.from_robot_auto is False
+    assert mail_event.mto_absent is False
+    assert mail_event.from_robot_auto is True
     assert mail_event.transmittals == ("AGCC-BCC-TRM-000582",)
     assert len(mail.documents) == 2
     assert _is_mto_filename("AGCC.287-1600-SOT.MTO-0001")
@@ -169,12 +170,12 @@ def main() -> None:
     assert ifr.od_revision == "A"
     assert ifr.date == "10.11.2023"
     assert ifr.send_transmittal == "AGCC-BCC-TRM-000158"
-    assert ifr.f_line == "10.11.2023 код А на рев. A AGCC-BCC-TRM-000158 MTO A"
+    assert ifr.f_line == "10.11.2023 код А на рев. A AGCC-BCC-TRM-000158 MTO A auto"
     assert ifr.sheet_revision == "Рев. A"
     ifr_event = parse_history_line(ifr.f_line)
     assert ifr_event.revision == "A"
     assert ifr_event.mto_revision == "A"
-    assert ifr_event.from_robot_auto is False
+    assert ifr_event.from_robot_auto is True
     assert len(ifr.documents) == 3
     assert all(doc.revision == "A" for doc in ifr.documents)
 
@@ -228,8 +229,13 @@ def main() -> None:
     assert mixed.kit_code == "A"
     assert mixed.letter_counts == (("A", 2), ("B", 1))
     assert mixed.od_revision == "02"
-    assert mixed.f_line == "03.05.2024 код А на рев. 02 AGCC-BCC-TRM-000339"
-    assert parse_history_line(mixed.f_line).mto_revision is None
+    assert mixed.f_line == (
+        "03.05.2024 код А на рев. 02 AGCC-BCC-TRM-000339 MTO Нет auto"
+    )
+    mixed_event = parse_history_line(mixed.f_line)
+    assert mixed_event.mto_revision is None
+    assert mixed_event.mto_absent is True
+    assert mixed_event.from_robot_auto is True
 
     tdo = parse_approval_mail_text(
         subject="RE: Сопроводительное письмо AGCC.287-BCC-PGS-TRM-000910",
@@ -245,7 +251,9 @@ def main() -> None:
     assert tdo.title == "3150"
     assert tdo.mark == "KSB"
     assert tdo.incoming_transmittal == "AGCC.287-PGS-PGS-TRM-22028"
-    assert tdo.f_line == "10.08.2026 прошла вх контр AGCC.287-PGS-PGS-TRM-22028"
+    assert tdo.f_line == (
+        "10.08.2026 прошла вх контр AGCC.287-PGS-PGS-TRM-22028 auto"
+    )
     assert tdo.status_sheet == "Прошла входной контроль"
 
     sr_only = parse_approval_mail_text(
@@ -309,7 +317,7 @@ def main() -> None:
     assert old_prose.od_revision == "0"
     assert old_prose.incoming_transmittal == ""
     assert old_prose.f_line == (
-        "09.10.2023 прошла вх контр рев. 0 AGCC.287-BCC-NPG-TRM-003144"
+        "09.10.2023 прошла вх контр рев. 0 AGCC.287-BCC-NPG-TRM-003144 auto"
     )
     assert parse_history_line(old_prose.f_line).revision == "0"
 
@@ -329,7 +337,7 @@ def main() -> None:
     assert old_stems.od_revision == "0"
     assert any(doc.is_od and doc.revision == "0" for doc in old_stems.documents)
     assert old_stems.f_line == (
-        "09.10.2023 прошла вх контр рев. 0 AGCC.287-BCC-NPG-TRM-003144"
+        "09.10.2023 прошла вх контр рев. 0 AGCC.287-BCC-NPG-TRM-003144 auto"
     )
 
     hinted = parse_approval_mail_text(
@@ -378,14 +386,15 @@ def main() -> None:
     assert cover_plain.od_revision == "0-AN01"
     assert cover_plain.send_transmittal == "AGCC.287-BCC-PGS-TRM-000661"
     assert cover_plain.f_line == (
-        "24.12.2025 отпр на ТДО рев. 0-AN01 AGCC.287-BCC-PGS-TRM-000661 MTO 0-AN01"
+        "24.12.2025 отпр на ТДО рев. 0-AN01 AGCC.287-BCC-PGS-TRM-000661 "
+        "MTO 0-AN01 auto"
     )
     cover_event = parse_history_line(cover_plain.f_line)
     assert cover_event.revision == "0"
     assert cover_event.appendix == "01"
     assert cover_event.mto_revision == "0"
     assert cover_event.mto_appendix == "01"
-    assert cover_event.from_robot_auto is False
+    assert cover_event.from_robot_auto is True
     assert cover_plain.sheet_revision == "Рев. 0-AN01"
     assert cover_plain.status_sheet == "Отпр. на входной контроль"
     assert parse_history_line(cover_plain.f_line).stage == "tdo_sent"
@@ -411,6 +420,7 @@ def main() -> None:
     assert cover_html_row.od_revision == "0-AN01"
     assert len(cover_html_row.documents) == 2
     assert "MTO 0-AN01" in cover_html_row.f_line
+    assert cover_html_row.f_line.endswith("auto")
     assert parse_history_line(cover_html_row.f_line).mto_revision == "0"
 
     cover_not_reply = parse_approval_mail_text(
@@ -536,10 +546,11 @@ def main() -> None:
         assert live_old_tdo.od_revision == "0"
         assert live_old_tdo.send_transmittal.endswith("TRM-003144")
         assert live_old_tdo.f_line == (
-            "09.10.2023 прошла вх контр рев. 0 AGCC.287-BCC-NPG-TRM-003144 MTO 0"
+            "09.10.2023 прошла вх контр рев. 0 AGCC.287-BCC-NPG-TRM-003144 "
+            "MTO 0 auto"
         )
         assert parse_history_line(live_old_tdo.f_line).mto_revision == "0"
-        assert parse_history_line(live_old_tdo.f_line).from_robot_auto is False
+        assert parse_history_line(live_old_tdo.f_line).from_robot_auto is True
         assert len(live_old_tdo.documents) == 6
 
     print("RD catalog approval mail: OK")

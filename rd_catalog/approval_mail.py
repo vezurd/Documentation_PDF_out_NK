@@ -327,12 +327,13 @@ def _parse_notification(
     )
     f_line = ""
     if not error and date and stage:
-        f_line = format_history_line(
+        f_line = _catalog_f_line(
             date=date,
             stage=stage,
             revision=od_revision,
             transmittal=trm,
-            mto_revision=_mto_revision_from_documents(documents) or None,
+            documents=documents,
+            record_mto_absent=True,
         )
     return ApprovalMail(
         kind="review_codes",
@@ -393,12 +394,13 @@ def _parse_cover_letter(
     stage = "tdo_sent"
     f_line = ""
     if not error and date and stage:
-        f_line = format_history_line(
+        f_line = _catalog_f_line(
             date=date,
             stage=stage,
             revision=od_revision or None,
             transmittal=trm,
-            mto_revision=_mto_revision_from_documents(documents) or None,
+            documents=documents,
+            record_mto_absent=True,
         )
     return ApprovalMail(
         kind="cover_letter",
@@ -484,12 +486,13 @@ def _parse_tdo_reply(
     f_line = ""
     if not error and date and stage:
         trm_for_line = incoming if stage == "incoming_passed" and incoming else send_trm
-        f_line = format_history_line(
+        f_line = _catalog_f_line(
             date=date,
             stage=stage,
             revision=od_revision or None,
             transmittal=trm_for_line,
-            mto_revision=_mto_revision_from_documents(documents) or None,
+            documents=documents,
+            record_mto_absent=False,
         )
     return ApprovalMail(
         kind="tdo_reply",
@@ -687,6 +690,45 @@ def _mto_revision_from_documents(documents: list[MailDocument]) -> str:
 
     return _highest_revision(
         [item for item in documents if _is_mto_filename(item.filename)]
+    )
+
+
+def _catalog_f_line(
+    *,
+    date: str,
+    stage: str,
+    revision: str | None,
+    transmittal: str,
+    documents: list[MailDocument],
+    record_mto_absent: bool,
+) -> str:
+    """Format an F line written by the catalog (always ``auto``).
+
+    Transfer letters (notification / cover) pass ``record_mto_absent=True``
+    so a package without an MTO file is stored as ``MTO Нет``. TDO replies
+    only attach ``MTO <rev>`` when a document stem is present.
+
+    Args:
+        date: ``DD.MM.YYYY``.
+        stage: Journal stage key.
+        revision: OD revision, or empty.
+        transmittal: TRM token, or empty.
+        documents: Parsed letter documents.
+        record_mto_absent: Write ``MTO Нет`` when no MTO document exists.
+
+    Returns:
+        Canonical F line from :func:`format_history_line`.
+    """
+
+    mto_revision = _mto_revision_from_documents(documents) or None
+    return format_history_line(
+        date=date,
+        stage=stage,
+        revision=revision,
+        transmittal=transmittal,
+        mto_revision=mto_revision,
+        mto_absent=bool(record_mto_absent and mto_revision is None),
+        from_robot_auto=True,
     )
 
 

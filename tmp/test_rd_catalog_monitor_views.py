@@ -1045,6 +1045,13 @@ class MonitorViewsTests(unittest.TestCase):
         self.assertEqual(f_mto.text, "04 · MTO 03")
         self.assertEqual(f_mto.fill, REV_DIFF_FILL)
         self.assertIn("MTO", f_mto.meaning)
+        f_absent = next(
+            item
+            for item in samples
+            if item.column == "Google · рев. F" and "MTO Нет" in item.text
+        )
+        self.assertEqual(f_absent.text, "04 · MTO Нет auto")
+        self.assertEqual(f_absent.fill, REV_MATCH_FILL)
         ok_samples = [item for item in samples if item.column == KITS_OK_HEADER]
         self.assertEqual({item.text for item in ok_samples}, {"да", "нет"})
         self.assertFalse(any(item.bold for item in ok_samples))
@@ -2021,6 +2028,42 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         self.assertEqual(mto_cell.text, OFFICIAL_FOLDER_MTO_MISSING)
         self.assertEqual(mto_cell.palette_key, "no_mto")
         self.assertIn("F указано MTO 03", mto_cell.tooltip)
+
+    def test_f_mto_absent_matches_disk_missing(self) -> None:
+        painted = self._paint(
+            line=(
+                "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO Нет auto"
+            ),
+            rd_rev="04",
+            disk_mto=None,
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(f_cell.text, "04 · MTO Нет auto")
+        self.assertEqual(f_cell.fill, REV_MATCH_FILL)
+        self.assertIn("MTO Нет", f_cell.tooltip)
+        self.assertIn("автоматом", f_cell.tooltip)
+        self.assertIn("mto нет", painted.haystack)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.text, OFFICIAL_FOLDER_MTO_MISSING)
+        self.assertEqual(mto_cell.palette_key, "no_mto")
+        self.assertNotEqual(mto_cell.fill, REV_DIFF_FILL)
+
+    def test_f_mto_absent_yellow_when_disk_has_file(self) -> None:
+        painted = self._paint(
+            line=(
+                "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO Нет auto"
+            ),
+            rd_rev="04",
+            disk_mto="03",
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(f_cell.text, "04 · MTO Нет auto")
+        self.assertEqual(f_cell.fill, REV_DIFF_FILL)
+        self.assertIn("MTO Нет", f_cell.tooltip)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.text, "03")
+        self.assertEqual(mto_cell.fill, REV_DIFF_FILL)
+        self.assertIn("MTO Нет", mto_cell.tooltip)
 
 
 if __name__ == "__main__":

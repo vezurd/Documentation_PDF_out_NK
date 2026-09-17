@@ -14,6 +14,7 @@ from difflib import SequenceMatcher
 from html import escape as html_escape
 
 from rd_catalog.kits import (
+    F_LINE_MTO_ABSENT,
     KitEvent,
     format_revision,
     parse_history_comment,
@@ -66,6 +67,7 @@ def format_history_line(
     revision: str | None = None,
     transmittal: str | None = None,
     mto_revision: str | None = None,
+    mto_absent: bool = False,
     from_robot_auto: bool = False,
 ) -> str:
     """Build one canonical F line that ``parse_history_line`` understands.
@@ -79,12 +81,13 @@ def format_history_line(
         transmittal: TRM token, or empty.
         mto_revision: Optional MTO filename revision (``03``, ``01-AN02``).
             Appended as ``MTO <rev>`` after TRM — never ``MTO рев. X``.
-        from_robot_auto: When True, append ``auto`` (catalog robot writer).
-            Outlook / parsed letters keep False.
+        mto_absent: When True and ``mto_revision`` is empty, append
+            ``MTO Нет`` (transfer listed no MTO file).
+        from_robot_auto: When True, append ``auto`` (catalog writer).
 
     Returns:
-        A single-line journal entry. Empty MTO and False ``auto`` match
-        the historical string.
+        A single-line journal entry. Empty MTO, False ``mto_absent``, and
+        False ``auto`` match the historical string.
 
     Raises:
         ValueError: If ``date`` or ``stage`` cannot be formatted.
@@ -108,6 +111,8 @@ def format_history_line(
     mto_text = _revision_display(mto_revision)
     if mto_text:
         parts.append(f"MTO {mto_text}")
+    elif mto_absent:
+        parts.append(f"MTO {F_LINE_MTO_ABSENT}")
     if from_robot_auto:
         parts.append("auto")
     return " ".join(parts)
@@ -396,7 +401,9 @@ def _truncated_stub_upgrades_to(existing: KitEvent, new_event: KitEvent) -> bool
     if existing_trm - new_trm:
         return False
     rest = _line_rest_after_date(existing.raw)
-    rest, _mto_rev, _mto_app, _auto = strip_history_line_suffix(rest)
+    rest, _mto_rev, _mto_app, _mto_absent, _auto = strip_history_line_suffix(
+        rest
+    )
     if not rest:
         return True
     if not existing.transmittals:

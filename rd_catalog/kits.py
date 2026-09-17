@@ -108,12 +108,14 @@ _REV_IN_TEXT_RE = re.compile(
     r"рев\.?\s*(\d{1,2}(?:-AN\d{1,2})?|[VS]|[A-Z])",
     re.IGNORECASE,
 )
-# Trailing F-line suffix: ``MTO <rev>`` then optional ``auto``. Do not write
-# ``рев.`` here so ``_REV_IN_TEXT_RE`` still binds OD from ``на рев. X``.
+# Trailing F-line suffix: ``MTO <rev|Нет>`` then optional ``auto``. Do not
+# write ``рев.`` here so ``_REV_IN_TEXT_RE`` still binds OD from ``на рев. X``.
+F_LINE_MTO_ABSENT = "Нет"
 _F_LINE_REV_TOKEN = r"\d{1,2}(?:-AN\d{1,2})?|[VS]|[A-Z]"
 _F_LINE_SUFFIX_RE = re.compile(
-    rf"(?:^|\s+)(?:MTO\s+(?P<mto>{_F_LINE_REV_TOKEN})"
-    rf"(?:\s+(?P<auto>auto))?|(?P<auto_only>auto))\s*$",
+    rf"(?:^|\s+)(?:MTO\s+(?:"
+    rf"(?P<mto_absent>{F_LINE_MTO_ABSENT})|(?P<mto>{_F_LINE_REV_TOKEN})"
+    rf")(?:\s+(?P<auto>auto))?|(?P<auto_only>auto))\s*$",
     re.IGNORECASE,
 )
 
@@ -292,6 +294,7 @@ class KitEvent:
     parsed: bool
     mto_revision: str | None = None
     mto_appendix: str | None = None
+    mto_absent: bool = False
     from_robot_auto: bool = False
 
 
@@ -1025,19 +1028,19 @@ def _classify_stage(text: str) -> tuple[str, str]:
 
 def strip_history_line_suffix(
     text: str,
-) -> tuple[str, str | None, str | None, bool]:
-    """Strip a trailing ``MTO <rev>`` / ``auto`` suffix from an F-line rest.
+) -> tuple[str, str | None, str | None, bool, bool]:
+    """Strip a trailing ``MTO <rev|Нет>`` / ``auto`` suffix from an F-line rest.
 
     Either token may be absent. ``auto`` is not a transmittal. The MTO token
     is never written with ``рев.``, so OD still comes from the first ``рев.``
-    in the core.
+    in the core. ``MTO Нет`` means the transfer named no MTO file.
 
     Args:
         text: Text after the date (or any F-line remainder).
 
     Returns:
-        ``(core, mto_revision, mto_appendix, from_robot_auto)``. ``core`` is
-        ``text`` without the end suffix; missing tokens are ``None`` / False.
+        ``(core, mto_revision, mto_appendix, mto_absent, from_robot_auto)``.
+        ``core`` is ``text`` without the end suffix.
     """
 
     original = text or ""
@@ -1046,28 +1049,30 @@ def strip_history_line_suffix(
     )
     match = _F_LINE_SUFFIX_RE.search(normalized)
     if match is None:
-        return original.rstrip(), None, None, False
+        return original.rstrip(), None, None, False, False
     core = normalized[: match.start()].rstrip()
+    mto_absent = bool(match.group("mto_absent"))
     mto_raw = match.group("mto")
     mto_revision, mto_appendix = (None, None)
-    if mto_raw:
+    if mto_raw and not mto_absent:
         mto_revision, mto_appendix = parse_sheet_revision(mto_raw)
     from_robot_auto = bool(match.group("auto") or match.group("auto_only"))
-    return core, mto_revision, mto_appendix, from_robot_auto
+    return core, mto_revision, mto_appendix, mto_absent, from_robot_auto
 
 
 def parse_history_line(line: str) -> KitEvent:
     """Parse one column-F line into date / stage / rev / transmittal.
 
-    A trailing suffix ``MTO <rev> [auto]`` is stripped from the rest before
-    stage, OD ``рев.``, and TRM classification.
+    A trailing suffix ``MTO <rev|Нет> [auto]`` is stripped from the rest
+    before stage, OD ``рев.``, and TRM classification.
 
     Args:
         line: Raw history line.
 
     Returns:
         Best-effort event; ``parsed`` is False when nothing was recognized.
-        ``mto_revision`` / ``from_robot_auto`` come from the end suffix.
+        ``mto_revision`` / ``mto_absent`` / ``from_robot_auto`` come from
+        the end suffix.
     """
 
     raw = (line or "").strip()
@@ -1078,8 +1083,8 @@ def parse_history_line(line: str) -> KitEvent:
         date = dated.group(1)
         rest = dated.group(2).strip()
     rest_norm = normalize_unicode_dashes(rest).replace("АН", "AN").replace("ан", "AN")
-    core, mto_revision, mto_appendix, from_robot_auto = strip_history_line_suffix(
-        rest_norm
+    core, mto_revision, mto_appendix, mto_absent, from_robot_auto = (
+        strip_history_line_suffix(rest_norm)
     )
     stage, stage_label = _classify_stage(core)
     if stage == "other" and not core:
@@ -1105,6 +1110,7 @@ def parse_history_line(line: str) -> KitEvent:
         parsed=parsed,
         mto_revision=mto_revision,
         mto_appendix=mto_appendix,
+        mto_absent=mto_absent,
         from_robot_auto=from_robot_auto,
     )
 

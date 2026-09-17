@@ -303,6 +303,7 @@ def main() -> None:
     )
     auto_only_event = parse_history_line(auto_only)
     assert auto_only_event.mto_revision is None
+    assert auto_only_event.mto_absent is False
     assert auto_only_event.from_robot_auto is True
     assert auto_only_event.transmittals == ("AGCC-BCC-TRM-000999",)
     cased = parse_history_line(
@@ -312,6 +313,41 @@ def main() -> None:
     assert cased.mto_revision == "03"
     assert cased.from_robot_auto is True
     assert cased.transmittals == ("AGCC-BCC-TRM-000999",)
+
+    absent = format_history_line(
+        date="09.09.2026",
+        stage="code_a",
+        revision="04",
+        transmittal="AGCC-BCC-TRM-000999",
+        mto_absent=True,
+        from_robot_auto=True,
+    )
+    assert absent == (
+        "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO Нет auto"
+    )
+    absent_event = parse_history_line(absent)
+    assert absent_event.revision == "04"
+    assert absent_event.mto_revision is None
+    assert absent_event.mto_absent is True
+    assert absent_event.from_robot_auto is True
+    assert absent_event.transmittals == ("AGCC-BCC-TRM-000999",)
+    cased_absent = parse_history_line(
+        "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 mto нет AUTO"
+    )
+    assert cased_absent.mto_absent is True
+    assert cased_absent.mto_revision is None
+    assert cased_absent.from_robot_auto is True
+    rev_wins = format_history_line(
+        date="09.09.2026",
+        stage="code_a",
+        revision="04",
+        transmittal="AGCC-BCC-TRM-000999",
+        mto_revision="03",
+        mto_absent=True,
+        from_robot_auto=True,
+    )
+    assert "MTO 03" in rev_wins
+    assert "MTO Нет" not in rev_wins
 
     an_suffix = format_history_line(
         date="09.09.2026",
