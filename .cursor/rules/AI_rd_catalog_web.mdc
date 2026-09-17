@@ -7,7 +7,7 @@ alwaysApply: false
 # RD Catalog — WEB + dual GUI
 
 Алгоритмы и схема: [AI_rd_catalog.mdc](.cursor/rules/AI_rd_catalog.mdc), [AI_rd_catalog_db.mdc](.cursor/rules/AI_rd_catalog_db.mdc). Этот файл — **манифест двух клиентов** (Qt и браузер) над одним join-слоем.
-WEB биндит те же `pipeline_*_tooltip` / новые labels из [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py) ([AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc)); Ctrl+клик — только Qt, у WEB нет.
+WEB биндит те же versioned `pipeline_review_label` / `pipeline_approval_label` и `pipeline_*_tooltip` из [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py) ([AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc); константа `PIPELINE_DISPLAY_VERSION` в [`rd_catalog/pipeline.py`](rd_catalog/pipeline.py)). Не дописывать ` · B` / `—` / stale-суффикс в JS. Ctrl+клик — только Qt, у WEB нет.
 
 ## 1. Слои (не смешивать)
 
@@ -94,6 +94,7 @@ v1 листы WEB: **Комплекты** (с карточкой) и **АН**. �
 - Новая подпись ячейки есть в `monitor_views` и тесте?
 - Qt/JS не считают ревизию / цель Авто МТО заново?
 - WEB не вызывает rebuild/scan/Google ingest?
+- Подписи рассмотрения/согласования пришли из `monitor_views` (тот же `PIPELINE_DISPLAY_VERSION`), не из JS?
 - Schema 9 / algorithm versions не bump «ради экрана»?
 - Per-rev TDO ≠ kit-level TDO?
 

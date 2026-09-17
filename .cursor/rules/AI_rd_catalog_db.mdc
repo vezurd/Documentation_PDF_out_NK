@@ -275,7 +275,7 @@ NN is the **folder sequence**, not the document revision. One filename revision 
 
 Two independent fields on the **last official cycle of `official_revision_text`** (last send of that rev; if no RD, latest **effective** issuance rev of that official rev). `_last_official_cycle` must **not** fall back to a send of another rev when overlay is working.
 
-Kit-level review **text** is `pipeline_review_label`: `{статус}[(pass date)] · РД {official_revision_text}[ · отпр. {send_date}][ (AB)]` (e.g. `Согласован · РД 01-AN01 · отпр. 18.11.2025`, `Прошел ТДО (05.08.2026) · РД 02`). `РД` is the official package in the RD folder (same as column «РД · рев.»), not working and not Google D/E. Pass date is in parentheses after `Прошел ТДО` when known. Folder-tree `review_full` stays `pipeline_status_label` only (no РД, no dates). Full cell/Подсказки contract: [AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc).
+Kit-level cell strings are `pipeline_review_label` / `pipeline_approval_label`. Display version is `PIPELINE_DISPLAY_VERSION` in [`rd_catalog/pipeline.py`](rd_catalog/pipeline.py) (v2 active; flip to `PIPELINE_DISPLAY_V1` to restore previous labels). `_review_status` / `code_stale` are unchanged. `РД` is the official package in the RD folder (same as column «РД · рев.»), not working and not Google D/E. Folder-tree `review_full` stays `pipeline_status_label` only (no РД, no dates, no B/C). Full cell/Подсказки contract: [AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc).
 
 ### Статус рассмотрения (`kit_pipeline.status`)
 
@@ -295,7 +295,7 @@ Meaning:
 - incoming/TDO passed on **this cycle**, and this cycle has neither code A nor F `agreed` → `tdo_review` (**even if an actual B/C hangs on the kit**)
 - this cycle has code A **or** F `agreed` → `agreed`
 
-F «согласовано» without letter A: review `agreed`; approval column writes `A · {official rev} · {agreed date}` (current).
+F «согласовано» without letter A: review `agreed`; stored `code` is `A` (v2 approval shows `—`; the letter is the review status).
 
 If the official-cycle package `is_as_build`: append ` (AB)` to the review **text**. Color unchanged. As-build is an ordinary later issuance, not a special status. After a new as-build cycle, a previous A is **stale** (grey), not green “IFC still alive”. Issued as-build that **matches** last send stays official with `(AB)` (5500-style), not working.
 
@@ -309,16 +309,17 @@ Code is **current** if it belongs to the current review cycle:
 - else same filename rev **and** the last official cycle did **not** start after the code (no later send/TDO of this official rev with a different TRM / later date than the code)
 - do **not** treat a code as current only because filename rev matches when the send TRM differs and the code date is earlier than this cycle’s send/TDO (9000-KSB)
 
-Code is **stale** (`code_stale=1`, grey) when a letter exists but it is not this cycle: other TRM, lower rev, or same rev with a later TDO/send (9000-KSB). Current text is `A · 01-AN01 · 04.12.2025` (`pipeline_approval_label`: letter · code rev · DD.MM.YYYY; omit missing parts). Stale vs current is still **color** (`approval_stale` vs `code_a`/`b`/`c`); stale **text** also appends `новее диска` / `прошлый цикл` / `без рев. в F` / `не этого цикла` (`pipeline_approval_relation`). Tooltip outline: [AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc) (`pipeline_review_tooltip` / `pipeline_approval_tooltip` in [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py)).
+Code is **stale** (`code_stale=1`) when a letter exists but it is not this cycle: other TRM, lower rev, or same rev with a later TDO/send (9000-KSB). Cell strings and tooltip outline: [AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc) (`pipeline_review_tooltip` / `pipeline_approval_tooltip` in [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py)). v2 shows the letter in approval only when stale (`pipeline_approval_shows_letter`); current B/C sit on review after the pass date; current A is not duplicated.
 
 **Colors (cells only, never the whole row):**
 
 - review: existing `not_uploaded` / `sent_tdo` / `tdo_review`; `agreed` uses `#137333` (F-palette key `agreed`)
-- current approval: `code_a` green, `code_b` orange, `code_c` red
+- v1 current approval: `code_a` green, `code_b` orange, `code_c` red
 - stale approval: palette key `approval_stale` (~`#80868b`)
-- empty approval: unpainted
+- empty approval (including v2 this-cycle letters): unpainted
 
-Expected 9000-KSB: review **Прошел ТДО (… ) · РД …**, approval grey `B · … · 20.08.2026 · прошлый цикл`.
+Expected 9000-KSB: review **Прошел ТДО (… ) · РД …** (no B), approval grey `B · … · 20.08.2026 · прошлый цикл`.
+Expected 7700-POS current B (v2): review **Прошел ТДО (10.06.2026) · B · РД 01 · отпр. 01.06.2026**, approval `—`.
 
 **Heatmap keeps `working` / `W` and `annulled` / `Ан`:** `kit_revision_cell.pipeline_status` still uses per-filename-rev `_last_code_on_revision` then TDO/sent (`code_a|b|c` / `tdo_review` / …), then working — **except** a fully-annulled filename rev is `annulled` first (no F letter on that cell). A cell on rev `0` may still show letter B when a non-annulled package remains. Do not recolor READY/WARNING. Documents-tree badge is the folder **review** status (not the approval letter; `review_full` has no kit-level rev). Kit-level review labels include official rev via `pipeline_review_label`.
 
@@ -326,7 +327,7 @@ Expected 9000-KSB: review **Прошел ТДО (… ) · РД …**, approval g
 
 - **A** → always `customer` (Заказчик).
 - **B/C** → if a **later official** send or later RD package has a **higher** filename revision → `customer`; if the next official send keeps the **same** revision → `pi`. Otherwise `unknown`.
-- Approval column always shows `letter · rev · date` (or `—`); stale appends the relation suffix; origin is tooltip only.
+- Approval letter display is versioned (`pipeline_approval_shows_letter`); origin is tooltip only.
 
 ### Working revision (not an error)
 
@@ -336,7 +337,7 @@ It is **not** liquidity and must not be painted as a pipeline error. It is also 
 
 When overlay is working: official = last issued rev that still exists on a non-working **and non-annulled** package (may be the same filename rev as the working folder). Do not grey a code merely because `working_revision_text` is higher. `REV_MISMATCH` vs Google D remains a highlight of sheet vs **official** RD (kits matrix uses official ids). The issuance object passed into `build_kit_matrix` is the **effective** latest (`latest_effective_issuance_kits`), not a raw snapshot row.
 
-Example 2000-KSB: review **Согласован · РД 01-AN01**, approval **A · 01-AN01 · 21.11.2025**, «РД · рев.» **01-AN01**, «Рабочая рев. РД» **01-AN02 AB**, heatmap 01-AN02 still `W·AB`.
+Example 2000-KSB: review **Согласован · РД 01-AN01**, approval **—** (v2 current A), «РД · рев.» **01-AN01**, «Рабочая рев. РД» **01-AN02 AB**, heatmap 01-AN02 still `W·AB`.
 
 ### Annulled folder (not a journal decision)
 
