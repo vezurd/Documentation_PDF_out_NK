@@ -69,6 +69,7 @@ class IssuanceJournalRow:
     in_auto_mto: bool
     review_id: int | None
     issuance_send_id: int | None
+    sheet_row_index: int = 0
 
 
 def _canon(value: str | None) -> str:
@@ -926,6 +927,7 @@ def _journal_row(
     in_auto_mto: bool = False,
     review_id: int | None = None,
     issuance_send_id: int | None = None,
+    sheet_row_index: int = 0,
 ) -> IssuanceJournalRow:
     return IssuanceJournalRow(
         title=title,
@@ -954,6 +956,7 @@ def _journal_row(
         in_auto_mto=in_auto_mto,
         review_id=review_id,
         issuance_send_id=issuance_send_id,
+        sheet_row_index=sheet_row_index,
     )
 
 
@@ -1012,6 +1015,7 @@ def _overlay_send_row(
         in_auto_mto=flags[3],
         review_id=review_id,
         issuance_send_id=send_id,
+        sheet_row_index=send.row_index,
     )
 
 

@@ -2,8 +2,9 @@
 
 Qt-free. Locate the kit by live columns A+B, never by a cached ``row_index``.
 Pin the kits worksheet (header ``титул``, not the leftmost tab) before
-``values.batchUpdate``. Does not create rows and does not touch
-«Выдача РД ПД».
+``values.batchUpdate``. Persist gid+title to ``google_sheet_pins.json``
+when ``runtime_dir`` already exists (cell-jump URLs). Does not create
+rows and does not touch «Выдача РД ПД».
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from urllib.parse import quote
 from rd_catalog.config import CatalogConfig
 from rd_catalog.f_journal import JournalPatch, build_journal_patch, journal_write_needed
 from rd_catalog.google_kits import kits_tls_relaxed
+from rd_catalog.google_sheet_links import save_kits_sheet_pin
 from rd_catalog.kits import GoogleKit, kit_identity_key, parse_google_kit_row
 
 DEFAULT_SERVICE_ACCOUNT_PATH = (
@@ -443,6 +445,14 @@ def execute_journal_writes(
         ]
     except GoogleWriteError as exc:
         return tuple(_failed_write_result(job, str(exc)) for job in jobs)
+    runtime = Path(config.runtime_dir)
+    if runtime.is_dir():
+        save_kits_sheet_pin(
+            runtime,
+            spreadsheet_id=pin.spreadsheet_id,
+            sheet_id=pin.sheet_id,
+            title=pin.title,
+        )
     groups: dict[tuple[str, str], list[int]] = {}
     kit_order: list[tuple[str, str]] = []
     for index, job in enumerate(jobs):

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import re
-import textwrap
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from datetime import datetime
@@ -75,6 +74,13 @@ from rd_catalog.db import (
     KitRevisionRow,
 )
 from rd_catalog.google_kits import load_cached_google_kits
+from rd_catalog.google_sheet_links import (
+    GOOGLE_HREF_TIP,
+    SheetLinkContext,
+    journal_cell_href,
+    kits_google_hrefs,
+    sheet_link_context_from_config,
+)
 from rd_catalog.issuance_review import (
     IssuanceJournalRow,
     JournalAutoMtoHit,
@@ -198,8 +204,10 @@ KITS_OK_TOOLTIP = (
     "Комплексный признак «хорошего» комплекта: сводка «Совпадает», "
     "совпали Выдача / Google F / робот / MTO с официальной РД, "
     "диск не отстаёт от письма A, рассмотрение «Согласован», "
-    "текущий код A. Жёлтые Авто МТО / сверка, пустые SQ и рабочая, "
-    "проблемы старых ревизий MTO не мешают. Сортировка: «да» сверху."
+    "текущий код A.\n"
+    "Жёлтые Авто МТО / сверка, пустые SQ и рабочая, "
+    "проблемы старых ревизий MTO не мешают.\n"
+    "Сортировка: «да» сверху."
 )
 
 KITS_HEADERS = (
@@ -250,6 +258,22 @@ KITS_TIPS_WRAP_WIDTH = 100
 _FS_PATH_START_RE = re.compile(
     r"(?:\\\\|(?:(?<=\s)|^)(?:[A-Za-z]:[\\/]|//))"
 )
+_TIPS_TERMINATOR_RE = re.compile(r"[.!?]+[»\"”)\]]*")
+_TIPS_ABBREVS = frozenset(
+    {
+        "рев",
+        "согл",
+        "др",
+        "стр",
+        "рис",
+        "см",
+        "гг",
+        "т.д",
+        "т.п",
+        "т.е",
+        "н.п",
+    }
+)
 _REVIEW_PASS_STAGES = frozenset({"tdo_passed", "incoming_passed"})
 _REVIEW_SEND_STAGES = frozenset({"tdo_sent", "incoming_sent"})
 _APPROVAL_CODE_STAGES = frozenset({"code_a", "code_b", "code_c"})
@@ -287,13 +311,14 @@ ISSUANCE_EXCLUDE_TOOLTIP = {
 OFFICIAL_FOLDER_MTO_MISSING = "нет"
 KITS_MTO_REV_TOOLTIP = (
     "Файл MTO в официальной папке передачи (имя файла, даже если оно "
-    "отстаёт от OD). Нет файла в этой папке — «нет»; предыдущие NN "
-    "не подставляются. Эталон для Авто МТО / сверки / АН МТО."
+    "отстаёт от OD).\n"
+    "Нет файла в этой папке — «нет»; предыдущие NN не подставляются.\n"
+    "Эталон для Авто МТО / сверки / АН МТО."
 )
 KITS_WORKING_REV_TOOLTIP = (
     "Ревизия строго выше официальной «РД · рев.» "
-    "(на диске выше последней выдачи или папка помечена вручную). "
-    "Суффикс AB — рабочая папка as-build. "
+    "(на диске выше последней выдачи или папка помечена вручную).\n"
+    "Суффикс AB — рабочая папка as-build.\n"
     "Не участвует в комплектах, выгрузке спецификаций и сверке MTO."
 )
 _MTO_COMPARE_PENDING_TIP = (
@@ -443,7 +468,10 @@ _JSON_SKIP_TYPES = (
 
 @dataclass(frozen=True, slots=True)
 class MonitorCell:
-    """One painted table cell shared by Qt and WEB."""
+    """One painted table cell shared by Qt and WEB.
+
+    ``href`` is a Google Sheets jump URL for TRM / Google-backed cells.
+    """
 
     text: str
     tooltip: str = ""
@@ -453,15 +481,16 @@ class MonitorCell:
     underline: bool = False
     sort_key: object | None = None
     palette_key: str | None = None
+    href: str = ""
 
 
 KITS_PAINT_LEGEND_BUTTON = "Показать легенду"
 KITS_PAINT_LEGEND_TITLE = "Легенда таблицы Комплекты"
 KITS_PAINT_LEGEND_INTRO = (
-    "Жирный шрифт — не «важнее», а совпадение с эталоном. "
+    "Жирный шрифт — не «важнее», а совпадение с эталоном.\n"
     "Он есть у «Авто МТО», «Сверка Авто МТО», «АН МТО» "
     "и у «Робот МТО · рев.» когда содержимое совпало с MTO РД "
-    "(ревизия при этом может отличаться). "
+    "(ревизия при этом может отличаться).\n"
     "У «MTO · рев.» смотрите цвет, не насыщенность букв."
 )
 
@@ -2047,10 +2076,10 @@ def format_kits_row_tooltips(
         cells: Painted cells keyed by ``KITS_HEADERS``.
 
     Returns:
-        Monospace-friendly plain text for the Подсказки pane. Long prose
-        is wrapped to :data:`KITS_TIPS_WRAP_WIDTH`; tab tables and
-        filesystem paths (including spaces in folder names) stay on one
-        line.
+        Monospace-friendly plain text for the Подсказки pane. Prose
+        becomes one sentence (or ``; `` clause) per line; never
+        ``textwrap`` mid-phrase. Tab tables and filesystem paths stay
+        on one line.
     """
 
     blocks: list[str] = [f"{title}-{mark}"]
@@ -2097,11 +2126,11 @@ def _kits_tips_path_split(line: str) -> tuple[str, str] | None:
     return line[: match.start()], line[match.start() :]
 
 
-def _kits_tips_keep_raw(line: str, width: int) -> bool:
+def _kits_tips_keep_raw(line: str) -> bool:
     """Return True when a Подсказки line must stay unwrapped."""
 
     stripped = line.strip()
-    if not stripped or len(line) <= width:
+    if not stripped:
         return True
     if stripped.startswith("===") and stripped.endswith("==="):
         return True
@@ -2112,36 +2141,108 @@ def _kits_tips_keep_raw(line: str, width: int) -> bool:
     return False
 
 
+def _kits_tips_token_before(prefix: str) -> str:
+    match = re.search(r"([^\s«\"“(\[]+)$", prefix.rstrip())
+    if match is None:
+        return ""
+    return re.sub(r"[)»\"”\]]+$", "", match.group(1)).casefold()
+
+
+def _kits_tips_is_abbrev_stop(prefix: str) -> bool:
+    token = _kits_tips_token_before(prefix)
+    if token in _TIPS_ABBREVS:
+        return True
+    if token in {"д", "п", "е"} and prefix.rstrip().casefold().endswith(
+        f"т.{token}"
+    ):
+        return True
+    return False
+
+
+def _split_kits_tips_sentences(text: str) -> list[str]:
+    """Split prose at real sentence ends, keeping ``рев. РД`` intact."""
+
+    text = text.strip()
+    if not text:
+        return []
+    pieces: list[str] = []
+    start = 0
+    for match in _TIPS_TERMINATOR_RE.finditer(text):
+        after = match.end()
+        prefix = text[start:match.start()]
+        if _kits_tips_is_abbrev_stop(prefix):
+            continue
+        rest = text[after:]
+        if rest:
+            spaces = len(rest) - len(rest.lstrip())
+            if spaces == 0:
+                continue
+            nxt = rest[spaces : spaces + 1]
+            if not (nxt.isupper() or nxt in "«\"“"):
+                continue
+            pieces.append(text[start:after].strip())
+            start = after + spaces
+            continue
+        pieces.append(text[start:after].strip())
+        start = after
+    tail = text[start:].strip()
+    if tail:
+        pieces.append(tail)
+    return pieces or [text]
+
+
+def _split_kits_tips_clauses(sentence: str, *, width: int) -> list[str]:
+    """Split a long sentence on ``; ``, keeping the semicolon."""
+
+    text = sentence.strip()
+    if len(text) <= width or "; " not in text:
+        return [text]
+    parts = text.split("; ")
+    clauses: list[str] = []
+    for index, part in enumerate(parts):
+        piece = part.strip()
+        if not piece:
+            continue
+        if index < len(parts) - 1 and not piece.endswith(";"):
+            piece = f"{piece};"
+        clauses.append(piece)
+    return clauses or [text]
+
+
 def _wrap_kits_tips_prose(line: str, width: int) -> str:
-    if len(line) <= width:
-        return line
+    """Put each sentence (and long ``; `` clause) on its own line.
+
+    Never ``textwrap.fill``: mid-phrase breaks like ``или / по дате``
+    are forbidden.
+    """
+
     indent = _kits_tips_leading_indent(line)
-    return textwrap.fill(
-        line.strip(),
-        width=width,
-        initial_indent=indent,
-        subsequent_indent=indent,
-        break_long_words=False,
-        break_on_hyphens=False,
-    )
+    sentences = _split_kits_tips_sentences(line.strip())
+    if not sentences:
+        return line
+    packed: list[str] = []
+    for sentence in sentences:
+        for clause in _split_kits_tips_clauses(sentence, width=width):
+            packed.append(f"{indent}{clause}")
+    return "\n".join(packed)
 
 
 def wrap_kits_tips_text(
     text: str, width: int = KITS_TIPS_WRAP_WIDTH
 ) -> str:
-    """Wrap long prose in Подсказки; keep tables, headers, and paths.
+    """Wrap Подсказки prose at sentence / clause ends; keep paths.
 
     Filesystem paths are peeled onto their own line and never wrapped,
-    even when a folder name contains spaces.
+    even when a folder name contains spaces. Several short sentences
+    are not packed onto a width budget: one phrase, one line.
 
     Args:
         text: Pane text from :func:`format_kits_row_tooltips`.
-        width: Target line length in characters. Default 100 — readable
-            on the bottom pane without wrapping so tightly that Russian
-            phrases break every few words.
+        width: Soft length after which a sentence may also split on
+            ``; ``. Not a ``textwrap`` fill width.
 
     Returns:
-        The same text with prose lines filled to ``width``.
+        The same text with sentence-aware line breaks.
     """
 
     if not text:
@@ -2163,7 +2264,7 @@ def wrap_kits_tips_text(
             else:
                 wrapped.append(line)
             continue
-        if _kits_tips_keep_raw(line, width):
+        if _kits_tips_keep_raw(line):
             wrapped.append(line)
             continue
         wrapped.append(_wrap_kits_tips_prose(line, width))
@@ -2607,6 +2708,7 @@ def load_catalog_monitor(
         ifc_by_kit = current_ifc_revision_map(worklist_rows)
         excluded_sends = _excluded_issuance_sends(database)
         an_cache = load_an_content_compare_cache(config.runtime_dir)
+        sheet_links = sheet_link_context_from_config(config)
 
         kits: list[KitsMonitorRow] = []
         for row in kit_rows:
@@ -2628,6 +2730,7 @@ def load_catalog_monitor(
                     mto_content_equal=mto_content.get(key),
                     ifc_by_kit=ifc_by_kit,
                     excluded_sends=excluded_sends.get(key, ()),
+                    sheet_links=sheet_links,
                 )
             )
 
@@ -2742,7 +2845,11 @@ def load_catalog_monitor(
                     continue
                 matrix = kit_by_key.get(key)
                 issuance = matrix.issuance if matrix is not None else None
-                journal.append(_build_journal_row(row, issuance=issuance))
+                journal.append(
+                    _build_journal_row(
+                        row, issuance=issuance, sheet_links=sheet_links
+                    )
+                )
 
         readiness: list[MtoReadinessMonitorRow] = []
         if "readiness" in wanted:
@@ -3853,6 +3960,7 @@ def build_kits_monitor_row(
     mto_content_equal: bool | None,
     ifc_by_kit: Mapping[tuple[str, str], str],
     excluded_sends: Sequence[Any],
+    sheet_links: SheetLinkContext | None = None,
 ) -> KitsMonitorRow:
     key = kit_identity_key(row.title, row.mark)
     google = row.google
@@ -4163,6 +4271,17 @@ def build_kits_monitor_row(
             elif origin.matched is True and origin.rd and origin.reason:
                 cell = _append_tooltip(cell, origin.reason)
         cells[header] = cell
+    if sheet_links is not None:
+        for header, href in kits_google_hrefs(
+            google=google, issuance=issuance, links=sheet_links
+        ).items():
+            cell = cells.get(header)
+            if cell is None or not href:
+                continue
+            cells[header] = replace(
+                _append_tooltip(cell, GOOGLE_HREF_TIP),
+                href=href,
+            )
     haystack = join_haystack(
         row.title,
         row.mark,
@@ -4881,6 +5000,7 @@ def _build_journal_row(
     row: IssuanceJournalRow,
     *,
     issuance: IssuanceKit | None = None,
+    sheet_links: SheetLinkContext | None = None,
 ) -> JournalMonitorRow:
     cells = {
         "Титул": MonitorCell(text=row.title),
@@ -4907,6 +5027,15 @@ def _build_journal_row(
             text=JOURNAL_MATCH_LABELS.get(row.match_state, row.match_state)
         ),
     }
+    if sheet_links is not None:
+        for header, cell in list(cells.items()):
+            href = journal_cell_href(header, row.sheet_row_index, sheet_links)
+            if not href:
+                continue
+            cells[header] = replace(
+                _append_tooltip(cell, GOOGLE_HREF_TIP),
+                href=href,
+            )
     haystack = join_haystack(
         row.title,
         row.mark,

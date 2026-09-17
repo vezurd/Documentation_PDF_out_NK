@@ -78,18 +78,34 @@
     return sa.localeCompare(sb, "ru", { numeric: true, sensitivity: "base" });
   }
 
+  function googleHrefOf(value) {
+    if (!value || typeof value !== "object") return "";
+    const href = typeof value.href === "string" ? value.href.trim() : "";
+    if (href.indexOf("https://docs.google.com/spreadsheets/d/") !== 0) {
+      return "";
+    }
+    return href;
+  }
+
+  function openGoogleHref(href) {
+    if (!href) return;
+    window.open(href, "_blank", "noopener,noreferrer");
+  }
+
   function paintCell(el, value) {
     el.style.backgroundColor = "";
     el.style.color = "";
     el.style.fontWeight = "";
     el.style.textDecoration = "";
     el.removeAttribute("title");
+    el.classList.remove("cell-google-href");
     if (!value || typeof value !== "object") return;
     if (value.fill) el.style.backgroundColor = value.fill;
     if (value.foreground) el.style.color = value.foreground;
     if (value.bold) el.style.fontWeight = "700";
     if (value.underline) el.style.textDecoration = "underline";
     if (value.tooltip) el.title = value.tooltip;
+    if (googleHrefOf(value)) el.classList.add("cell-google-href");
   }
 
   function cellFormatter(cell) {
@@ -166,12 +182,21 @@
     if (cell) {
       const field = cell.getField() || "";
       const text = cellText(cell.getValue());
+      const href = googleHrefOf(cell.getValue());
       if (looksLikePath(field, text)) {
         items.push({ separator: true });
         items.push({
           label: "Копировать путь",
           action: function () {
             copyText(text);
+          },
+        });
+      }
+      if (href) {
+        items.push({
+          label: "Открыть в Google",
+          action: function () {
+            openGoogleHref(href);
           },
         });
       }
@@ -369,6 +394,9 @@
     });
     table.on("dataLoaded", function () {
       updateCount(tabId);
+    });
+    table.on("cellClick", function (_e, cell) {
+      openGoogleHref(googleHrefOf(cell.getValue()));
     });
     if (tabId === "kits") {
       table.on("rowClick", function (_e, row) {

@@ -35,6 +35,13 @@ from PySide6.QtWidgets import (
 from rd_catalog.context_menu_qt import exec_tracked_menu
 from rd_catalog.context_menu_usage import MENU_ISSUANCE_JOURNAL
 from rd_catalog.db import CatalogDatabase
+from rd_catalog.google_sheet_links import (
+    GOOGLE_HREF_TIP,
+    SheetLinkContext,
+    journal_cell_href,
+    open_google_sheet_url,
+)
+from rd_catalog.google_sheet_links_qt import attach_google_href_clicks
 from rd_catalog.issuance_review import (
     IssuanceJournalRow,
     add_manual_journal_row,
@@ -437,7 +444,18 @@ class IssuanceJournalTab(QWidget):
         self._rows: tuple[IssuanceJournalRow, ...] = ()
         self._is_banned: Callable[[str, str], bool] = lambda _t, _m: False
         self._allowed_kits: set[tuple[str, str]] | None = None
+        self._sheet_links: SheetLinkContext | None = None
+        self._href_click_filter: object | None = None
         self._build()
+
+    def set_sheet_links(self, links: SheetLinkContext | None) -> None:
+        """Bind spreadsheet ids used to open TRM cells in Google Sheets.
+
+        Args:
+            links: Catalog sheet ids/titles, or None to disable jumps.
+        """
+
+        self._sheet_links = links
 
     def set_database(self, database: CatalogDatabase) -> None:
         """Bind the catalog database used to persist reviews.
@@ -532,6 +550,10 @@ class IssuanceJournalTab(QWidget):
         self._table.cellDoubleClicked.connect(self._on_cell_activated)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
+        self._href_click_filter = attach_google_href_clicks(
+            self._table,
+            self._journal_cell_href,
+        )
         layout.addWidget(self._table, 1)
 
     def set_rows(
@@ -836,7 +858,24 @@ class IssuanceJournalTab(QWidget):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             else:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            header = _HEADERS[column]
+            href = self._journal_cell_href_for_row(row, header)
+            if href:
+                item.setToolTip(GOOGLE_HREF_TIP)
             self._table.setItem(row_index, column, item)
+
+    def _journal_cell_href(self, row_index: int, column: int) -> str:
+        payload = self.row_at(row_index)
+        if payload is None or column < 0 or column >= len(_HEADERS):
+            return ""
+        return self._journal_cell_href_for_row(payload, _HEADERS[column])
+
+    def _journal_cell_href_for_row(
+        self, row: IssuanceJournalRow, header: str
+    ) -> str:
+        if self._sheet_links is None:
+            return ""
+        return journal_cell_href(header, row.sheet_row_index, self._sheet_links)
 
     def _row_matches_text(self, row: IssuanceJournalRow, needle: str) -> bool:
         if not needle:
@@ -1051,9 +1090,17 @@ class IssuanceJournalTab(QWidget):
             return
         menu = QMenu(self)
         show_kits = menu.addAction('Показать в «Комплекты»')
+        column = table.columnAt(position.x())
+        header = _HEADERS[column] if 0 <= column < len(_HEADERS) else ""
+        google_href = self._journal_cell_href_for_row(payload, header)
+        open_google = menu.addAction("Открыть в Google")
+        open_google.setEnabled(bool(google_href))
         self.prepare_context_menu.emit(menu)
         chosen = exec_tracked_menu(
             menu, MENU_ISSUANCE_JOURNAL, table.viewport().mapToGlobal(position)
         )
         if chosen == show_kits:
             self.kit_activated.emit(payload.title, payload.mark)
+            return
+        if chosen == open_google and google_href:
+            open_google_sheet_url(google_href)

@@ -15,19 +15,24 @@ from PySide6.QtWidgets import QTableWidgetItem
 from rd_catalog.monitor_views import MonitorCell
 
 ROLE_SORT = Qt.ItemDataRole.UserRole + 1
+ROLE_HREF = Qt.ItemDataRole.UserRole + 5
 _DEFAULT_FOREGROUND = "#202124"
 _LIGHT_FOREGROUND = "#ffffff"
 
 
 def _qt_tooltip(text: str) -> str:
-    """Keep tabular summary tooltips aligned in a monospace tooltip."""
+    """Keep tooltips as preformatted text so Qt does not wrap mid-phrase.
 
-    if "\t" not in text and "Пути от папки передачи:" not in text:
+    Paths, tables, and long Russian sentences stay on the author's
+    newlines. Plain Qt word-wrap would break ``или / по дате``.
+    """
+
+    if not text:
         return text
     escaped = html.escape(text, quote=False)
     return (
         "<qt><pre style=\"font-family:'Consolas','Courier New',monospace;"
-        "margin:0;tab-size:8\">"
+        "margin:0;tab-size:8;white-space:pre\">"
         f"{escaped}</pre></qt>"
     )
 
@@ -66,3 +71,4 @@ def apply_monitor_cell(
         item.setFont(font)
     if cell.sort_key is not None:
         item.setData(sort_role, cell.sort_key)
+    item.setData(ROLE_HREF, cell.href or "")

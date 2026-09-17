@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rd_catalog.config import load_config
 from rd_catalog.db import CatalogDatabase, KitPipelineRow
+from rd_catalog.google_sheet_links import SheetLinkContext
 from rd_catalog.issuance_review import IssuanceJournalRow, send_identity_fingerprint
 from rd_catalog.customer_pi_auto_mto import AutoMtoFile
 from rd_catalog.kits import (
@@ -37,7 +38,7 @@ from rd_catalog.monitor_views import (
     KITS_OK_HEADER,
     KITS_TDO_STATUSES,
     KITS_TIPS_CTRL_CLICK_HINT,
-    KITS_TIPS_WRAP_WIDTH,
+    KITS_WORKING_REV_TOOLTIP,
     OFFICIAL_FOLDER_MTO_MISSING,
     RD_AB_SUFFIX,
     RD_MISSING_TRANSFER_KEY,
@@ -824,6 +825,82 @@ class MonitorViewsTests(unittest.TestCase):
     def test_join_haystack_skips_none(self) -> None:
         self.assertEqual(join_haystack("a", None, "", "b"), "a b")
         self.assertEqual(join_haystack(None, None), "")
+
+    def test_kits_google_trm_href(self) -> None:
+        links = SheetLinkContext(
+            kits_spreadsheet_id="kits-id",
+            kits_sheet_title="Контроль выдачи ",
+            kits_sheet_id=77,
+            issuance_spreadsheet_id="iss-id",
+            issuance_sheet_title="Выдача РД ПД",
+            issuance_sheet_id=None,
+        )
+        google = replace(
+            _google_kit(title="2210", mark="KSB", sheet="01"),
+            row_index=12,
+        )
+        issuance = replace(_issuance_kit(), row_index=40, send_transmittal="")
+        painted = _paint_kits(
+            _ok_kit_row(google=google, issuance=issuance),
+            _ok_pipeline(),
+            sheet_links=links,
+        )
+        trm = painted.cells["Google · TRM F"]
+        self.assertTrue(trm.href.endswith("range=F12"), trm.href)
+        self.assertIn("gid=77", trm.href)
+        self.assertIn("Клик открывает", trm.tooltip)
+        send = painted.cells["Выдача · TRM отпр."]
+        self.assertIn("B40", send.href)
+        self.assertEqual(painted.cells["Титул"].href, "")
+
+    def test_journal_trm_href(self) -> None:
+        links = SheetLinkContext(
+            kits_spreadsheet_id="kits-id",
+            kits_sheet_title="Контроль выдачи ",
+            kits_sheet_id=None,
+            issuance_spreadsheet_id="iss-id",
+            issuance_sheet_title="Выдача РД ПД",
+            issuance_sheet_id=None,
+        )
+        issuance = _issuance_kit(title="2869", mark="SOS", rev="01-AN02")
+        issuance = replace(issuance, row_index=40, send_transmittal="TRM-2")
+        payload = dict(
+            title="2869",
+            mark="SOS",
+            kind="send",
+            source="issuance",
+            revision_text="01-AN02",
+            send_date="15.09.2026",
+            send_date_sortable="2026-09-15",
+            send_transmittal="TRM-2",
+            incoming_control_date="",
+            incoming_control_date_sortable="",
+            confirm_transmittal="",
+            sheet_status="",
+            note="",
+            decision="active",
+            comment=None,
+            match_state="matched",
+            identity_fingerprint=send_identity_fingerprint(issuance),
+            evidence_fingerprint="",
+            source_path="",
+            path_key="",
+            in_f=True,
+            in_rd=True,
+            in_robot=True,
+            in_auto_mto=False,
+            review_id=None,
+            issuance_send_id=2,
+            sheet_row_index=40,
+        )
+        painted = _build_journal_row(
+            IssuanceJournalRow(**payload),
+            issuance=issuance,
+            sheet_links=links,
+        )
+        self.assertIn("B40", painted.cells["TRM"].href)
+        self.assertIn("Клик открывает", painted.cells["TRM"].tooltip)
+        self.assertEqual(painted.cells["Титул"].href, "")
 
     def test_journal_row_paints_kits_issuance(self) -> None:
         issuance = IssuanceKit(
@@ -1665,31 +1742,79 @@ class PipelineStatusTooltipTests(unittest.TestCase):
         self.assertEqual(format_kits_tips_pane(""), "")
 
     def test_wrap_kits_tips_text_prose_not_tables(self) -> None:
-        prose = " ".join(["слово"] * 40)
+        runon = " ".join(["слово"] * 40)
         table = "NN\tроль\tпуть\\\\bcc\\eng\\very\\long\\folder\\file.xlsx"
         unc = "\\\\bcc\\eng\\" + ("dir\\" * 20) + "file.xlsx"
-        body = f"=== РД · рев. ===\n{prose}\n{table}\n{unc}\n"
+        body = f"=== РД · рев. ===\n{runon}\n{table}\n{unc}\n"
         wrapped = wrap_kits_tips_text(body)
         self.assertIn("=== РД · рев. ===", wrapped)
+        self.assertIn(runon, wrapped)
         self.assertIn(table, wrapped)
         self.assertIn(unc, wrapped)
-        for line in wrapped.splitlines():
-            if not line.strip() or line.startswith("==="):
-                continue
-            if "\t" in line or tooltip_has_fs_path(line):
-                continue
-            self.assertLessEqual(len(line), KITS_TIPS_WRAP_WIDTH, line)
-        cells = {
-            "Сводка": MonitorCell(text="Проверить передачи", tooltip=prose),
-        }
-        pane = format_kits_row_tooltips("6816", "KSB", cells)
-        self.assertGreater(pane.count("\n"), 3)
-        for line in pane.splitlines():
-            if line.startswith("===") or not line.strip():
-                continue
-            if tooltip_has_fs_path(line):
-                continue
-            self.assertLessEqual(len(line), KITS_TIPS_WRAP_WIDTH, line)
+
+    def test_wrap_kits_tips_at_sentence_ends(self) -> None:
+        wrapped = wrap_kits_tips_text(KITS_WORKING_REV_TOOLTIP)
+        self.assertNotIn("помечена\n", wrapped)
+        self.assertNotIn("\nвручную", wrapped)
+        self.assertNotIn("спецификаций и\n", wrapped)
+        self.assertNotIn("и\nсверке", wrapped)
+        lines = [line.strip() for line in wrapped.splitlines() if line.strip()]
+        self.assertEqual(
+            lines,
+            [
+                (
+                    "Ревизия строго выше официальной «РД · рев.» "
+                    "(на диске выше последней выдачи или папка помечена вручную)."
+                ),
+                "Суффикс AB — рабочая папка as-build.",
+                "Не участвует в комплектах, выгрузке спецификаций и сверке MTO.",
+            ],
+        )
+        mixed = (
+            "Эта колонка — рев. РД актуального пакета, не рабочая папка. "
+            "Вторая фраза начинается с заглавной и остаётся целиком на строке."
+        )
+        mixed_wrapped = wrap_kits_tips_text(mixed)
+        self.assertIn("рев. РД актуального", mixed_wrapped)
+        self.assertNotIn("рев.\n", mixed_wrapped)
+        mixed_lines = [
+            line.strip()
+            for line in mixed_wrapped.splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(mixed_lines), 2)
+        self.assertTrue(mixed_lines[0].endswith("папка."))
+        self.assertTrue(mixed_lines[1].startswith("Вторая фраза"))
+
+    def test_wrap_kits_tips_does_not_break_transfer_review_mid_phrase(self) -> None:
+        from rd_catalog.kits import KitSummary, _SUMMARY_HINTS
+
+        hint = _SUMMARY_HINTS[KitSummary.TRANSFER_REVIEW]
+        wrapped = wrap_kits_tips_text(hint)
+        self.assertNotIn("или\n", wrapped)
+        self.assertNotIn("\nпо дате", wrapped)
+        self.assertNotIn("редактируемые\n", wrapped)
+        self.assertNotIn("согл.\n", wrapped)
+        self.assertNotIn("\nпередаче", wrapped)
+        self.assertNotIn("состав\n", wrapped)
+        pane = format_kits_row_tooltips(
+            "7416",
+            "SKUD.1",
+            {
+                "Сводка": MonitorCell(
+                    text="Проверить передачи",
+                    tooltip=hint,
+                )
+            },
+        )
+        self.assertIn("=== Сводка ===", pane)
+        self.assertNotIn("или\nпо дате", pane)
+        self.assertTrue(
+            any(
+                line.startswith("Текущий состав")
+                for line in pane.splitlines()
+            )
+        )
 
     def test_wrap_kits_tips_does_not_split_unc_with_spaces(self) -> None:
         identity = (

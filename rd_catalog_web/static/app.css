@@ -405,6 +405,10 @@ body {
   padding: 2px 6px;
 }
 
+.tabulator-row .tabulator-cell.cell-google-href {
+  cursor: pointer;
+}
+
 .tabulator-row.tabulator-selected {
   background: #d2e3fc !important;
 }

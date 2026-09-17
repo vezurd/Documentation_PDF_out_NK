@@ -14,8 +14,6 @@ from typing import Any
 from PySide6.QtCore import (
     QByteArray,
     QDate,
-    QEvent,
-    QObject,
     QSettings,
     Qt,
     QTimer,
@@ -30,7 +28,6 @@ from PySide6.QtGui import (
     QFont,
     QIcon,
     QKeySequence,
-    QMouseEvent,
     QPainter,
     QPixmap,
     QShortcut,
@@ -80,6 +77,7 @@ from rd_catalog.an_index import (
 from rd_catalog.an_scan import AnScanProgress, _an_root_disabled
 from rd_catalog.an_scan_thread import AnScanThread
 from rd_catalog.an_tab import AnTab
+from rd_catalog.rd_dump_index import rd_dump_kind
 from rd_catalog.rd_dump_scan import (
     RdDumpScanProgress,
     _rd_root_disabled as _rd_dump_root_disabled,
@@ -239,7 +237,7 @@ from rd_catalog.path_actions import (
     open_path,
     path_is_under,
 )
-from rd_catalog.monitor_qt import ROLE_SORT, apply_monitor_cell, _qt_tooltip
+from rd_catalog.monitor_qt import ROLE_HREF, ROLE_SORT, apply_monitor_cell, _qt_tooltip
 from rd_catalog.monitor_views import (
     CARD_PACKAGE_HEADERS,
     KITS_HEADERS,
@@ -288,6 +286,12 @@ from rd_catalog.approval_mail_preview import (
 )
 from rd_catalog.approval_mail_tab import ApprovalMailTab
 from rd_catalog.google_f_write_thread import GoogleFWriteThread
+from rd_catalog.google_sheet_links import (
+    SheetLinkContext,
+    open_google_sheet_url,
+    sheet_link_context_from_config,
+)
+from rd_catalog.google_sheet_links_qt import attach_google_href_clicks
 from rd_catalog.mto_export import (
     PIN_COLUMN_HEADER,
     ExportPin,
@@ -394,7 +398,7 @@ _KITS_TIPS_PLACEHOLDER = (
     "Выберите строку, чтобы прочитать подсказки ячеек "
     "(Сводка, РД · рев. и остальные). "
     "Ctrl+клик по ячейке таблицы прокручивает блок этого столбца "
-    "к верху панели."
+    "к верху панели. Клик по TRM / ячейке Google открывает лист."
 )
 _TREE_LABEL_SETTINGS: tuple[tuple[str, str, bool], ...] = (
     ("_doc_show_mto_status", "window/doc_tree_show_mto_status", True),
@@ -697,58 +701,6 @@ def scroll_kits_tips_header_to_top(edit: QPlainTextEdit, header: str) -> int | N
     if start is None:
         return None
     return scroll_kits_tips_section_to_top(edit, start)
-
-
-class _KitsTableTipsCtrlClickFilter(QObject):
-    """Ctrl+left-click on a Комплекты cell scrolls Подсказки to that column."""
-
-    def __init__(
-        self,
-        table: QTableWidget,
-        on_ctrl_click: Callable[[int, int], None],
-    ) -> None:
-        super().__init__(table)
-        self._table = table
-        self._on_ctrl_click = on_ctrl_click
-        table.viewport().installEventFilter(self)
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        try:
-            viewport = self._table.viewport()
-        except RuntimeError:
-            return False
-        if watched is not viewport:
-            return False
-        if event.type() != QEvent.Type.MouseButtonPress:
-            return False
-        if not isinstance(event, QMouseEvent):
-            return False
-        if event.button() != Qt.MouseButton.LeftButton:
-            return False
-        if not event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            return False
-        index = self._table.indexAt(event.position().toPoint())
-        if not index.isValid():
-            return False
-        self._on_ctrl_click(index.row(), index.column())
-        return True
-
-
-def attach_kits_table_tips_ctrl_click(
-    table: QTableWidget,
-    on_ctrl_click: Callable[[int, int], None],
-) -> QObject:
-    """Install Ctrl+click on the Комплекты table to jump Подсказки by column.
-
-    Args:
-        table: Комплекты matrix.
-        on_ctrl_click: Handler ``(row, column)``; keep the filter referenced.
-
-    Returns:
-        Event filter; keep a Python reference for the widget lifetime.
-    """
-
-    return _KitsTableTipsCtrlClickFilter(table, on_ctrl_click)
 
 
 class _ReadOnlyCopyDelegate(QStyledItemDelegate):
@@ -1182,6 +1134,7 @@ class CatalogWindow(QMainWindow):
         self._google_kits: tuple[GoogleKit, ...] = ()
         self._issuance_kits: tuple[IssuanceKit, ...] = ()
         self._issuance_sends: tuple[IssuanceKit, ...] = ()
+        self._sheet_links: SheetLinkContext | None = None
         self._google_source: str = ""
         self._google_fetched_at: str = ""
         self._google_warning: str | None = None
@@ -1280,6 +1233,7 @@ class CatalogWindow(QMainWindow):
         self._issuance_journal_tab = IssuanceJournalTab(
             self, database=self.database
         )
+        self._issuance_journal_tab.set_sheet_links(self._sheet_link_context())
         self._issuance_journal_tab.kit_activated.connect(self._on_revision_matrix_kit)
         self._issuance_journal_tab.reviews_changed.connect(
             self._on_issuance_reviews_changed
@@ -1752,8 +1706,9 @@ class CatalogWindow(QMainWindow):
         )
         self._kits_tooltips = self._make_kits_mono_edit()
         self._kits_tooltips.setPlaceholderText(_KITS_TIPS_PLACEHOLDER)
-        self._kits_tips_click_filter = attach_kits_table_tips_ctrl_click(
-            self._kits_table, self._on_kits_table_ctrl_click
+        self._kits_tips_click_filter = attach_google_href_clicks(
+            self._kits_table,
+            on_ctrl_click=self._on_kits_table_ctrl_click,
         )
         self._kits_detail = self._make_kits_mono_edit()
         self._kits_detail.setPlaceholderText(
@@ -2070,7 +2025,7 @@ class CatalogWindow(QMainWindow):
             ("window/mto_worklist_header_v4", "_mto_worklist_table"),
             ("window/issuance_journal_header_v1", "_issuance_journal_table"),
             ("window/an_tab_header_v2", "_an_table"),
-            ("window/rd_dump_tab_header_v1", "_rd_dump_table"),
+            ("window/rd_dump_tab_header_v2", "_rd_dump_table"),
             # v10: «Ок» after «Марка»; do not restore v9.
             ("window/kits_header_v10", "_kits_table"),
             ("window/collision_header", "_collision_table"),
@@ -3153,6 +3108,8 @@ class CatalogWindow(QMainWindow):
             except Exception as exc:
                 self._append_log(f"Выдача · Журнал: {type(exc).__name__}: {exc}")
                 rows = ()
+            self._sheet_links = sheet_link_context_from_config(self.config)
+            self._issuance_journal_tab.set_sheet_links(self._sheet_links)
             self._issuance_journal_tab.set_rows(
                 rows,
                 is_banned=lambda title, mark: self._is_banned_pair(title, mark),
@@ -3673,7 +3630,16 @@ class CatalogWindow(QMainWindow):
             if ifc_by_kit is not None
             else self._current_ifc_revision_map(),
             excluded_sends=excluded_sends,
+            sheet_links=self._sheet_link_context(),
         )
+
+    def _sheet_link_context(self) -> SheetLinkContext:
+        """Return cached Google sheet ids/titles for cell jump URLs."""
+
+        links = getattr(self, "_sheet_links", None)
+        if links is None:
+            self._sheet_links = sheet_link_context_from_config(self.config)
+        return self._sheet_links
 
     def _refresh_kits_table(
         self,
@@ -3795,6 +3761,7 @@ class CatalogWindow(QMainWindow):
         """
 
         overlay_mto, ifc_by_kit, excluded_by_kit = self._kits_paint_context()
+        self._sheet_links = sheet_link_context_from_config(self.config)
         table = self._kits_table
         if kit_keys:
             wanted = {kit_identity_key(title, mark) for title, mark in kit_keys}
@@ -5561,6 +5528,11 @@ class CatalogWindow(QMainWindow):
                 message=f"Скопировано для Outlook: {outlook_query}",
             )
             return
+        if chosen == ctx["google_action"]:
+            href = str(ctx.get("google_href") or "")
+            if href:
+                open_google_sheet_url(href)
+            return
         if chosen == rescan_action:
             self._rescan_kit_rd(row)
             return
@@ -5674,6 +5646,20 @@ class CatalogWindow(QMainWindow):
             if outlook_query
             else "Нужны титул и марка."
         )
+        column = self._kits_table.columnAt(position.x())
+        google_href = ""
+        href_item = (
+            self._kits_table.item(row_index, column) if column >= 0 else None
+        )
+        if href_item is not None:
+            google_href = str(href_item.data(ROLE_HREF) or "")
+        google_action = menu.addAction("Открыть в Google")
+        google_action.setEnabled(bool(google_href))
+        google_action.setToolTip(
+            "Открыть эту ячейку в Google Sheets"
+            if google_href
+            else "Кликните ячейку Google / TRM с номером строки снимка."
+        )
         menu.addSeparator()
         rescan_action = menu.addAction("Пересканировать РД")
         rescan_action.setToolTip(
@@ -5726,6 +5712,8 @@ class CatalogWindow(QMainWindow):
             "outlook_query": outlook_query,
             "outlook_find_action": outlook_find_action,
             "outlook_copy_action": outlook_copy_action,
+            "google_action": google_action,
+            "google_href": google_href,
             "rescan_action": rescan_action,
             "mixed_open_action": mixed_open_action,
             "sync_action": sync_action,
@@ -7534,6 +7522,7 @@ class CatalogWindow(QMainWindow):
             ("Титул", payload.title),
             ("Марка", payload.mark),
             ("Ревизия", payload.revision_text or "—"),
+            ("Вид", rd_dump_kind(payload)),
             ("Имя", payload.name),
             ("Папка", payload.parent_dir),
             ("Путь", payload.path),
@@ -8884,8 +8873,8 @@ class CatalogWindow(QMainWindow):
         self._set_workers_enabled(False)
         self._cancel_action.setEnabled(True)
         self._progress.setRange(0, 0)
-        self._append_log("Скан РД (xlsx)…")
-        self.statusBar().showMessage("Сканирование РД (xlsx)…")
+        self._append_log("Скан РД (xlsx/doc)…")
+        self.statusBar().showMessage("Сканирование РД (xlsx/doc)…")
         self._update_action_states()
         thread.start()
 
@@ -9179,7 +9168,7 @@ class CatalogWindow(QMainWindow):
     @Slot(str)
     def _on_rd_dump_scan_error(self, message: str) -> None:
         self._append_log(message)
-        self.statusBar().showMessage("Ошибка скана РД (xlsx)")
+        self.statusBar().showMessage("Ошибка скана РД")
 
     @Slot()
     def _on_rd_dump_scan_finished(self) -> None:

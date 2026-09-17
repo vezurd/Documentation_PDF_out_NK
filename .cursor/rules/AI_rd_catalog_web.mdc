@@ -41,7 +41,7 @@ WEB **не** писатель. Пустой `kit_pipeline` → пустые ли
 
 ## 3. DTO (норматив)
 
-Общая ячейка `MonitorCell`: `text`, `tooltip`, `fill` (`#RRGGBB` или `None`), `foreground`, `bold`, `underline`, `sort_key`, `palette_key`.
+Общая ячейка `MonitorCell`: `text`, `tooltip`, `fill` (`#RRGGBB` или `None`), `foreground`, `bold`, `underline`, `sort_key`, `palette_key`, `href` (Google Sheets jump; empty if none). JS opens only `value.href` that already starts with `https://docs.google.com/spreadsheets/d/` — не собирать URL в браузере.
 
 Константы покраски (не дублировать QColor в вкладках):
 
@@ -67,7 +67,7 @@ Heatmap: universe = present + canonical layout + не skip + не ban (как `_
 
 Журнал: строки `list_issuance_journal` + display cells; haystack includes ``титул-марка``; `paints_kits_issuance` marks the row behind Комплекты «Выдача · рев.» (JS only reads the flag). WEB **без** `apply_journal_decision`.
 
-Карточка: `get_kit_card` + rollup MTO из worklist + строки пакетов (выдача/F/ликвидность/рассмотрение fill). Не расширять `KitCard` ради WEB — обёртка в `monitor_views`. Нижняя панель Комплектов: вкладка **Подсказки** по умолчанию биндит `KitsMonitorRow.tooltips_text` (`format_kits_row_tooltips`: **Сводка**, **РД · рев.**, затем остальные; рассмотрение/согласование — `pipeline_review_tooltip` / `pipeline_approval_tooltip` с именами листов F и «Выдача РД ПД»). Ctrl+клик по ячейке таблицы комплектов прокручивает блок этого столбца в «Подсказки» — только Qt. JS не переставляет колонки. Карточка пакетов — вторая вкладка.
+Карточка: `get_kit_card` + rollup MTO из worklist + строки пакетов (выдача/F/ликвидность/рассмотрение fill). Не расширять `KitCard` ради WEB — обёртка в `monitor_views`. Нижняя панель Комплектов: вкладка **Подсказки** по умолчанию биндит `KitsMonitorRow.tooltips_text` (`format_kits_row_tooltips`: **Сводка**, **РД · рев.**, затем остальные; рассмотрение/согласование — `pipeline_review_tooltip` / `pipeline_approval_tooltip` с именами листов F и «Выдача РД ПД»). Ctrl+клик по ячейке таблицы комплектов прокручивает блок этого столбца в «Подсказки» — только Qt. Клик по `href` (TRM / Google) открывает ту же ячейку Sheets, что Qt; контекст **«Открыть в Google»**. JS не переставляет колонки. Карточка пакетов — вторая вкладка.
 
 ## 4. Join уже в monitor_views
 
@@ -92,6 +92,7 @@ v1 листы WEB: **Комплекты** (с карточкой) и **АН**. �
 ## 6. Чеклист ревью (GUI или WEB)
 
 - Новая подпись ячейки есть в `monitor_views` и тесте?
+- Google jump URL пришёл из `MonitorCell.href`, а не собран в JS?
 - Qt/JS не считают ревизию / цель Авто МТО заново?
 - WEB не вызывает rebuild/scan/Google ingest?
 - Подписи рассмотрения/согласования пришли из `monitor_views` (тот же `PIPELINE_DISPLAY_VERSION`), не из JS?
