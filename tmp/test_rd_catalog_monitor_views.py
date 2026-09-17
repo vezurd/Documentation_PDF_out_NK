@@ -1050,7 +1050,7 @@ class MonitorViewsTests(unittest.TestCase):
             for item in samples
             if item.column == "Google · рев. F" and "MTO Нет" in item.text
         )
-        self.assertEqual(f_absent.text, "04 · MTO Нет auto")
+        self.assertEqual(f_absent.text, "04 · MTO Нет")
         self.assertEqual(f_absent.fill, REV_MATCH_FILL)
         ok_samples = [item for item in samples if item.column == KITS_OK_HEADER]
         self.assertEqual({item.text for item in ok_samples}, {"да", "нет"})
@@ -1999,7 +1999,8 @@ class GoogleFMtoPaintTests(unittest.TestCase):
             disk_mto="03",
         )
         f_cell = painted.cells["Google · рев. F"]
-        self.assertEqual(f_cell.text, "04 auto")
+        self.assertEqual(f_cell.text, "04")
+        self.assertNotIn("auto", f_cell.text)
         self.assertEqual(f_cell.fill, REV_MATCH_FILL)
         self.assertIn("Строка F записана автоматом (робот).", f_cell.tooltip)
         self.assertIn("auto", painted.haystack)
@@ -2011,7 +2012,8 @@ class GoogleFMtoPaintTests(unittest.TestCase):
             disk_mto="03",
         )
         auto_cell = with_mto.cells["Google · рев. F"]
-        self.assertEqual(auto_cell.text, "04 · MTO 03 auto")
+        self.assertEqual(auto_cell.text, "04 · MTO 03")
+        self.assertNotIn("auto", auto_cell.text)
         self.assertEqual(auto_cell.fill, REV_MATCH_FILL)
         self.assertIn("auto", with_mto.haystack)
 
@@ -2038,7 +2040,8 @@ class GoogleFMtoPaintTests(unittest.TestCase):
             disk_mto=None,
         )
         f_cell = painted.cells["Google · рев. F"]
-        self.assertEqual(f_cell.text, "04 · MTO Нет auto")
+        self.assertEqual(f_cell.text, "04 · MTO Нет")
+        self.assertNotIn("auto", f_cell.text)
         self.assertEqual(f_cell.fill, REV_MATCH_FILL)
         self.assertIn("MTO Нет", f_cell.tooltip)
         self.assertIn("автоматом", f_cell.tooltip)
@@ -2057,7 +2060,7 @@ class GoogleFMtoPaintTests(unittest.TestCase):
             disk_mto="03",
         )
         f_cell = painted.cells["Google · рев. F"]
-        self.assertEqual(f_cell.text, "04 · MTO Нет auto")
+        self.assertEqual(f_cell.text, "04 · MTO Нет")
         self.assertEqual(f_cell.fill, REV_DIFF_FILL)
         self.assertIn("MTO Нет", f_cell.tooltip)
         mto_cell = painted.cells["MTO · рев."]

@@ -71,7 +71,7 @@ Heatmap: universe = present + canonical layout + не skip + не ban (как `_
 
 ## 4. Join уже в monitor_views
 
-Не возвращать в Qt/JS: `auto_mto_rd_target`, `kit_an_targets`, `official_rd_rev_text` (` AB`), robot-origin fill, `format_kits_card_mto`, `package_liquidity_label`, `package_review_status`, `MtoKitFlags`, IFC tooltip, `worklist_google_cell`. Авто МТО compare: JSON-кэш или `comparisons=` с Qt-вкладки. Комплекты «Google · рев. F» (MTO/auto текст, заливка, подсказка) — `format_kits_google_f_rev` / `build_kits_monitor_row`, не JS.
+Не возвращать в Qt/JS: `auto_mto_rd_target`, `kit_an_targets`, `official_rd_rev_text` (` AB`), robot-origin fill, `format_kits_card_mto`, `package_liquidity_label`, `package_review_status`, `MtoKitFlags`, IFC tooltip, `worklist_google_cell`. Авто МТО compare: JSON-кэш или `comparisons=` с Qt-вкладки. Комплекты «Google · рев. F» (MTO текст, заливка, подсказка `auto`) — `format_kits_google_f_rev` / `build_kits_monitor_row`, не JS.
 
 ## 5. WEB пакет
 

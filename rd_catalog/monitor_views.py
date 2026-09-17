@@ -1227,8 +1227,9 @@ def kits_paint_legend(
                 ),
                 sample(
                     "Google · рев. F",
-                    "04 · MTO Нет auto",
-                    "В передаче не было файла MTO; auto — запись из робота. "
+                    "04 · MTO Нет",
+                    "В передаче не было файла MTO. Служебный auto в журнале F "
+                    "в эту ячейку не выводится (только подсказка). "
                     "Жёлтый, только если на диске MTO всё же есть.",
                     fill=REV_MATCH_FILL,
                 ),
@@ -1852,13 +1853,14 @@ def format_kits_google_f_rev(event: KitEvent | None) -> str:
 
     OD revision stays the same as ``last_event_parts`` (still a 4-tuple).
     When the F line has an MTO suffix, append `` · MTO <rev>`` or
-    `` · MTO Нет``. When ``from_robot_auto`` is set, append `` auto``.
+    `` · MTO Нет``. The journal token ``auto`` is not a revision: it stays
+    on the F line and in the tooltip, not in this cell.
 
     Args:
         event: Last Google F event, or ``None``.
 
     Returns:
-        Display text such as ``04``, ``04 · MTO 03``, ``04 · MTO Нет auto``,
+        Display text such as ``04``, ``04 · MTO 03``, ``04 · MTO Нет``,
         or ``—`` when there is nothing to show.
     """
 
@@ -1873,10 +1875,7 @@ def format_kits_google_f_rev(event: KitEvent | None) -> str:
         parts.append(f"MTO {F_LINE_MTO_ABSENT}")
     elif mto_text:
         parts.append(f"MTO {mto_text}")
-    text = " · ".join(parts)
-    if event.from_robot_auto:
-        text = f"{text} auto".strip()
-    return text or "—"
+    return " · ".join(parts) or "—"
 
 
 def _official_folder_mto_shown(text: str) -> bool:
