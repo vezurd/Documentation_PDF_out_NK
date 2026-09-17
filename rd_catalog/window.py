@@ -311,6 +311,7 @@ from rd_catalog.pipeline import (
     pipeline_algorithm_needs_rebuild,
     pipeline_approval_color_key,
     pipeline_approval_label,
+    pipeline_display_review_status,
     pipeline_review_label,
     rebuild_pipeline,
     records_in_contour,
@@ -4305,8 +4306,16 @@ class CatalogWindow(QMainWindow):
                             row.google.events if row.google is not None else ()
                         ),
                         issuance=row.issuance,
+                        google=row.google,
                     )
-                    review_color = color_for(self._status_colors, pipeline.status)
+                    review_color = color_for(
+                        self._status_colors,
+                        pipeline_display_review_status(
+                            pipeline,
+                            google=row.google,
+                            issuance=row.issuance,
+                        ),
+                    )
                     _style_kits_status_badge(
                         self._kits_card_pipeline, review_label, review_color
                     )
@@ -4319,8 +4328,12 @@ class CatalogWindow(QMainWindow):
                     if displayed_working:
                         review_hints.append(f"раб. {displayed_working}")
                     self._kits_card_pipeline.setToolTip(" · ".join(review_hints))
-                    approval_label = pipeline_approval_label(pipeline)
-                    approval_key = pipeline_approval_color_key(pipeline)
+                    approval_label = pipeline_approval_label(
+                        pipeline, google=row.google, issuance=row.issuance
+                    )
+                    approval_key = pipeline_approval_color_key(
+                        pipeline, google=row.google, issuance=row.issuance
+                    )
                     approval_color = (
                         color_for(self._status_colors, approval_key)
                         if approval_key
@@ -5496,8 +5509,6 @@ class CatalogWindow(QMainWindow):
         mixed_open_action = ctx["mixed_open_action"]
         sync_action = ctx["sync_action"]
         compare_auto = ctx["compare_auto"]
-        date_menu = ctx["date_menu"]
-        mto_record = ctx["mto_record"]
         sq_to_rd_action = ctx["sq_to_rd_action"]
         ban_action = ctx["ban_action"]
         handoff_action = ctx["handoff_action"]
@@ -5561,22 +5572,6 @@ class CatalogWindow(QMainWindow):
             return
         if chosen == compare_auto:
             self._start_kit_auto_mto_compare(row)
-            return
-        if chosen == date_menu.code:
-            if mto_record is not None:
-                self._confirm_mto_catalog_date(mto_record)
-            return
-        if chosen == date_menu.manual:
-            if mto_record is not None:
-                self._confirm_mto_catalog_date_manual(mto_record)
-            return
-        if chosen == date_menu.folder:
-            if mto_record is not None:
-                self._confirm_mto_catalog_date_folder_mean(mto_record)
-            return
-        if chosen == date_menu.clear:
-            if mto_record is not None:
-                self._clear_mto_catalog_date(mto_record)
             return
         if chosen == sq_to_rd_action:
             self._confirm_sq_to_rd(row)
@@ -5707,12 +5702,6 @@ class CatalogWindow(QMainWindow):
             and bool(self._auto_mto_files_for_kit(row.title, row.mark))
             and not self._busy()
         )
-        mto_record = self._record_by_path_key(rd_mto_path) if rd_mto_path else None
-        if mto_record is not None and str(
-            mto_record.data.get("file_kind") or ""
-        ) != FileKind.MTO_XLSX.value:
-            mto_record = None
-        date_menu = self._add_mtime_override_menu(menu, mto_record)
         sq_to_rd_action = menu.addAction("Перенести SQ в РД (новая передача)")
         sq_to_rd_action.setEnabled(bool(row.sq.present and row.sq.paths))
         menu.addSeparator()
@@ -5741,8 +5730,6 @@ class CatalogWindow(QMainWindow):
             "mixed_open_action": mixed_open_action,
             "sync_action": sync_action,
             "compare_auto": compare_auto,
-            "date_menu": date_menu,
-            "mto_record": mto_record,
             "sq_to_rd_action": sq_to_rd_action,
             "ban_action": ban_action,
             "handoff_action": handoff_action,
@@ -7337,13 +7324,20 @@ class CatalogWindow(QMainWindow):
                         else ()
                     ),
                     issuance=kit.issuance if kit is not None else None,
+                    google=kit.google if kit is not None else None,
                 )
                 if pipeline is not None
                 else "",
             ),
             (
                 "Статус согласования",
-                pipeline_approval_label(pipeline) if pipeline is not None else "",
+                pipeline_approval_label(
+                    pipeline,
+                    google=kit.google if kit is not None else None,
+                    issuance=kit.issuance if kit is not None else None,
+                )
+                if pipeline is not None
+                else "",
             ),
             (
                 "Рабочая рев. РД",
@@ -8031,7 +8025,7 @@ class CatalogWindow(QMainWindow):
         folder_files: Sequence[FileRecord] | None = None,
         hide_when_missing: bool = False,
     ) -> _MtimeOverrideMenu:
-        """Append catalog-date actions; history hides them without an MTO."""
+        """Append catalog-date actions on the documents table (not Комплекты)."""
 
         actions = _MtimeOverrideMenu()
         if mto_record is None and hide_when_missing:
