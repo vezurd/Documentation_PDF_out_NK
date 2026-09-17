@@ -332,6 +332,7 @@ def _parse_notification(
             stage=stage,
             revision=od_revision,
             transmittal=trm,
+            mto_revision=_mto_revision_from_documents(documents) or None,
         )
     return ApprovalMail(
         kind="review_codes",
@@ -397,6 +398,7 @@ def _parse_cover_letter(
             stage=stage,
             revision=od_revision or None,
             transmittal=trm,
+            mto_revision=_mto_revision_from_documents(documents) or None,
         )
     return ApprovalMail(
         kind="cover_letter",
@@ -487,6 +489,7 @@ def _parse_tdo_reply(
             stage=stage,
             revision=od_revision or None,
             transmittal=trm_for_line,
+            mto_revision=_mto_revision_from_documents(documents) or None,
         )
     return ApprovalMail(
         kind="tdo_reply",
@@ -660,6 +663,31 @@ def _is_od_filename(filename: str) -> bool:
         return (code or "").casefold() == "od"
     upper = filename.upper()
     return ".OD-" in upper or upper.endswith(".OD")
+
+
+def _is_mto_filename(filename: str) -> bool:
+    """Return whether *filename* is an AGCC MTO document.
+
+    Discipline block must start with ``mto`` (same ``AgccFilenamePatterns``
+    split as :func:`_is_od_filename`).
+    """
+
+    parts = AgccFilenamePatterns.parse_strict(filename) or AgccFilenamePatterns.parse_loose(
+        filename
+    )
+    if parts is not None:
+        code, _serial = AgccFilenamePatterns._split_discipline(parts.discipline_block)
+        return (code or "").casefold().startswith("mto")
+    upper = filename.upper()
+    return ".MTO-" in upper or upper.endswith(".MTO")
+
+
+def _mto_revision_from_documents(documents: list[MailDocument]) -> str:
+    """Return MTO filename revision from letter documents, or empty."""
+
+    return _highest_revision(
+        [item for item in documents if _is_mto_filename(item.filename)]
+    )
 
 
 def _title_mark_from_filename(filename: str) -> tuple[str, str]:

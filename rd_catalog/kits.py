@@ -108,6 +108,14 @@ _REV_IN_TEXT_RE = re.compile(
     r"рев\.?\s*(\d{1,2}(?:-AN\d{1,2})?|[VS]|[A-Z])",
     re.IGNORECASE,
 )
+# Trailing F-line suffix: ``MTO <rev>`` then optional ``auto``. Do not write
+# ``рев.`` here so ``_REV_IN_TEXT_RE`` still binds OD from ``на рев. X``.
+_F_LINE_REV_TOKEN = r"\d{1,2}(?:-AN\d{1,2})?|[VS]|[A-Z]"
+_F_LINE_SUFFIX_RE = re.compile(
+    rf"(?:^|\s+)(?:MTO\s+(?P<mto>{_F_LINE_REV_TOKEN})"
+    rf"(?:\s+(?P<auto>auto))?|(?P<auto_only>auto))\s*$",
+    re.IGNORECASE,
+)
 
 _STAGE_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
     ("code_a", "код А", re.compile(r"код\s*[аa]", re.IGNORECASE)),
@@ -210,33 +218,36 @@ _SUMMARY_LABELS: dict[KitSummary, str] = {
 _SUMMARY_HINTS: dict[KitSummary, str] = {
     KitSummary.ALIGNED: (
         "Комплект есть в Google/Выдаче и в РД, ревизии Google↔РД совпадают, "
-        "инверсии MTO/OD нет. Расхождение робота, Выдачи или Google F "
-        "с РД только подсвечивает ячейку ревизии."
+        "инверсии MTO/OD нет.\n"
+        "Расхождение робота, Выдачи или Google F с РД только подсвечивает "
+        "ячейку ревизии."
     ),
     KitSummary.REV_MISMATCH: (
-        "Ревизия Google (если пусто — Выдачи) не совпадает с ревизией файлов РД. "
+        "Ревизия Google (если пусто — Выдачи) не совпадает с ревизией файлов РД.\n"
         "На готовность MTO это не влияет."
     ),
     KitSummary.TRANSFER_REVIEW: (
-        "Поздняя папка NN стала текущей, хотя в более ранней папке тот же "
-        "OD/MTO новее по ревизии файла или по дате; либо официальная NN "
-        "не ближе к письму A / отправке (MTO в ней позже кода A). "
+        "Поздняя папка NN стала текущей.\n"
+        "В более ранней папке тот же OD/MTO новее по ревизии файла или по дате.\n"
+        "Либо официальная NN не ближе к письму A / отправке "
+        "(MTO в ней позже кода A).\n"
         "Текущий состав при этом не откатывается — проверьте, "
-        "какая передача ушла заказчику. "
+        "какая передача ушла заказчику.\n"
         "В таблице — редактируемые MTO/OD тех же пакетов (xlsx/xls/dwg), "
-        "без PDF-копий; % близости к Выдаче/F/письму A "
-        "(как «К согл. передаче» на АН) и сверка содержимого MTO "
-        "спорных папок (четкое / ПоКоду и Кол-ву / не совпало). "
-        "PDF MTO в сверку не берётся. OD в PDF — только если в спорных "
-        "пакетах нет редактируемого файла. "
-        "WIR/LAY на эту сводку не влияют. Папка открытия остаётся "
-        "официальной NN. Рабочая папка — роль «рабочая»: не текущая, "
-        "не «спорная» и не в сверке."
+        "без PDF-копий.\n"
+        "% близости к Выдаче/F/письму A — как «К согл. передаче» на АН.\n"
+        "Сверка содержимого MTO спорных папок: четкое / ПоКоду и Кол-ву / не совпало.\n"
+        "PDF MTO в сверку не берётся.\n"
+        "OD в PDF — только если в спорных пакетах нет редактируемого файла.\n"
+        "WIR/LAY на эту сводку не влияют.\n"
+        "Папка открытия остаётся официальной NN.\n"
+        "Рабочая папка — роль «рабочая»: не текущая, не «спорная» и не в сверке."
     ),
     KitSummary.MIXED_TITLES: (
         "У комплекта есть present-файлы РД, чей путь лежит в папке "
         "другого четырёхзначного титула (имя AGCC — этот комплект, "
-        "сегмент пути — чужой титул). Файлы не отбрасываются. "
+        "сегмент пути — чужой титул).\n"
+        "Файлы не отбрасываются.\n"
         "«Папка РД» может открыть чужое дерево, если такой пакет "
         "стал официальным NN."
     ),
@@ -245,12 +256,12 @@ _SUMMARY_HINTS: dict[KitSummary, str] = {
         "(нет файлов в папке передачи или на диске другая ревизия)."
     ),
     KitSummary.GAP_ROBOT: (
-        "Комплект есть в Google/Выдаче, у робота нет MTO. "
+        "Комплект есть в Google/Выдаче, у робота нет MTO.\n"
         "Пустой SQ на сводку не влияет."
     ),
     KitSummary.GAP_SQ: (
-        "В SQ нет файлов этого комплекта. Обычно не показывается как сводка: "
-        "пустой SQ — норма."
+        "В SQ нет файлов этого комплекта.\n"
+        "Обычно не показывается как сводка: пустой SQ — норма."
     ),
     KitSummary.EXTRA_RD: (
         "Файлы есть в РД, строки комплекта нет ни в Google, ни в Выдаче."
@@ -279,6 +290,9 @@ class KitEvent:
     appendix: str | None
     transmittals: tuple[str, ...]
     parsed: bool
+    mto_revision: str | None = None
+    mto_appendix: str | None = None
+    from_robot_auto: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1009,14 +1023,51 @@ def _classify_stage(text: str) -> tuple[str, str]:
     return "other", (text.strip() or "—")
 
 
+def strip_history_line_suffix(
+    text: str,
+) -> tuple[str, str | None, str | None, bool]:
+    """Strip a trailing ``MTO <rev>`` / ``auto`` suffix from an F-line rest.
+
+    Either token may be absent. ``auto`` is not a transmittal. The MTO token
+    is never written with ``рев.``, so OD still comes from the first ``рев.``
+    in the core.
+
+    Args:
+        text: Text after the date (or any F-line remainder).
+
+    Returns:
+        ``(core, mto_revision, mto_appendix, from_robot_auto)``. ``core`` is
+        ``text`` without the end suffix; missing tokens are ``None`` / False.
+    """
+
+    original = text or ""
+    normalized = normalize_unicode_dashes(original).replace("АН", "AN").replace(
+        "ан", "AN"
+    )
+    match = _F_LINE_SUFFIX_RE.search(normalized)
+    if match is None:
+        return original.rstrip(), None, None, False
+    core = normalized[: match.start()].rstrip()
+    mto_raw = match.group("mto")
+    mto_revision, mto_appendix = (None, None)
+    if mto_raw:
+        mto_revision, mto_appendix = parse_sheet_revision(mto_raw)
+    from_robot_auto = bool(match.group("auto") or match.group("auto_only"))
+    return core, mto_revision, mto_appendix, from_robot_auto
+
+
 def parse_history_line(line: str) -> KitEvent:
     """Parse one column-F line into date / stage / rev / transmittal.
+
+    A trailing suffix ``MTO <rev> [auto]`` is stripped from the rest before
+    stage, OD ``рев.``, and TRM classification.
 
     Args:
         line: Raw history line.
 
     Returns:
         Best-effort event; ``parsed`` is False when nothing was recognized.
+        ``mto_revision`` / ``from_robot_auto`` come from the end suffix.
     """
 
     raw = (line or "").strip()
@@ -1027,14 +1078,17 @@ def parse_history_line(line: str) -> KitEvent:
         date = dated.group(1)
         rest = dated.group(2).strip()
     rest_norm = normalize_unicode_dashes(rest).replace("АН", "AN").replace("ан", "AN")
-    stage, stage_label = _classify_stage(rest_norm)
-    if stage == "other" and not rest_norm:
+    core, mto_revision, mto_appendix, from_robot_auto = strip_history_line_suffix(
+        rest_norm
+    )
+    stage, stage_label = _classify_stage(core)
+    if stage == "other" and not core:
         stage_label = "—"
-    rev_match = _REV_IN_TEXT_RE.search(rest_norm)
+    rev_match = _REV_IN_TEXT_RE.search(core)
     revision, appendix = (None, None)
     if rev_match:
         revision, appendix = parse_sheet_revision(rev_match.group(1))
-    transmittals = tuple(dict.fromkeys(_TRM_RE.findall(rest_norm)))
+    transmittals = tuple(dict.fromkeys(_TRM_RE.findall(core)))
     parsed = bool(
         date or transmittals or revision or (stage != "other") or rest_norm
     )
@@ -1049,6 +1103,9 @@ def parse_history_line(line: str) -> KitEvent:
         appendix=appendix,
         transmittals=transmittals,
         parsed=parsed,
+        mto_revision=mto_revision,
+        mto_appendix=mto_appendix,
+        from_robot_auto=from_robot_auto,
     )
 
 
@@ -2503,12 +2560,12 @@ def _transfer_review_notes(
                     )
                 )
             )
+        lines.append("Сверка MTO: только xlsx/xls, без PDF.")
         lines.append(
-            "Сверка MTO: только xlsx/xls, без PDF. "
             "Тот же алгоритм, что «Сверка Авто МТО» "
-            "(четкое / ПоКоду и Кол-ву / не совпало). "
-            "Нет второй MTO в спорных NN — нет пары."
+            "(четкое / ПоКоду и Кол-ву / не совпало)."
         )
+        lines.append("Нет второй MTO в спорных NN — нет пары.")
         notes_by_key[key] = tuple(lines)
         if pairs:
             pairs_by_key[key] = pairs
@@ -2811,13 +2868,14 @@ def _agreed_cycle_package_notes(
                     )
                 )
             )
+        lines.append("Сверка MTO: только xlsx/xls, без PDF.")
+        lines.append("Тот же алгоритм, что «Сверка Авто МТО».")
+        lines.append("Папка открытия остаётся официальной NN.")
         lines.append(
-            "Сверка MTO: только xlsx/xls, без PDF. "
-            "Тот же алгоритм, что «Сверка Авто МТО». "
-            "Папка открытия остаётся официальной NN. "
             "Роль «рабочая» — помеченная / выше выдачи папка; "
-            "«аннулирована» — снята с конкурса. Обе не в сверке и выборе NN."
+            "«аннулирована» — снята с конкурса."
         )
+        lines.append("Обе не в сверке и выборе NN.")
         notes_by_key[key] = tuple(lines)
         if pairs:
             pairs_by_key[key] = pairs

@@ -20,6 +20,7 @@ from rd_catalog.kits import (
     parse_history_line,
     parse_sheet_revision,
     revisions_equivalent,
+    strip_history_line_suffix,
 )
 
 _STAGE_F_TEXT: dict[str, str] = {
@@ -64,6 +65,8 @@ def format_history_line(
     stage: str,
     revision: str | None = None,
     transmittal: str | None = None,
+    mto_revision: str | None = None,
+    from_robot_auto: bool = False,
 ) -> str:
     """Build one canonical F line that ``parse_history_line`` understands.
 
@@ -74,9 +77,14 @@ def format_history_line(
             Codes use ``на рев. X``; other stages (cover ``tdo_sent``, …)
             use ``рев. X`` so ``parse_history_line`` still sees the token.
         transmittal: TRM token, or empty.
+        mto_revision: Optional MTO filename revision (``03``, ``01-AN02``).
+            Appended as ``MTO <rev>`` after TRM — never ``MTO рев. X``.
+        from_robot_auto: When True, append ``auto`` (catalog robot writer).
+            Outlook / parsed letters keep False.
 
     Returns:
-        A single-line journal entry.
+        A single-line journal entry. Empty MTO and False ``auto`` match
+        the historical string.
 
     Raises:
         ValueError: If ``date`` or ``stage`` cannot be formatted.
@@ -97,14 +105,21 @@ def format_history_line(
     trm = (transmittal or "").strip()
     if trm:
         parts.append(trm)
+    mto_text = _revision_display(mto_revision)
+    if mto_text:
+        parts.append(f"MTO {mto_text}")
+    if from_robot_auto:
+        parts.append("auto")
     return " ".join(parts)
 
 
 def apply_history_line(comment_raw: str, new_line: str) -> tuple[str, str]:
     """Insert or replace one F line without rewriting the rest of the cell.
 
-    A line matches (and is replaced) when date and stage are equal. A
-    truncated same-date stub (date-only, or date plus TRM without a
+    Identity is date + stage + OD revision + transmittals (MTO/auto
+    suffix ignored). Equal full raw → ``unchanged``; same core with a
+    different suffix (for example adding ``MTO 03``) → ``replaced``.
+    A truncated same-date stub (date-only, or date plus TRM without a
     classified stage) is upgraded when revision/TRM do not conflict.
     Otherwise the new line is inserted before the first existing dated
     line with a later calendar date. Undated lines keep their positions.
@@ -122,9 +137,13 @@ def apply_history_line(comment_raw: str, new_line: str) -> tuple[str, str]:
     if not new_event.date or new_event.stage == "other":
         raise ValueError(f"New F line is not a classified dated event: {new_line!r}")
     lines = _split_comment_lines(comment_raw)
-    for line in lines:
-        if _same_journal_event(line, new_line):
+    for index, line in enumerate(lines):
+        if not _same_journal_event(line, new_line):
+            continue
+        if line.strip() == new_line.strip():
             return comment_raw or "", "unchanged"
+        lines[index] = new_line
+        return _join_comment_lines(lines), "replaced"
     new_sort = _parse_date_sort(new_event.date)
     assert new_sort is not None
     for index, line in enumerate(lines):
@@ -377,6 +396,7 @@ def _truncated_stub_upgrades_to(existing: KitEvent, new_event: KitEvent) -> bool
     if existing_trm - new_trm:
         return False
     rest = _line_rest_after_date(existing.raw)
+    rest, _mto_rev, _mto_app, _auto = strip_history_line_suffix(rest)
     if not rest:
         return True
     if not existing.transmittals:
@@ -396,7 +416,11 @@ def _line_rest_after_date(raw: str) -> str:
 
 
 def _same_journal_event(existing_line: str, new_line: str) -> bool:
-    """Return True when F already contains the same dated letter event."""
+    """Return True when F already contains the same dated letter event.
+
+    Identity is date + stage + OD revision + transmittals. MTO/auto suffix
+    is ignored so a suffix upgrade can replace the existing line.
+    """
 
     if existing_line.strip() == new_line.strip():
         return True

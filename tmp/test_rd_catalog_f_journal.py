@@ -246,6 +246,109 @@ def main() -> None:
     assert status_sheet_for_stage("incoming_passed") == "Прошла входной контроль"
     assert status_sheet_for_stage("sr_upload") == "Отпр. на входной контроль"
 
+    with_mto = format_history_line(
+        date="09.09.2026",
+        stage="code_a",
+        revision="04",
+        transmittal="AGCC-BCC-TRM-000999",
+        mto_revision="03",
+    )
+    assert with_mto == (
+        "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03"
+    )
+    assert with_mto == format_history_line(
+        date="09.09.2026",
+        stage="code_a",
+        revision="04",
+        transmittal="AGCC-BCC-TRM-000999",
+        mto_revision="03",
+        from_robot_auto=False,
+    )
+    mto_event = parse_history_line(with_mto)
+    assert mto_event.revision == "04"
+    assert mto_event.appendix is None
+    assert mto_event.mto_revision == "03"
+    assert mto_event.mto_appendix is None
+    assert mto_event.from_robot_auto is False
+    assert mto_event.transmittals == ("AGCC-BCC-TRM-000999",)
+    assert "рев. 03" not in with_mto
+
+    with_auto = format_history_line(
+        date="09.09.2026",
+        stage="code_a",
+        revision="04",
+        transmittal="AGCC-BCC-TRM-000999",
+        mto_revision="03",
+        from_robot_auto=True,
+    )
+    assert with_auto == (
+        "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03 auto"
+    )
+    auto_event = parse_history_line(with_auto)
+    assert auto_event.revision == "04"
+    assert auto_event.mto_revision == "03"
+    assert auto_event.from_robot_auto is True
+    assert auto_event.transmittals == ("AGCC-BCC-TRM-000999",)
+    assert "auto" not in {token.casefold() for token in auto_event.transmittals}
+
+    auto_only = format_history_line(
+        date="09.09.2026",
+        stage="code_a",
+        revision="04",
+        transmittal="AGCC-BCC-TRM-000999",
+        from_robot_auto=True,
+    )
+    assert auto_only == (
+        "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 auto"
+    )
+    auto_only_event = parse_history_line(auto_only)
+    assert auto_only_event.mto_revision is None
+    assert auto_only_event.from_robot_auto is True
+    assert auto_only_event.transmittals == ("AGCC-BCC-TRM-000999",)
+    cased = parse_history_line(
+        "09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 mto 03 AUTO"
+    )
+    assert cased.revision == "04"
+    assert cased.mto_revision == "03"
+    assert cased.from_robot_auto is True
+    assert cased.transmittals == ("AGCC-BCC-TRM-000999",)
+
+    an_suffix = format_history_line(
+        date="09.09.2026",
+        stage="code_a",
+        revision="04",
+        transmittal="AGCC-BCC-TRM-000999",
+        mto_revision="01-AN02",
+    )
+    an_event = parse_history_line(an_suffix)
+    assert an_event.revision == "04"
+    assert an_event.mto_revision == "01"
+    assert an_event.mto_appendix == "02"
+
+    core_without_mto = format_history_line(
+        date="09.09.2026",
+        stage="code_a",
+        revision="04",
+        transmittal="AGCC-BCC-TRM-000999",
+    )
+    upgraded_mto, mto_action = apply_history_line(core_without_mto, with_mto)
+    assert mto_action == "replaced"
+    assert upgraded_mto == with_mto
+    same_mto, same_mto_action = apply_history_line(with_mto, with_mto)
+    assert same_mto_action == "unchanged"
+    assert same_mto == with_mto
+
+    stub_with_mto = "07.12.2023 MTO 03"
+    stub_filled = format_history_line(
+        date="07.12.2023",
+        stage="code_a",
+        revision="0",
+        transmittal="AGCC-BCC-TRM-000183",
+    )
+    stub_upgraded_mto, stub_mto_kind = apply_history_line(stub_with_mto, stub_filled)
+    assert stub_mto_kind == "replaced"
+    assert stub_upgraded_mto == stub_filled
+
     print("RD catalog F journal: OK")
 
 
