@@ -78,6 +78,13 @@
     return sa.localeCompare(sb, "ru", { numeric: true, sensitivity: "base" });
   }
 
+  function eventHasShift(e) {
+    if (!e) return false;
+    if (e.shiftKey) return true;
+    const src = e.originalEvent || e.osEvent;
+    return Boolean(src && src.shiftKey);
+  }
+
   function googleHrefOf(value) {
     if (!value || typeof value !== "object") return "";
     const href = typeof value.href === "string" ? value.href.trim() : "";
@@ -395,7 +402,8 @@
     table.on("dataLoaded", function () {
       updateCount(tabId);
     });
-    table.on("cellClick", function (_e, cell) {
+    table.on("cellClick", function (e, cell) {
+      if (!eventHasShift(e)) return;
       openGoogleHref(googleHrefOf(cell.getValue()));
     });
     if (tabId === "kits") {

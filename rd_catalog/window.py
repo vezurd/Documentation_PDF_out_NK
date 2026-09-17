@@ -399,7 +399,7 @@ _KITS_TIPS_PLACEHOLDER = (
     "Выберите строку, чтобы прочитать подсказки ячеек "
     "(Сводка, РД · рев. и остальные). "
     "Ctrl+клик по ячейке таблицы прокручивает блок этого столбца "
-    "к верху панели. Клик по TRM / ячейке Google открывает лист."
+    "к верху панели. Shift+клик по TRM / ячейке Google открывает лист."
 )
 _TREE_LABEL_SETTINGS: tuple[tuple[str, str, bool], ...] = (
     ("_doc_show_mto_status", "window/doc_tree_show_mto_status", True),
@@ -5679,9 +5679,9 @@ class CatalogWindow(QMainWindow):
         google_action = menu.addAction("Открыть в Google")
         google_action.setEnabled(bool(google_href))
         google_action.setToolTip(
-            "Открыть эту ячейку в Google Sheets"
+            "Открыть эту ячейку в Google Sheets (как Shift+клик)"
             if google_href
-            else "Кликните ячейку Google / TRM с номером строки снимка."
+            else "Shift+клик по ячейке Google / TRM с номером строки снимка."
         )
         menu.addSeparator()
         rescan_action = menu.addAction("Пересканировать РД")

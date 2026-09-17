@@ -24,6 +24,7 @@ from rd_catalog.google_sheet_links import (
     kits_google_hrefs,
     save_kits_sheet_pin,
     sheet_link_context_from_config,
+    windows_start_command,
 )
 from rd_catalog.kits import GoogleKit, IssuanceKit, parse_history_line, parse_sheet_revision
 
@@ -94,25 +95,28 @@ def main() -> None:
     )
     assert with_gid == (
         "https://docs.google.com/spreadsheets/d/abc/"
-        "edit?gid=77&range=F12#gid=77&range=F12"
+        "edit?gid=77#gid=77&range=F12"
     ), with_gid
     named = google_sheet_cell_url(
         "abc", "B40", sheet_title="Выдача РД ПД"
     )
-    assert named.startswith(
-        "https://docs.google.com/spreadsheets/d/abc/edit?range="
+    assert named == (
+        "https://docs.google.com/spreadsheets/d/abc/"
+        "edit#range='Выдача РД ПД'!B40"
     ), named
-    assert "range=" in named
-    assert "Выдача" in named or "%D0%92%D1%8B%D0%B4%D0%B0%D1%87%D0%B0" in named
-    assert "B40" in named
+    started = windows_start_command(with_gid)
+    assert started.startswith('start "" "')
+    assert started.endswith('"')
+    assert "&range=F12" in started
+    assert started.count('"') >= 2
     assert is_google_sheets_url(with_gid)
     assert not is_google_sheets_url("https://example.com/")
     assert google_sheet_cell_url("", "F12") == ""
 
     links = _links()
     hrefs = kits_google_hrefs(google=_google(), issuance=_issuance(), links=links)
-    assert "?gid=77&range=F12" in hrefs["Google · TRM F"]
-    assert hrefs["Google · TRM F"].endswith("range=F12")
+    assert hrefs["Google · TRM F"].endswith("#gid=77&range=F12")
+    assert "?gid=77#" in hrefs["Google · TRM F"]
     assert "B40" in hrefs["Выдача · TRM отпр."]
     assert "Q40" in hrefs["Выдача · TRM подтв."]
     for header in KITS_GOOGLE_COLUMNS:
@@ -129,7 +133,7 @@ def main() -> None:
     assert journal_cell_href("Титул", 40, links) == ""
     assert journal_cell_href("TRM", 0, links) == ""
     assert set(JOURNAL_ISSUANCE_COLUMNS) >= {"TRM", "TRM подтв."}
-    assert GOOGLE_HREF_TIP
+    assert "Shift+клик" in GOOGLE_HREF_TIP
 
     with tempfile.TemporaryDirectory(prefix="rd_sheet_pins_") as raw:
         root = Path(raw)

@@ -9,21 +9,21 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import quote
 
 from rd_catalog.config import CatalogConfig
 from rd_catalog.kits import GoogleKit, IssuanceKit
 
 PINS_FILENAME = "google_sheet_pins.json"
 GOOGLE_HREF_TIP = (
-    "Клик открывает эту ячейку в Google Sheets. "
-    "Двойной клик — копирование текста."
+    "Shift+клик открывает эту ячейку в Google Sheets. "
+    "Обычный клик и двойной клик — как раньше (выбор / копирование)."
 )
 KITS_SHEET_TITLE_FALLBACK = "Контроль выдачи"
 _SHEETS_PREFIX = "https://docs.google.com/spreadsheets/d/"
@@ -105,11 +105,10 @@ def google_sheet_cell_url(
 ) -> str:
     """Return a browser URL that opens one Google Sheets cell.
 
-    When ``sheet_id`` (gid) is known, the range is the bare A1 on that
-    tab. Otherwise the range includes ``'Title'!A1`` so Google can switch
-    sheets without a gid. ``range`` is always in the query string (and
-    repeated in the hash) so Windows can drop the fragment and still
-    land on the cell.
+    Google's «Get link to this cell» shape puts ``range`` in the
+    **fragment** (``#gid=…&range=F12``). ``range`` in the query string is
+    ignored. When ``sheet_id`` is unknown, the fragment uses
+    ``'Title'!A1`` (trailing spaces in the title are significant).
 
     Args:
         spreadsheet_id: Spreadsheet id from catalog config.
@@ -125,22 +124,18 @@ def google_sheet_cell_url(
     cell = (a1 or "").strip()
     if not sid or not cell:
         return ""
-    # ``range`` must live in the query string. Windows often drops the
-    # ``#fragment``, and ``webbrowser``/``start`` may split on ``&`` in the
-    # hash, so ``#gid=…&range=F12`` opens the tab but never selects the cell.
     if sheet_id is not None:
         gid = int(sheet_id)
-        query = f"gid={gid}&range={cell}"
-        fragment = f"gid={gid}&range={cell}"
-        return f"{_SHEETS_PREFIX}{sid}/edit?{query}#{fragment}"
+        return (
+            f"{_SHEETS_PREFIX}{sid}/edit?gid={gid}#gid={gid}&range={cell}"
+        )
     title = sheet_title or ""
     if title:
         escaped = title.replace("'", "''")
         range_body = f"'{escaped}'!{cell}"
     else:
         range_body = cell
-    encoded = quote(range_body, safe="!:'")
-    return f"{_SHEETS_PREFIX}{sid}/edit?range={encoded}#range={encoded}"
+    return f"{_SHEETS_PREFIX}{sid}/edit#range={range_body}"
 
 
 def is_google_sheets_url(url: str) -> bool:
@@ -153,6 +148,11 @@ def is_google_sheets_url(url: str) -> bool:
 def open_google_sheet_url(url: str) -> bool:
     """Open a Sheets URL in the default browser.
 
+    Windows ``os.startfile`` / unquoted ``start`` drop ``#range=`` or
+    split on ``&``, so the spreadsheet opens without selecting the cell.
+    Launch the HTTPS handler with the URL as one argv, else a quoted
+    ``start``.
+
     Args:
         url: Value from :func:`google_sheet_cell_url`.
 
@@ -163,17 +163,121 @@ def open_google_sheet_url(url: str) -> bool:
     if not is_google_sheets_url(url):
         return False
     if sys.platform == "win32":
-        try:
-            os.startfile(url)
-            return True
-        except OSError:
-            subprocess.Popen(
-                ["cmd", "/c", "start", "", url],
-                close_fds=True,
-            )
-            return True
-    webbrowser.open(url)
+        _open_url_windows(url)
+        return True
+    webbrowser.open(url, new=2)
     return True
+
+
+def windows_start_command(url: str) -> str:
+    """Return a quoted ``start`` command that keeps ``#`` and ``&``.
+
+    Args:
+        url: HTTPS Sheets URL.
+
+    Returns:
+        ``cmd`` ``start`` line with the URL in double quotes.
+    """
+
+    cleaned = (url or "").replace('"', "")
+    return f'start "" "{cleaned}"'
+
+
+def _open_url_windows(url: str) -> None:
+    argv = _windows_https_argv(url)
+    if argv:
+        subprocess.Popen(argv, close_fds=True)
+        return
+    subprocess.Popen(windows_start_command(url), shell=True)
+
+
+def _windows_https_argv(url: str) -> list[str] | None:
+    command = _windows_https_open_command()
+    if not command:
+        return _windows_known_browser_argv(url)
+    try:
+        parts = shlex.split(command, posix=False)
+    except ValueError:
+        return _windows_known_browser_argv(url)
+    if not parts:
+        return _windows_known_browser_argv(url)
+    exe = parts[0].strip('"')
+    if not Path(exe).is_file():
+        return _windows_known_browser_argv(url)
+    lowered = command.casefold()
+    if "rundll32" in exe.casefold() or "url.dll" in lowered:
+        return _windows_known_browser_argv(url)
+    args = [exe]
+    replaced = False
+    for part in parts[1:]:
+        token = part.strip('"')
+        if token in {"%1", "%~1"}:
+            args.append(url)
+            replaced = True
+        elif "%1" in token:
+            args.append(token.replace("%1", url))
+            replaced = True
+        else:
+            args.append(token)
+    if not replaced:
+        args.append(url)
+    return args
+
+
+def _windows_https_open_command() -> str:
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    progid = ""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\Shell\Associations"
+            r"\UrlAssociations\https\UserChoice",
+        ) as key:
+            progid = str(winreg.QueryValueEx(key, "ProgId")[0] or "")
+    except OSError:
+        progid = ""
+    if not progid:
+        return ""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CLASSES_ROOT,
+            rf"{progid}\shell\open\command",
+        ) as key:
+            return str(winreg.QueryValueEx(key, None)[0] or "")
+    except OSError:
+        return ""
+
+
+def _windows_known_browser_argv(url: str) -> list[str] | None:
+    candidates = (
+        Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
+        / "Google"
+        / "Chrome"
+        / "Application"
+        / "chrome.exe",
+        Path(os.environ.get("LOCALAPPDATA", ""))
+        / "Google"
+        / "Chrome"
+        / "Application"
+        / "chrome.exe",
+        Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
+        / "Microsoft"
+        / "Edge"
+        / "Application"
+        / "msedge.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+        / "Microsoft"
+        / "Edge"
+        / "Application"
+        / "msedge.exe",
+    )
+    for exe in candidates:
+        if exe and exe.is_file():
+            return [str(exe), url]
+    return None
 
 
 def save_kits_sheet_pin(

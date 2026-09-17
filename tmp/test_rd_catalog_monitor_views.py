@@ -848,10 +848,9 @@ class MonitorViewsTests(unittest.TestCase):
             sheet_links=links,
         )
         trm = painted.cells["Google · TRM F"]
-        self.assertTrue(trm.href.endswith("range=F12"), trm.href)
-        self.assertIn("?gid=77&range=F12", trm.href)
+        self.assertTrue(trm.href.endswith("#gid=77&range=F12"), trm.href)
         self.assertIn("gid=77", trm.href)
-        self.assertIn("Клик открывает", trm.tooltip)
+        self.assertIn("Shift+клик", trm.tooltip)
         send = painted.cells["Выдача · TRM отпр."]
         self.assertIn("B40", send.href)
         self.assertEqual(painted.cells["Титул"].href, "")
@@ -902,7 +901,7 @@ class MonitorViewsTests(unittest.TestCase):
             sheet_links=links,
         )
         self.assertIn("B40", painted.cells["TRM"].href)
-        self.assertIn("Клик открывает", painted.cells["TRM"].tooltip)
+        self.assertIn("Shift+клик", painted.cells["TRM"].tooltip)
         self.assertEqual(painted.cells["Титул"].href, "")
 
     def test_journal_row_paints_kits_issuance(self) -> None:
