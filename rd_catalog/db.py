@@ -56,7 +56,16 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = 12
 _FILE_ID_CHUNK = 400
 _OVERRIDE_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
-FILE_MTIME_OVERRIDE_REASONS = frozenset({"code_a", "code_b", "code_c"})
+FILE_MTIME_OVERRIDE_REASONS = frozenset(
+    {"code_a", "code_b", "code_c", "manual", "folder_mean"}
+)
+_FILE_MTIME_OVERRIDE_KINDS = frozenset(
+    {
+        FileKind.PDF.value,
+        FileKind.MTO_XLSX.value,
+        FileKind.SOURCE_EDITABLE.value,
+    }
+)
 
 
 def _json_str_tuple(raw: object) -> tuple[str, ...]:
@@ -268,7 +277,7 @@ class KitPipelineRow:
 
 @dataclass(frozen=True, slots=True)
 class FileMtimeOverrideRow:
-    """User catalog date for one MTO file; survives scan while fingerprint matches.
+    """User catalog date for one catalog file; survives scan while fingerprint matches.
 
     Identity is ``path_key``. ``fingerprint`` is SHA-256 of
     ``path_key|size|disk_mtime_ns`` from ``file_entry`` at decision time.
@@ -4301,7 +4310,7 @@ class CatalogDatabase:
         reason: str = "code_a",
         decided_at: str | None = None,
     ) -> FileMtimeOverrideRow:
-        """Store a catalog date for one MTO xlsx; scan must not clear it.
+        """Store a catalog date for one catalog file; scan must not clear it.
 
         Fingerprint is ``path_key|size|disk_mtime_ns`` of the current
         ``file_entry`` row. A later scan of the same bytes keeps the
@@ -4309,8 +4318,9 @@ class CatalogDatabase:
 
         Args:
             path_key: File identity (``make_path_key``).
-            override_date: ``DD.MM.YYYY``, typically the last F code A/B/C date.
-            reason: ``code_a``, ``code_b``, or ``code_c``.
+            override_date: ``DD.MM.YYYY`` (F letter, typed date, or folder mean).
+            reason: ``code_a`` / ``code_b`` / ``code_c`` / ``manual`` /
+                ``folder_mean``.
             decided_at: ISO UTC timestamp; default now.
 
         Returns:
@@ -4318,7 +4328,7 @@ class CatalogDatabase:
 
         Raises:
             KeyError: No ``file_entry`` for ``path_key``.
-            ValueError: Not an MTO xlsx, or the date/reason is invalid.
+            ValueError: Not a catalog document file, or the date/reason is invalid.
         """
 
         key = str(path_key or "").strip()
@@ -4341,8 +4351,8 @@ class CatalogDatabase:
             if file_row is None:
                 raise KeyError(f"Unknown file path_key: {key}")
             kind = str(file_row["file_kind"] or "")
-            if kind != FileKind.MTO_XLSX.value:
-                raise ValueError("Date override is only for MTO xlsx")
+            if kind not in _FILE_MTIME_OVERRIDE_KINDS:
+                raise ValueError("Date override is only for PDF, MTO xlsx, or editable")
             stored_key = str(file_row["path_key"])
             size = int(file_row["size"] or 0)
             disk_mtime_ns = int(file_row["mtime_ns"] or 0)

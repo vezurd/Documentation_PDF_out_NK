@@ -7,11 +7,21 @@ import webbrowser
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QByteArray, QEvent, QObject, QSettings, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QByteArray,
+    QDate,
+    QEvent,
+    QObject,
+    QSettings,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QAction,
     QBrush,
@@ -29,7 +39,9 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QDateEdit,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QGroupBox,
@@ -89,6 +101,7 @@ from rd_catalog.db import (
     KitPackageRow,
     KitPipelineRow,
     apply_mtime_override_to_data,
+    parse_override_date,
 )
 from rd_catalog.doc_bundle import (
     DocumentBundle,
@@ -97,6 +110,7 @@ from rd_catalog.doc_bundle import (
     ANNULLED_TOOLTIP,
     NO_REVISION_LABEL,
     WORKING_MARKER,
+    FolderMeanOverride,
     bundle_documents,
     file_revision_label,
     file_save_date_tooltip,
@@ -109,9 +123,12 @@ from rd_catalog.doc_bundle import (
     folder_tree_label,
     folder_tree_sort_key,
     folder_tree_tooltip,
+    folder_mean_override,
     format_file_save_date,
     latest_save_mtime_ns,
+    override_date_text_from_mtime_ns,
     record_folder_key,
+    same_document_path_keys,
     working_folder_tooltip,
 )
 from rd_catalog.issuance_journal_tab import IssuanceJournalTab
@@ -129,6 +146,8 @@ from rd_catalog.kits import (
     RobotOrigin,
     build_kit_matrix,
     MTO_CATALOG_DATE_ACTION,
+    MTO_CATALOG_DATE_FOLDER_ACTION,
+    MTO_CATALOG_DATE_MANUAL_ACTION,
     changed_google_kit_keys,
     code_letter_label,
     last_code_letter_for_revision,
@@ -856,6 +875,16 @@ class _ScanViewRestore:
     stay_on_documents: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _MtimeOverrideMenu:
+    """Context-menu actions that write ``file_mtime_override``."""
+
+    code: QAction | None = None
+    manual: QAction | None = None
+    folder: QAction | None = None
+    clear: QAction | None = None
+
+
 def _style_kits_status_badge(label: QLabel, text: str, hex_color: str | None) -> None:
     """Apply bold badge styling when ``hex_color`` is set; clear otherwise."""
 
@@ -984,6 +1013,54 @@ def _bundle_package_path(bundle: DocumentBundle) -> str:
         if package:
             return package
     return ""
+
+
+def _ask_catalog_override_date(
+    parent: QWidget,
+    *,
+    default_date: date,
+    disk_text: str,
+) -> str | None:
+    """Ask for a free catalog date ``DD.MM.YYYY``.
+
+    Args:
+        parent: Qt parent.
+        default_date: Initial calendar value.
+        disk_text: Disk mtime shown in the hint.
+
+    Returns:
+        ``DD.MM.YYYY``, or ``None`` when cancelled.
+    """
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Дата MTO")
+    layout = QVBoxLayout(dialog)
+    hint = QLabel(
+        "Файл на диске не меняется. Дата каталога используется "
+        "в дереве, таблице документов и «Проверить передачи».\n"
+        f"На диске: {disk_text}",
+        dialog,
+    )
+    hint.setWordWrap(True)
+    layout.addWidget(hint)
+    picker = QDateEdit(dialog)
+    picker.setCalendarPopup(True)
+    picker.setDisplayFormat("dd.MM.yyyy")
+    picker.setDate(QDate(default_date.year, default_date.month, default_date.day))
+    picker.setMinimumDate(QDate(1990, 1, 1))
+    picker.setMaximumDate(QDate.currentDate().addYears(2))
+    layout.addWidget(picker)
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+        dialog,
+    )
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    chosen = picker.date()
+    return f"{chosen.day():02d}.{chosen.month():02d}.{chosen.year():04d}"
 
 
 def _bundle_open_record(bundle: DocumentBundle) -> FileRecord | None:
@@ -5387,41 +5464,7 @@ class CatalogWindow(QMainWindow):
             mto_record.data.get("file_kind") or ""
         ) != FileKind.MTO_XLSX.value:
             mto_record = None
-        code_date, code_stage = (
-            self._code_letter_for_record(mto_record)
-            if mto_record is not None
-            else ("", "")
-        )
-        code_label = code_letter_label(code_stage)
-        has_override = False
-        if mto_record is not None:
-            try:
-                has_override = (
-                    self.database.get_file_mtime_override(mto_record.path_key)
-                    is not None
-                )
-            except Exception:
-                has_override = bool(
-                    mto_record.data.get("mtime_override_applied")
-                    or mto_record.data.get("mtime_override_stale")
-                )
-        date_action = menu.addAction(MTO_CATALOG_DATE_ACTION)
-        date_action.setEnabled(
-            bool(mto_record is not None and code_date) and not self._busy()
-        )
-        if mto_record is None:
-            date_action.setToolTip("Нет файла MTO РД.")
-        elif not code_date:
-            date_action.setToolTip(
-                "Нет даты кода A/B/C для этой ревизии в журнале F."
-            )
-        else:
-            date_action.setToolTip(
-                f"Дата каталога MTO → {code_date} ({code_label}). "
-                "Дата на диске сохранится в подсказке."
-            )
-        clear_date_action = menu.addAction("Сбросить дату каталога")
-        clear_date_action.setEnabled(bool(has_override) and not self._busy())
+        date_menu = self._add_mtime_override_menu(menu, mto_record)
         sq_to_rd_action = menu.addAction("Перенести SQ в РД (новая передача)")
         sq_to_rd_action.setEnabled(bool(row.sq.present and row.sq.paths))
         menu.addSeparator()
@@ -5484,11 +5527,19 @@ class CatalogWindow(QMainWindow):
         if chosen == compare_auto:
             self._start_kit_auto_mto_compare(row)
             return
-        if chosen == date_action:
+        if chosen == date_menu.code:
             if mto_record is not None:
                 self._confirm_mto_catalog_date(mto_record)
             return
-        if chosen == clear_date_action:
+        if chosen == date_menu.manual:
+            if mto_record is not None:
+                self._confirm_mto_catalog_date_manual(mto_record)
+            return
+        if chosen == date_menu.folder:
+            if mto_record is not None:
+                self._confirm_mto_catalog_date_folder_mean(mto_record)
+            return
+        if chosen == date_menu.clear:
             if mto_record is not None:
                 self._clear_mto_catalog_date(mto_record)
             return
@@ -7653,8 +7704,167 @@ class CatalogWindow(QMainWindow):
             return "", ""
         return stored, mapped
 
-    def _confirm_mto_catalog_date(self, record: FileRecord) -> None:
-        """Persist catalog mtime = last F code A/B/C date for one MTO xlsx."""
+    def _history_folder_records(self) -> list[FileRecord]:
+        """Return catalog files in the selected documents-tree revision node."""
+
+        if not hasattr(self, "_doc_tree"):
+            return []
+        selected = self._doc_tree.selectedItems()
+        item = selected[0] if selected else None
+        if item is None or item.data(0, _ROLE_NODE_KIND) != _NODE_REVISION:
+            return []
+        stored = item.data(0, _ROLE_ROW) or []
+        files: list[FileRecord] = []
+        for bundle in stored:
+            if isinstance(bundle, DocumentBundle):
+                files.extend(_bundle_records(bundle))
+        return files
+
+    def _package_folder_records(self, record: FileRecord) -> list[FileRecord]:
+        """Return present catalog files in the same issued package as ``record``."""
+
+        package = issued_package_dir(record.path)
+        if not package:
+            return [record]
+        pkg_key = make_path_key(package)
+        files: list[FileRecord] = []
+        for candidate in self._all_records:
+            if not candidate.present:
+                continue
+            other = issued_package_dir(candidate.path)
+            if other and make_path_key(other) == pkg_key:
+                files.append(candidate)
+        return files or [record]
+
+    def _catalog_date_targets(
+        self,
+        record: FileRecord,
+        folder_files: Sequence[FileRecord] | None = None,
+    ) -> list[FileRecord]:
+        """Return the outlier document files to stamp or clear together."""
+
+        folder = list(folder_files) if folder_files is not None else self._package_folder_records(record)
+        keys = same_document_path_keys(record, folder)
+        by_key: dict[str, FileRecord] = {}
+        for candidate in folder:
+            key = str(candidate.path_key or "").casefold()
+            if key in keys:
+                by_key[key] = candidate
+        current_key = str(record.path_key or "").casefold()
+        if current_key and current_key not in by_key:
+            by_key[current_key] = record
+        return list(by_key.values()) or [record]
+
+    def _folder_mean_for_record(
+        self,
+        record: FileRecord,
+        folder_files: Sequence[FileRecord] | None = None,
+    ) -> FolderMeanOverride | None:
+        """Return the package mean date after dropping the current document."""
+
+        folder = list(folder_files) if folder_files is not None else self._package_folder_records(record)
+        return folder_mean_override(
+            folder,
+            exclude_path_keys=same_document_path_keys(record, folder),
+        )
+
+    def _record_has_mtime_override(self, record: FileRecord) -> bool:
+        try:
+            if self.database.get_file_mtime_override(record.path_key) is not None:
+                return True
+        except Exception:
+            pass
+        return bool(
+            record.data.get("mtime_override_applied")
+            or record.data.get("mtime_override_stale")
+        )
+
+    def _add_mtime_override_menu(
+        self,
+        menu: QMenu,
+        mto_record: FileRecord | None,
+        *,
+        folder_files: Sequence[FileRecord] | None = None,
+        hide_when_missing: bool = False,
+    ) -> _MtimeOverrideMenu:
+        """Append catalog-date actions; history hides them without an MTO."""
+
+        actions = _MtimeOverrideMenu()
+        if mto_record is None and hide_when_missing:
+            return actions
+        menu.addSeparator()
+        code_date, code_stage = (
+            self._code_letter_for_record(mto_record)
+            if mto_record is not None
+            else ("", "")
+        )
+        code_label = code_letter_label(code_stage)
+        mean = (
+            self._folder_mean_for_record(mto_record, folder_files)
+            if mto_record is not None
+            else None
+        )
+        targets = (
+            self._catalog_date_targets(mto_record, folder_files)
+            if mto_record is not None
+            else []
+        )
+        has_override = any(self._record_has_mtime_override(item) for item in targets)
+        if mto_record is not None and not has_override:
+            has_override = self._record_has_mtime_override(mto_record)
+        busy = self._busy()
+        code_action = menu.addAction(MTO_CATALOG_DATE_ACTION)
+        code_action.setEnabled(bool(mto_record is not None and code_date) and not busy)
+        if mto_record is None:
+            code_action.setToolTip("Нет файла MTO РД.")
+        elif not code_date:
+            code_action.setToolTip(
+                "Нет даты кода A/B/C для этой ревизии в журнале F."
+            )
+        else:
+            code_action.setToolTip(
+                f"Дата каталога MTO → {code_date} ({code_label}). "
+                "Дата на диске сохранится в подсказке."
+            )
+        manual_action = menu.addAction(MTO_CATALOG_DATE_MANUAL_ACTION)
+        manual_action.setEnabled(mto_record is not None and not busy)
+        if mto_record is None:
+            manual_action.setToolTip("Нет файла MTO РД.")
+        else:
+            manual_action.setToolTip(
+                "Задать дату каталога вручную. Файл на диске не меняется."
+            )
+        folder_action = menu.addAction(MTO_CATALOG_DATE_FOLDER_ACTION)
+        folder_action.setEnabled(mto_record is not None and mean is not None and not busy)
+        if mto_record is None:
+            folder_action.setToolTip("Нет файла MTO РД.")
+        elif mean is None:
+            folder_action.setToolTip(
+                "В папке нет других файлов для средней даты "
+                "(текущий документ не учитывается)."
+            )
+        else:
+            folder_action.setToolTip(
+                f"Средняя дата {mean.used_count} файлов папки "
+                f"(без текущего документа): {mean.override_date}."
+            )
+        clear_action = menu.addAction("Сбросить дату каталога")
+        clear_action.setEnabled(bool(has_override) and not busy)
+        return _MtimeOverrideMenu(
+            code=code_action,
+            manual=manual_action,
+            folder=folder_action,
+            clear=clear_action,
+        )
+
+    def _apply_catalog_date_overrides(
+        self,
+        records: Sequence[FileRecord],
+        override_date: str,
+        *,
+        reason: str,
+    ) -> bool:
+        """Persist catalog dates and refresh the kit. Return False on hard fail."""
 
         if self._busy():
             QMessageBox.information(
@@ -7662,10 +7872,43 @@ class CatalogWindow(QMainWindow):
                 "Дата MTO",
                 "Дождитесь завершения текущей загрузки или сканирования.",
             )
-            return
+            return False
+        if not records:
+            return False
+        applied: list[FileRecord] = []
+        errors: list[str] = []
+        for record in records:
+            try:
+                override = self.database.upsert_file_mtime_override(
+                    record.path_key, override_date, reason=reason
+                )
+            except Exception as exc:
+                errors.append(f"{_record_name(record)}: {exc}")
+                continue
+            apply_mtime_override_to_data(record.path_key, record.data, override)
+            applied.append(record)
+        if not applied:
+            QMessageBox.warning(
+                self,
+                "Дата MTO",
+                "Не удалось заменить дату.\n" + "\n".join(errors),
+            )
+            return False
+        self._refresh_after_mtime_override(applied[0])
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Дата MTO",
+                "Дата записана частично:\n" + "\n".join(errors),
+            )
+        return True
+
+    def _confirm_mto_catalog_date(self, record: FileRecord) -> None:
+        """Persist catalog mtime = last F code A/B/C date for one MTO xlsx."""
+
         if str(record.data.get("file_kind") or "") != FileKind.MTO_XLSX.value:
             QMessageBox.information(
-                self, "Дата MTO", "Замена даты только для файла MTO xlsx."
+                self, "Дата MTO", "Замена даты кода A/B/C только для файла MTO xlsx."
             )
             return
         code_date, code_stage = self._code_letter_for_record(record)
@@ -7696,22 +7939,101 @@ class CatalogWindow(QMainWindow):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        try:
-            override = self.database.upsert_file_mtime_override(
-                record.path_key, code_date, reason=code_stage
+        if self._apply_catalog_date_overrides(
+            (record,), code_date, reason=code_stage
+        ):
+            self.statusBar().showMessage(
+                f"Дата каталога MTO → {code_date} (на диске {disk_text})",
+                5000,
             )
-        except Exception as exc:
-            QMessageBox.warning(self, "Дата MTO", str(exc))
-            return
-        apply_mtime_override_to_data(record.path_key, record.data, override)
-        self._refresh_after_mtime_override(record)
-        self.statusBar().showMessage(
-            f"Дата каталога MTO → {code_date} (на диске {disk_text})",
-            5000,
-        )
 
-    def _clear_mto_catalog_date(self, record: FileRecord) -> None:
-        """Drop a catalog-date override and restore the disk mtime."""
+    def _confirm_mto_catalog_date_manual(
+        self,
+        record: FileRecord,
+        *,
+        folder_files: Sequence[FileRecord] | None = None,
+    ) -> None:
+        """Persist a typed catalog date for the current document."""
+
+        targets = self._catalog_date_targets(record, folder_files)
+        disk_ns = int(record.data.get("disk_mtime_ns") or record.data.get("mtime_ns") or 0)
+        disk_text = format_file_save_date(disk_ns, with_time=True) or "—"
+        default = date.today()
+        applied = str(record.data.get("mtime_override_date") or "").strip()
+        if record.data.get("mtime_override_applied") and applied:
+            try:
+                default = parse_override_date(applied)
+            except ValueError:
+                pass
+        else:
+            from_mtime = override_date_text_from_mtime_ns(
+                int(record.data.get("mtime_ns") or disk_ns or 0)
+            )
+            if from_mtime:
+                try:
+                    default = parse_override_date(from_mtime)
+                except ValueError:
+                    pass
+        chosen = _ask_catalog_override_date(
+            self, default_date=default, disk_text=disk_text
+        )
+        if not chosen:
+            return
+        if self._apply_catalog_date_overrides(targets, chosen, reason="manual"):
+            self.statusBar().showMessage(
+                f"Дата каталога → {chosen} (вручную)",
+                5000,
+            )
+
+    def _confirm_mto_catalog_date_folder_mean(
+        self,
+        record: FileRecord,
+        *,
+        folder_files: Sequence[FileRecord] | None = None,
+    ) -> None:
+        """Persist the mean disk date of other files in the current package."""
+
+        mean = self._folder_mean_for_record(record, folder_files)
+        if mean is None:
+            QMessageBox.information(
+                self,
+                "Дата MTO",
+                "В папке нет других файлов для средней даты.",
+            )
+            return
+        targets = self._catalog_date_targets(record, folder_files)
+        names = ", ".join(_record_name(item) for item in targets)
+        reply = QMessageBox.question(
+            self,
+            "Дата MTO",
+            (
+                f"Заменить дату каталога на среднюю по папке "
+                f"({mean.override_date})?\n\n"
+                f"Учтено файлов: {mean.used_count}\n"
+                f"Без текущего документа: {names or _record_name(record)}\n\n"
+                "Файл на диске не меняется. Старая дата остаётся в подсказке."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        if self._apply_catalog_date_overrides(
+            targets, mean.override_date, reason="folder_mean"
+        ):
+            self.statusBar().showMessage(
+                f"Дата каталога → {mean.override_date} "
+                f"(средняя по {mean.used_count} файлам папки)",
+                5000,
+            )
+
+    def _clear_mto_catalog_date(
+        self,
+        record: FileRecord,
+        *,
+        folder_files: Sequence[FileRecord] | None = None,
+    ) -> None:
+        """Drop catalog-date overrides for the current document."""
 
         if self._busy():
             QMessageBox.information(
@@ -7720,6 +8042,7 @@ class CatalogWindow(QMainWindow):
                 "Дождитесь завершения текущей загрузки или сканирования.",
             )
             return
+        targets = self._catalog_date_targets(record, folder_files)
         disk_ns = int(record.data.get("disk_mtime_ns") or record.data.get("mtime_ns") or 0)
         disk_text = format_file_save_date(disk_ns, with_time=True) or "—"
         reply = QMessageBox.question(
@@ -7735,11 +8058,12 @@ class CatalogWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            self.database.delete_file_mtime_override(record.path_key)
+            for item in targets:
+                self.database.delete_file_mtime_override(item.path_key)
+                apply_mtime_override_to_data(item.path_key, item.data, None)
         except Exception as exc:
             QMessageBox.warning(self, "Дата MTO", str(exc))
             return
-        apply_mtime_override_to_data(record.path_key, record.data, None)
         self._refresh_after_mtime_override(record)
         self.statusBar().showMessage("Дата каталога MTO сброшена на дату диска", 4000)
 
@@ -9104,41 +9428,13 @@ class CatalogWindow(QMainWindow):
         copy_action.setEnabled(bool(_bundle_paths(bundle)))
         handoff_action = self._add_robot_handoff_action(menu)
         mto_record = _bundle_mto_xlsx(bundle)
-        code_date, code_stage = (
-            self._code_letter_for_record(mto_record)
-            if mto_record is not None
-            else ("", "")
+        folder_files = self._history_folder_records()
+        date_menu = self._add_mtime_override_menu(
+            menu,
+            mto_record,
+            folder_files=folder_files,
+            hide_when_missing=True,
         )
-        code_label = code_letter_label(code_stage)
-        has_override = False
-        if mto_record is not None:
-            try:
-                has_override = (
-                    self.database.get_file_mtime_override(mto_record.path_key)
-                    is not None
-                )
-            except Exception:
-                has_override = bool(
-                    mto_record.data.get("mtime_override_applied")
-                    or mto_record.data.get("mtime_override_stale")
-                )
-        date_action = None
-        clear_date_action = None
-        if mto_record is not None:
-            menu.addSeparator()
-            date_action = menu.addAction(MTO_CATALOG_DATE_ACTION)
-            date_action.setEnabled(bool(code_date) and not self._busy())
-            if code_date:
-                date_action.setToolTip(
-                    f"Дата каталога MTO → {code_date} ({code_label}). "
-                    "Дата на диске сохранится в подсказке."
-                )
-            else:
-                date_action.setToolTip(
-                    "Нет даты кода A/B/C для этой ревизии в журнале F."
-                )
-            clear_date_action = menu.addAction("Сбросить дату каталога")
-            clear_date_action.setEnabled(bool(has_override) and not self._busy())
         chosen = exec_tracked_menu(
             menu, MENU_HISTORY, self._history.viewport().mapToGlobal(position)
         )
@@ -9155,12 +9451,22 @@ class CatalogWindow(QMainWindow):
         elif chosen == handoff_action:
             column = self._history.columnAt(position.x())
             self._copy_robot_handoff(self._history_handoff_text(row_index, column))
-        elif date_action is not None and chosen == date_action:
+        elif date_menu.code is not None and chosen == date_menu.code:
             if mto_record is not None:
                 self._confirm_mto_catalog_date(mto_record)
-        elif clear_date_action is not None and chosen == clear_date_action:
+        elif date_menu.manual is not None and chosen == date_menu.manual:
             if mto_record is not None:
-                self._clear_mto_catalog_date(mto_record)
+                self._confirm_mto_catalog_date_manual(
+                    mto_record, folder_files=folder_files
+                )
+        elif date_menu.folder is not None and chosen == date_menu.folder:
+            if mto_record is not None:
+                self._confirm_mto_catalog_date_folder_mean(
+                    mto_record, folder_files=folder_files
+                )
+        elif date_menu.clear is not None and chosen == date_menu.clear:
+            if mto_record is not None:
+                self._clear_mto_catalog_date(mto_record, folder_files=folder_files)
         else:
             command = editable_actions.get(chosen) if chosen is not None else None
             if command:

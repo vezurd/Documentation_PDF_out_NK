@@ -18,10 +18,12 @@ from rd_catalog.doc_bundle import (
     bundle_documents,
     editable_pairs_with_pdf,
     folder_latest_save_date,
+    folder_mean_override,
     folder_revision_label,
     folder_tree_label,
     latest_save_mtime_ns,
     mtime_override_tooltip,
+    same_document_path_keys,
     working_folder_tooltip,
 )
 from rd_catalog.models import (
@@ -417,6 +419,59 @@ def main() -> None:
     assert "код B" in mtime_override_tooltip(rec)
     rec.data["mtime_override_reason"] = "code_c"
     assert "код C" in mtime_override_tooltip(rec)
+    rec.data["mtime_override_reason"] = "manual"
+    assert "вручную" in mtime_override_tooltip(rec)
+    rec.data["mtime_override_reason"] = "folder_mean"
+    assert "средняя по папке" in mtime_override_tooltip(rec)
+
+    def _noon_ns(year: int, month: int, day: int) -> int:
+        return int(datetime(year, month, day, 12, 0, 0).timestamp() * 1_000_000_000)
+
+    mto_xlsx = _record(
+        91,
+        path=r"\\x\pkg\DWG\AGCC.287-7360-SKUD.MTO-0001_0_RU.xlsx",
+        file_kind=FileKind.MTO_XLSX.value,
+        title="7360",
+        mark="SKUD",
+        revision="0",
+        core_stem="AGCC.287-7360-SKUD.MTO-0001",
+        discipline_block="MTO-0001",
+        mtime_ns=_noon_ns(2025, 8, 22),
+    )
+    mto_pdf = _record(
+        92,
+        path=r"\\x\pkg\PDF\AGCC.287-7360-SKUD.MTO-0001_0_RU.pdf",
+        file_kind=FileKind.PDF.value,
+        title="7360",
+        mark="SKUD",
+        revision="0",
+        core_stem="AGCC.287-7360-SKUD.MTO-0001",
+        discipline_block="MTO-0001",
+        mtime_ns=_noon_ns(2025, 8, 22),
+    )
+    od_files = [
+        _record(
+            93 + index,
+            path=rf"\\x\pkg\PDF\AGCC.287-7360-SKUD.OD-000{index}_0_RU.pdf",
+            file_kind=FileKind.PDF.value,
+            title="7360",
+            mark="SKUD",
+            revision="0",
+            core_stem=f"AGCC.287-7360-SKUD.OD-000{index}",
+            discipline_block=f"OD-000{index}",
+            mtime_ns=_noon_ns(2023, 7, 7),
+        )
+        for index in range(1, 4)
+    ]
+    folder = [*od_files, mto_pdf, mto_xlsx]
+    exclude = same_document_path_keys(mto_xlsx, folder)
+    assert mto_pdf.path_key.casefold() in exclude
+    mean = folder_mean_override(folder, exclude_path_keys=exclude)
+    assert mean is not None
+    assert mean.override_date == "07.07.2023"
+    assert mean.used_count == 3
+    assert mean.excluded_count == 2
+    assert folder_mean_override((mto_pdf, mto_xlsx), exclude_path_keys=exclude) is None
 
     print("RD catalog source files: OK")
 

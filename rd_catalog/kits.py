@@ -1655,6 +1655,8 @@ def _kit_send_target(
 _CODE_LETTER_STAGES = frozenset({"code_a", "code_b", "code_c"})
 _CODE_LETTER_BY_STAGE = {"code_a": "A", "code_b": "B", "code_c": "C"}
 MTO_CATALOG_DATE_ACTION = "Заменить дату на дату последнего кода A/B/C"
+MTO_CATALOG_DATE_MANUAL_ACTION = "Заменить дату вручную…"
+MTO_CATALOG_DATE_FOLDER_ACTION = "Заменить дату на среднюю по папке"
 
 
 def _revision_texts_eq(left: str, right: str) -> bool:

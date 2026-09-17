@@ -160,16 +160,16 @@ Meaning: the package stays in «Все документы» (open/copy/rescan st
 
 ### `file_mtime_override`
 
-User catalog date for one **MTO xlsx**. Same survive-rebuild rule as `kit_working_flag`. Scan still writes disk `file_entry.mtime_ns`. `list_files` substitutes `override_mtime_ns` into `FileRecord.data['mtime_ns']` only when the fingerprint still matches.
+User catalog date for one catalog file (PDF / MTO xlsx / SOURCE_EDITABLE). Same survive-rebuild rule as `kit_working_flag`. Scan still writes disk `file_entry.mtime_ns`. `list_files` substitutes `override_mtime_ns` into `FileRecord.data['mtime_ns']` only when the fingerprint still matches.
 
 - Identity: `path_key` UNIQUE NOCASE
 - Fingerprint: SHA-256 of `path_key|size|disk_mtime_ns` (scan identity). Unchanged file after rescan keeps the override. Size or disk mtime change → stale (disk date is used; row kept until the user resets)
-- `override_date` TEXT `DD.MM.YYYY` (last F letter A, B, or C for that filename rev)
+- `override_date` TEXT `DD.MM.YYYY` (F letter, typed date, or folder mean)
 - `override_mtime_ns` local noon of that date (tree / «Проверить передачи» / history)
 - `disk_mtime_ns` original scan mtime — tooltip / «на диске» only
-- `reason` `code_a` | `code_b` | `code_c`
+- `reason` `code_a` | `code_b` | `code_c` | `manual` | `folder_mean`
 - APIs: `upsert_file_mtime_override` / `delete_file_mtime_override` / `get_file_mtime_override` / `list_file_mtime_overrides`
-- GUI: Комплекты and history **«Заменить дату на дату последнего кода A/B/C»** / **«Сбросить дату каталога»**. Agreed-cycle scoring still uses last **code A** only. MTO compare cache uses `disk_mtime_ns` (`mto_file_stat_signature`)
+- GUI: Комплекты and history **«Заменить дату на дату последнего кода A/B/C»** (MTO xlsx only) / **«Заменить дату вручную…»** / **«Заменить дату на среднюю по папке»** / **«Сбросить дату каталога»**. Folder mean (`folder_mean_override` in [`rd_catalog/doc_bundle.py`](rd_catalog/doc_bundle.py)) is the mean disk mtime of other files in the issued package / selected revision node; the current document (same `core_stem`, PDF+xlsx) is excluded as the outlier. Manual and folder-mean stamp every file of that document so history **Дата** follows. Code A/B/C still writes only the MTO xlsx. Agreed-cycle scoring still uses last **code A** only. MTO compare cache uses `disk_mtime_ns` (`mto_file_stat_signature`)
 
 ### `issuance_review`
 

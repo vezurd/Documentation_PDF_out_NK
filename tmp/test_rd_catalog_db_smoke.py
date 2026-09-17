@@ -330,6 +330,16 @@ def main() -> None:
         assert catalog.data.get("mtime_override_applied") is True
         assert int(catalog.data.get("disk_mtime_ns") or 0) == disk_mtime
         assert int(catalog.data.get("mtime_ns") or 0) != disk_mtime
+        assert reopened.upsert_file_mtime_override(
+            records[0].path_key, "07.07.2023", reason="folder_mean"
+        ).reason == "folder_mean"
+        assert reopened.upsert_file_mtime_override(
+            records[0].path_key, "08.07.2023", reason="manual"
+        ).reason == "manual"
+        override = reopened.upsert_file_mtime_override(
+            records[0].path_key, "24.03.2024", reason="code_b"
+        )
+        assert override.reason == "code_b"
         signature = mto_file_stat_signature(catalog)
         assert signature["mtime_ns"] == disk_mtime
         reopened.store_scan(replacement)

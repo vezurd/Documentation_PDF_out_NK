@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
@@ -268,6 +268,133 @@ def file_save_date_tooltip(records: Iterable[FileRecord]) -> str:
     return "\n".join(lines)
 
 
+def record_disk_mtime_ns(record: FileRecord) -> int:
+    """Return the scan/disk mtime, ignoring a catalog-date override.
+
+    Args:
+        record: Catalog file.
+
+    Returns:
+        Nanoseconds since epoch, or ``0``.
+    """
+
+    return int(record.data.get("disk_mtime_ns") or record.data.get("mtime_ns") or 0)
+
+
+def override_date_text_from_mtime_ns(mtime_ns: int) -> str:
+    """Return local calendar date as ``DD.MM.YYYY``.
+
+    Args:
+        mtime_ns: Nanoseconds since epoch.
+
+    Returns:
+        Override-date text, or empty when ``mtime_ns`` is missing.
+    """
+
+    if mtime_ns <= 0:
+        return ""
+    try:
+        stamp = datetime.fromtimestamp(mtime_ns / 1_000_000_000)
+    except (OSError, OverflowError, ValueError):
+        return ""
+    return f"{stamp.day:02d}.{stamp.month:02d}.{stamp.year:04d}"
+
+
+def same_document_path_keys(
+    current: FileRecord,
+    folder_records: Iterable[FileRecord],
+) -> frozenset[str]:
+    """Return path keys of ``current`` and same-stem companions in the folder.
+
+    PDF and xlsx of one MTO share ``core_stem`` and were often re-saved
+    together, so both count as the outlier document.
+
+    Args:
+        current: File whose catalog date is being replaced.
+        folder_records: Catalog files in the same issued package / tree node.
+
+    Returns:
+        Case-folded ``path_key`` values.
+    """
+
+    keys = {str(current.path_key or "").casefold()}
+    stem = str(current.data.get("core_stem") or "").strip().casefold()
+    if not stem:
+        return frozenset(key for key in keys if key)
+    for record in folder_records:
+        other = str(record.data.get("core_stem") or "").strip().casefold()
+        if other != stem:
+            continue
+        key = str(record.path_key or "").casefold()
+        if key:
+            keys.add(key)
+    return frozenset(key for key in keys if key)
+
+
+@dataclass(frozen=True, slots=True)
+class FolderMeanOverride:
+    """Mean disk date of package files after dropping the outlier document.
+
+    Attributes:
+        override_date: ``DD.MM.YYYY`` for ``file_mtime_override``.
+        used_count: Files that entered the mean.
+        excluded_count: Same-document files skipped as the outlier.
+        mtime_ns: Mean timestamp (local-noon is applied at persist).
+    """
+
+    override_date: str
+    used_count: int
+    excluded_count: int
+    mtime_ns: int
+
+
+def folder_mean_override(
+    folder_records: Iterable[FileRecord],
+    *,
+    exclude_path_keys: Collection[str],
+) -> FolderMeanOverride | None:
+    """Mean disk date of folder files, skipping the current outlier document.
+
+    Uses scan/disk mtime so another file's catalog override does not shift
+    the mean. No UNC walk.
+
+    Args:
+        folder_records: Catalog files in the issued package (tree node).
+        exclude_path_keys: Current file and same-stem companions.
+
+    Returns:
+        Mean date, or ``None`` when no other dated catalog files remain.
+    """
+
+    excluded = {str(key or "").casefold() for key in exclude_path_keys if key}
+    used: list[int] = []
+    skipped = 0
+    for record in folder_records:
+        kind = _record_file_kind(record)
+        if kind not in _BUNDLE_KINDS:
+            continue
+        key = str(record.path_key or "").casefold()
+        if key in excluded:
+            skipped += 1
+            continue
+        mtime_ns = record_disk_mtime_ns(record)
+        if mtime_ns <= 0:
+            continue
+        used.append(mtime_ns)
+    if not used:
+        return None
+    mean_ns = int(sum(used) / len(used))
+    date_text = override_date_text_from_mtime_ns(mean_ns)
+    if not date_text:
+        return None
+    return FolderMeanOverride(
+        override_date=date_text,
+        used_count=len(used),
+        excluded_count=skipped,
+        mtime_ns=mean_ns,
+    )
+
+
 def mtime_override_tooltip(record: FileRecord) -> str:
     """Return the disk-vs-catalog date note for an MTO override, or empty.
 
@@ -286,6 +413,8 @@ def mtime_override_tooltip(record: FileRecord) -> str:
             "code_a": "код A",
             "code_b": "код B",
             "code_c": "код C",
+            "manual": "вручную",
+            "folder_mean": "средняя по папке",
         }.get(reason, reason or "вручную")
         disk_bit = f"; на диске {disk}" if disk else ""
         catalog = date_text or format_file_save_date(
