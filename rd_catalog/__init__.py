@@ -11,6 +11,11 @@ from rd_catalog.an_index import (
     parse_an_mto_file,
 )
 from rd_catalog.an_scan import AnScanOutcome, AnScanProgress, scan_an_dump
+from rd_catalog.rd_dump_scan import (
+    RdDumpScanOutcome,
+    RdDumpScanProgress,
+    scan_rd_dump,
+)
 from rd_catalog.ban_filter import BanFilterStore, BannedTitleMark, parse_title_mark
 from rd_catalog.skip_dirs import SkipDirsStore
 from rd_catalog.config import CatalogConfig, load_config
@@ -135,9 +140,14 @@ from rd_catalog.pipeline import (
     official_detected_current_ids,
     official_rd_mto_overlay,
     pipeline_algorithm_needs_rebuild,
+    PIPELINE_DISPLAY_V1,
+    PIPELINE_DISPLAY_V2,
+    PIPELINE_DISPLAY_VERSION,
     pipeline_approval_color_key,
     pipeline_approval_label,
     pipeline_approval_relation,
+    pipeline_approval_shows_letter,
+    pipeline_review_cycle_letter,
     pipeline_review_label,
     pipeline_send_date_text,
     pipeline_tdo_passed_date_text,
@@ -206,6 +216,8 @@ __all__ = [
     "AnMtoFile",
     "AnScanOutcome",
     "AnScanProgress",
+    "RdDumpScanOutcome",
+    "RdDumpScanProgress",
     "ApprovedContour",
     "BanFilterStore",
     "BannedTitleMark",
@@ -239,6 +251,9 @@ __all__ = [
     "KitRevisionRow",
     "KitSummary",
     "PIPELINE_STATUS_ALGORITHM_VERSION",
+    "PIPELINE_DISPLAY_V1",
+    "PIPELINE_DISPLAY_V2",
+    "PIPELINE_DISPLAY_VERSION",
     "REVISION_MATRIX_ALGORITHM_VERSION",
     "MTO_COMPARE_ALGORITHM_VERSION",
     "MTO_EXPORT_ALGORITHM_VERSION",
@@ -351,6 +366,8 @@ __all__ = [
     "pipeline_approval_color_key",
     "pipeline_approval_label",
     "pipeline_approval_relation",
+    "pipeline_approval_shows_letter",
+    "pipeline_review_cycle_letter",
     "pipeline_review_label",
     "pipeline_send_date_text",
     "pipeline_tdo_passed_date_text",
@@ -371,6 +388,7 @@ __all__ = [
     "save_export_targets",
     "upsert_export_pin",
     "scan_an_dump",
+    "scan_rd_dump",
     "scan_catalog",
     "scan_document_source",
     "scan_export_target",

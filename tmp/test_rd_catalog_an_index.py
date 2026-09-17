@@ -58,7 +58,7 @@ def _parse_named(directory: Path, name: str) -> AnMtoFile | None:
 def main() -> None:
     """Run matching, parse-reject, and snapshot round-trip assertions."""
 
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
 
     closing = _an_file()
     hit = match_an_to_kit((closing,), _POS_TARGETS)

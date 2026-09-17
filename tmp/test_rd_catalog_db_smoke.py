@@ -112,7 +112,7 @@ def _sample_issuance_send(*, row_index: int, transmittal: str, send_date: str) -
 def main() -> None:
     """Verify reopen, schema, review history, and comparison cache."""
 
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
     with tempfile.TemporaryDirectory(prefix="rd_catalog_db_") as temp:
         legacy_path = Path(temp, "legacy_v1.sqlite")
         connection = sqlite3.connect(legacy_path)
@@ -137,6 +137,7 @@ def main() -> None:
         assert "kit_revision_cell" in tables
         assert "issuance_review" in tables
         assert "an_mto_file" in tables
+        assert "rd_dump_mto_file" in tables
         assert "kit_working_flag" in tables
         assert "kit_annulled_flag" in tables
         assert "file_mtime_override" in tables
@@ -184,6 +185,7 @@ def main() -> None:
         assert "mto_pair_comparison" in v4_tables
         assert "issuance_review" in v4_tables
         assert "an_mto_file" in v4_tables
+        assert "rd_dump_mto_file" in v4_tables
         assert "kit_working_flag" in v4_tables
         assert "kit_annulled_flag" in v4_tables
         assert "file_mtime_override" in v4_tables
@@ -259,6 +261,7 @@ def main() -> None:
         assert "mto_pair_comparison" in _table_names(db_path)
         assert "issuance_review" in _table_names(db_path)
         assert "an_mto_file" in _table_names(db_path)
+        assert "rd_dump_mto_file" in _table_names(db_path)
         assert "kit_working_flag" in _table_names(db_path)
         assert "kit_annulled_flag" in _table_names(db_path)
         assert "file_mtime_override" in _table_names(db_path)
@@ -568,7 +571,25 @@ def main() -> None:
         assert len(reopened.list_files()) == 1
         stored_an = reopened.list_an_files_by_kit()
         assert stored_an[kit_identity_key("1600", "POS")][0].path == an_file.path
+        reopened.replace_rd_dump_snapshot(
+            (an_file,),
+            scanned_at="2026-09-13T00:00:00+00:00",
+        )
+        stored_dump = reopened.list_rd_dump_files_by_kit()
+        assert stored_dump[kit_identity_key("1600", "POS")][0].path == an_file.path
+        reopened.replace_google_snapshot(
+            (),
+            (),
+            loaded_at="2026-09-17T00:00:00+00:00",
+            source="test-keep-rd-dump",
+        )
+        reopened.replace_kit_derived((), (), ())
+        assert (
+            reopened.list_rd_dump_mto_files()[0].path == an_file.path
+        )
+        assert reopened.list_an_mto_files()[0].path == an_file.path
         assert "an_mto_file" in _table_names(db_path)
+        assert "rd_dump_mto_file" in _table_names(db_path)
     test_purge_noncanonical_rd_keeps_canonical_missing()
     print("RD catalog DB smoke: OK")
 

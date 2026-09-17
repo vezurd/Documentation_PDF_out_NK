@@ -80,6 +80,12 @@ from rd_catalog.an_index import (
 from rd_catalog.an_scan import AnScanProgress, _an_root_disabled
 from rd_catalog.an_scan_thread import AnScanThread
 from rd_catalog.an_tab import AnTab
+from rd_catalog.rd_dump_scan import (
+    RdDumpScanProgress,
+    _rd_root_disabled as _rd_dump_root_disabled,
+)
+from rd_catalog.rd_dump_scan_thread import RdDumpScanThread
+from rd_catalog.rd_dump_tab import RdDumpTab
 from rd_catalog.customer_pi_auto_mto import (
     AUTO_MTO_COMPARE_STATUS_HEADER,
     AUTO_MTO_COMPARE_STATUS_TOOLTIP,
@@ -605,6 +611,7 @@ _DEFERRED_COLLISIONS = "collisions"
 _DEFERRED_APPROVAL = "approval"
 _DEFERRED_TREE = "tree"
 _DEFERRED_AN = "an"
+_DEFERRED_RD_DUMP = "rd_dump"
 _DEFERRED_ALL = frozenset(
     {
         _DEFERRED_HEATMAP,
@@ -613,6 +620,7 @@ _DEFERRED_ALL = frozenset(
         _DEFERRED_ISSUANCE_JOURNAL,
         _DEFERRED_COLLISIONS,
         _DEFERRED_AN,
+        _DEFERRED_RD_DUMP,
         _DEFERRED_APPROVAL,
         _DEFERRED_TREE,
     }
@@ -1133,6 +1141,7 @@ class CatalogWindow(QMainWindow):
         )
         self._scan_thread: ScanThread | None = None
         self._an_scan_thread: AnScanThread | None = None
+        self._rd_dump_scan_thread: RdDumpScanThread | None = None
         self._startup_thread: StartupHydrateThread | None = None
         self._google_thread: KitLoadThread | None = None
         self._google_write_thread: GoogleFWriteThread | None = None
@@ -1191,6 +1200,7 @@ class CatalogWindow(QMainWindow):
         self._export_pins_by_key: dict[tuple[str, str], ExportPin] = {}
         self._auto_mto_by_kit: dict[tuple[str, str], tuple[AutoMtoFile, ...]] = {}
         self._an_files_by_kit: dict[tuple[str, str], tuple[AnMtoFile, ...]] = {}
+        self._rd_dump_files: tuple[AnMtoFile, ...] = ()
         self._catalog_monitor: CatalogMonitor | None = None
         self._customer_pi_dialog: CustomerPiDialog | None = None
         self._startup_load_pending = False
@@ -1245,6 +1255,15 @@ class CatalogWindow(QMainWindow):
         self._an_tab.prepare_context_menu.connect(self._on_an_tab_prepare_menu)
         self._an_table = self._an_tab.table()
         self._tabs.addTab(self._an_tab, "АН")
+        self._rd_dump_tab = RdDumpTab(self)
+        self._rd_dump_tab.configure(self.config.runtime_dir)
+        self._rd_dump_tab.kit_activated.connect(self._on_revision_matrix_kit)
+        self._rd_dump_tab.scan_requested.connect(self._start_rd_dump_scan)
+        self._rd_dump_tab.prepare_context_menu.connect(
+            self._on_rd_dump_tab_prepare_menu
+        )
+        self._rd_dump_table = self._rd_dump_tab.table()
+        self._tabs.addTab(self._rd_dump_tab, "РД")
         self._mto_readiness_tab = self._build_mto_tab()
         self._tabs.addTab(self._mto_readiness_tab, "MTO · Готовность робота")
         self._issuance_journal_tab = IssuanceJournalTab(
@@ -2040,6 +2059,7 @@ class CatalogWindow(QMainWindow):
             ("window/mto_worklist_header_v4", "_mto_worklist_table"),
             ("window/issuance_journal_header_v1", "_issuance_journal_table"),
             ("window/an_tab_header_v2", "_an_table"),
+            ("window/rd_dump_tab_header_v1", "_rd_dump_table"),
             # v10: «Ок» after «Марка»; do not restore v9.
             ("window/kits_header_v10", "_kits_table"),
             ("window/collision_header", "_collision_table"),
@@ -2763,6 +2783,8 @@ class CatalogWindow(QMainWindow):
             self._rebuild_document_tree()
         elif key == _DEFERRED_AN:
             self._refresh_an_tab()
+        elif key == _DEFERRED_RD_DUMP:
+            self._refresh_rd_dump_tab()
         self._deferred_widgets.discard(key)
         if _DEFERRED_HEATMAP not in self._deferred_widgets and (
             _DEFERRED_TREE not in self._deferred_widgets
@@ -2801,6 +2823,8 @@ class CatalogWindow(QMainWindow):
             self._ensure_deferred_widget(_DEFERRED_COLLISIONS)
         elif widget is getattr(self, "_an_tab", None):
             self._ensure_deferred_widget(_DEFERRED_AN)
+        elif widget is getattr(self, "_rd_dump_tab", None):
+            self._ensure_deferred_widget(_DEFERRED_RD_DUMP)
 
     def refresh(
         self,
@@ -4736,6 +4760,37 @@ class CatalogWindow(QMainWindow):
                 allowed_kits=known,
             )
 
+    def _reload_rd_dump_index(self) -> None:
+        """Reload RD dump files from SQLite. Does not rebuild pipeline."""
+
+        with perf_span("gui.reload_rd_dump_index"):
+            try:
+                self._rd_dump_files = self.database.list_rd_dump_mto_files()
+            except Exception as exc:
+                self._rd_dump_files = ()
+                self._append_log(f"РД: {type(exc).__name__}: {exc}")
+
+    def _refresh_rd_dump_tab(self) -> None:
+        """Push the cached RD dump into the finder tab."""
+
+        if not hasattr(self, "_rd_dump_tab"):
+            return
+        self._deferred_widgets.discard(_DEFERRED_RD_DUMP)
+        with perf_span("gui.refresh_rd_dump_tab"):
+            self._rd_dump_tab.set_content_queue_paused(self._catalog_workers_busy())
+            if not self._rd_dump_files:
+                self._reload_rd_dump_index()
+            known = {
+                kit_identity_key(row.title, row.mark) for row in self._kit_rows
+            }
+            self._rd_dump_tab.set_rows(
+                self._rd_dump_files,
+                is_banned=lambda title, mark: self._is_banned_pair(title, mark),
+                kit_targets=self._an_targets_by_kit(),
+                rd_root=self.config.rd_root,
+                allowed_kits=known,
+            )
+
     def _open_auto_mto_cell(self, table_row: int) -> None:
         item = self._kits_table.item(table_row, _KITS_COL_AUTO_MTO)
         row = item.data(_ROLE_ROW) if item else None
@@ -5084,6 +5139,8 @@ class CatalogWindow(QMainWindow):
                 self._refresh_issuance_journal()
             if _DEFERRED_AN not in self._deferred_widgets:
                 self._refresh_an_tab()
+            if _DEFERRED_RD_DUMP not in self._deferred_widgets:
+                self._refresh_rd_dump_tab()
             self._update_ban_action_label()
             self._update_kits_tab_label()
 
@@ -5369,6 +5426,7 @@ class CatalogWindow(QMainWindow):
             "Открыть журнал с предзаполненной строкой текущей ревизии РД."
         )
         an_action = menu.addAction('Показать в „АН“')
+        rd_dump_action = menu.addAction('Показать в „РД“')
         an_folder_action = menu.addAction("Открыть папку · АН")
         shown_an = self._an_hit_for(row).shown_file
         an_folder_action.setEnabled(
@@ -5495,6 +5553,13 @@ class CatalogWindow(QMainWindow):
                 self._an_tab.focus_revision(
                     targets.auto_mto or hit.shown_revision
                 )
+            return
+        if chosen == rd_dump_action:
+            self._tabs.setCurrentWidget(self._rd_dump_tab)
+            self._rd_dump_tab.set_kit_filter(row.title, row.mark)
+            if not self._rd_dump_tab.focus_best_agreed():
+                targets = self._kit_an_targets(row)
+                self._rd_dump_tab.focus_revision(targets.auto_mto or targets.rd_mto)
             return
         if chosen == an_folder_action:
             if shown_an is not None and shown_an.parent_dir:
@@ -7309,6 +7374,37 @@ class CatalogWindow(QMainWindow):
         ]
         return format_robot_handoff("таблица АН", fields)
 
+    def _on_rd_dump_tab_prepare_menu(self, menu: QMenu) -> None:
+        action = self._add_robot_handoff_action(menu)
+        action.triggered.connect(self._on_rd_dump_tab_handoff)
+
+    def _on_rd_dump_tab_handoff(self) -> None:
+        payload = self._rd_dump_tab.selected_file()
+        if payload is None:
+            return
+        self._copy_robot_handoff(self._rd_dump_tab_handoff_text(payload))
+
+    def _rd_dump_tab_handoff_text(self, payload: AnMtoFile) -> str:
+        """Build a chat dump for an RD finder row.
+
+        Args:
+            payload: Selected ``AnMtoFile`` from the РД table.
+
+        Returns:
+            Robot-handoff text.
+        """
+
+        fields = [
+            ("Вкладка", "РД"),
+            ("Титул", payload.title),
+            ("Марка", payload.mark),
+            ("Ревизия", payload.revision_text or "—"),
+            ("Имя", payload.name),
+            ("Папка", payload.parent_dir),
+            ("Путь", payload.path),
+        ]
+        return format_robot_handoff("таблица РД", fields)
+
     def _on_mto_worklist_handoff(self) -> None:
         payload = self._mto_worklist_tab.selected_row()
         if payload is None:
@@ -8370,7 +8466,13 @@ class CatalogWindow(QMainWindow):
             self._kits_pkg_handoff_button.setEnabled(package is not None)
         if hasattr(self, "_an_tab"):
             self._an_tab.set_scan_enabled(not scanning)
-        if self._scan_thread is not None or self._an_scan_thread is not None:
+        if hasattr(self, "_rd_dump_tab"):
+            self._rd_dump_tab.set_scan_enabled(not scanning)
+        if (
+            self._scan_thread is not None
+            or self._an_scan_thread is not None
+            or self._rd_dump_scan_thread is not None
+        ):
             pass
         elif self._mto_compare_thread is not None:
             self._cancel_action.setEnabled(True)
@@ -8384,11 +8486,13 @@ class CatalogWindow(QMainWindow):
             )
         if hasattr(self, "_an_tab"):
             self._an_tab.set_content_queue_paused(self._catalog_workers_busy())
+        if hasattr(self, "_rd_dump_tab"):
+            self._rd_dump_tab.set_content_queue_paused(self._catalog_workers_busy())
         self._set_transfer_mto_compare_paused(self._catalog_workers_busy())
         self._update_layout_report_action()
 
     def _catalog_workers_busy(self) -> bool:
-        """Return True when a scan / АН / Google / robot / SQ / export / PI worker is active.
+        """Return True when a scan / АН / РД dump / Google / robot / SQ / export / PI worker is active.
 
         AutoMTO, AN content compares, and transfer-review MTO compares are
         not catalog workers: scan and Google stay available while those
@@ -8406,6 +8510,7 @@ class CatalogWindow(QMainWindow):
         return (
             self._scan_thread is not None
             or self._an_scan_thread is not None
+            or self._rd_dump_scan_thread is not None
             or self._google_thread is not None
             or self._google_write_thread is not None
             or self._robot_sync_thread is not None
@@ -8438,6 +8543,8 @@ class CatalogWindow(QMainWindow):
             self._skip_prune_button.setEnabled(enabled)
         if hasattr(self, "_an_tab"):
             self._an_tab.set_scan_enabled(enabled)
+        if hasattr(self, "_rd_dump_tab"):
+            self._rd_dump_tab.set_scan_enabled(enabled)
         if hasattr(self, "_kits_de_sync_button"):
             self._kits_de_sync_button.setEnabled(enabled)
 
@@ -8604,6 +8711,34 @@ class CatalogWindow(QMainWindow):
         self._update_action_states()
         thread.start()
 
+    def _start_rd_dump_scan(self) -> None:
+        """Start the RD dump child-process scan unless a catalog worker is busy."""
+
+        if self._busy():
+            return
+        if _rd_dump_root_disabled(self.config.rd_root):
+            QMessageBox.information(
+                self,
+                "Скан РД",
+                "Корень РД не задан (rd_root пуст). Скан отключён.",
+            )
+            return
+        self._cancel_mto_compare(resume_later=True)
+        self._cancel_export_pair_compare()
+        thread = RdDumpScanThread(self.config, self)
+        thread.progress.connect(self._on_rd_dump_scan_progress)
+        thread.log.connect(self._append_log)
+        thread.error.connect(self._on_rd_dump_scan_error)
+        thread.finished.connect(self._on_rd_dump_scan_finished)
+        self._rd_dump_scan_thread = thread
+        self._set_workers_enabled(False)
+        self._cancel_action.setEnabled(True)
+        self._progress.setRange(0, 0)
+        self._append_log("Скан РД (xlsx)…")
+        self.statusBar().showMessage("Сканирование РД (xlsx)…")
+        self._update_action_states()
+        thread.start()
+
     def start_google_kits_load(self) -> None:
         """Fetch the Google kits sheet in a background thread."""
 
@@ -8638,6 +8773,9 @@ class CatalogWindow(QMainWindow):
         elif self._an_scan_thread is not None:
             self._cancel_action.setEnabled(False)
             self._an_scan_thread.request_cancel()
+        elif self._rd_dump_scan_thread is not None:
+            self._cancel_action.setEnabled(False)
+            self._rd_dump_scan_thread.request_cancel()
         elif self._mto_compare_thread is not None:
             self._cancel_mto_compare(resume_later=False)
 
@@ -8880,6 +9018,56 @@ class CatalogWindow(QMainWindow):
                     status = "Скан АН отменён"
                 else:
                     status = f"АН: принято {accepted}"
+                self.statusBar().showMessage(status, 10_000)
+            self._update_action_states()
+
+    @Slot(object)
+    def _on_rd_dump_scan_progress(self, progress: RdDumpScanProgress) -> None:
+        message = progress.message or progress.path
+        self.statusBar().showMessage(f"РД: {progress.files_seen} · {message}")
+
+    @Slot(str)
+    def _on_rd_dump_scan_error(self, message: str) -> None:
+        self._append_log(message)
+        self.statusBar().showMessage("Ошибка скана РД (xlsx)")
+
+    @Slot()
+    def _on_rd_dump_scan_finished(self) -> None:
+        thread = self._rd_dump_scan_thread
+        if thread is None:
+            return
+        with perf_span("gui.rd_dump_scan_finished"):
+            failure = thread.failure
+            accepted = thread.accepted
+            files_seen = thread.files_seen
+            cancelled = thread.cancelled
+            self._set_workers_enabled(True)
+            self._cancel_action.setEnabled(False)
+            self._progress.setRange(0, 1)
+            self._progress.setValue(1)
+            self._rd_dump_scan_thread = None
+            thread.deleteLater()
+            if failure:
+                self._append_log(f"РД: {failure}")
+            elif cancelled:
+                self._append_log("РД: скан отменён")
+            else:
+                self._append_log(f"РД: принято {accepted} из {files_seen}")
+            self._reload_rd_dump_index()
+            self._refresh_rd_dump_tab()
+            resumed = self._resume_pending_mto_compare()
+            self._mto_resume_on_idle = (
+                not resumed
+                and bool(self._mto_pending_keys)
+                and (self._mto_compare_thread is not None or self._busy())
+            )
+            if not resumed:
+                if failure:
+                    status = f"РД: {failure}"
+                elif cancelled:
+                    status = "Скан РД отменён"
+                else:
+                    status = f"РД: принято {accepted}"
                 self.statusBar().showMessage(status, 10_000)
             self._update_action_states()
 
@@ -9685,6 +9873,8 @@ class CatalogWindow(QMainWindow):
             self._issuance_journal_tab.restore_filters(self._settings)
         if hasattr(self, "_an_tab"):
             self._an_tab.restore_filters(self._settings)
+        if hasattr(self, "_rd_dump_tab"):
+            self._rd_dump_tab.restore_filters(self._settings)
         if hasattr(self, "_approval_mail_tab"):
             self._approval_mail_tab.restore_settings(self._settings)
         if hasattr(self, "_kits_filter"):
@@ -9920,6 +10110,16 @@ class CatalogWindow(QMainWindow):
                 self._restore_deferred_load_timers(startup_pending, secondary_pending)
                 event.ignore()
                 return
+        if hasattr(self, "_rd_dump_tab"):
+            if not self._rd_dump_tab.prepare_close():
+                QMessageBox.information(
+                    self,
+                    "РД",
+                    "Сверка РД ещё завершается. Повторите закрытие через несколько секунд.",
+                )
+                self._restore_deferred_load_timers(startup_pending, secondary_pending)
+                event.ignore()
+                return
         transfer_thread = getattr(self, "_transfer_mto_thread", None)
         if transfer_thread is not None and transfer_thread.isRunning():
             transfer_thread.requestInterruption()
@@ -9951,6 +10151,17 @@ class CatalogWindow(QMainWindow):
                     self,
                     "Скан АН",
                     "Скан АН ещё завершается. Повторите закрытие через несколько секунд.",
+                )
+                self._restore_deferred_load_timers(startup_pending, secondary_pending)
+                event.ignore()
+                return
+        if self._rd_dump_scan_thread is not None:
+            self._rd_dump_scan_thread.request_cancel()
+            if not self._rd_dump_scan_thread.wait(3000):
+                QMessageBox.information(
+                    self,
+                    "Скан РД",
+                    "Скан РД ещё завершается. Повторите закрытие через несколько секунд.",
                 )
                 self._restore_deferred_load_timers(startup_pending, secondary_pending)
                 event.ignore()
@@ -10030,6 +10241,8 @@ class CatalogWindow(QMainWindow):
             self._issuance_journal_tab.save_filters(self._settings)
         if hasattr(self, "_an_tab"):
             self._an_tab.save_filters(self._settings)
+        if hasattr(self, "_rd_dump_tab"):
+            self._rd_dump_tab.save_filters(self._settings)
         if hasattr(self, "_approval_mail_tab"):
             self._approval_mail_tab.save_settings(self._settings)
         if hasattr(self, "_kits_filter"):

@@ -19,6 +19,7 @@ from rd_catalog.customer_pi_auto_mto import (
 
 AN_CONTENT_COMPARE_CACHE_VERSION = 1
 AN_CONTENT_COMPARE_CACHE_NAME = "an_content_compare_cache.json"
+RD_DUMP_CONTENT_COMPARE_CACHE_NAME = "rd_dump_content_compare_cache.json"
 _PERSISTABLE_KINDS = frozenset({"matched", "soft", "no_match", "not_compared"})
 
 
@@ -100,20 +101,26 @@ def result_from_entry(entry: Mapping[str, Any] | None) -> MtoPairCompareResult |
     )
 
 
-def cache_path(runtime_dir: str | Path) -> Path:
-    """Return ``runtime_dir / an_content_compare_cache.json``."""
+def cache_path(
+    runtime_dir: str | Path,
+    *,
+    name: str = AN_CONTENT_COMPARE_CACHE_NAME,
+) -> Path:
+    """Return ``runtime_dir / name`` for a pairwise content-compare JSON."""
 
-    return Path(runtime_dir) / AN_CONTENT_COMPARE_CACHE_NAME
+    return Path(runtime_dir) / name
 
 
 def load_an_content_compare_cache(
     runtime_dir: str | Path | None,
+    *,
+    name: str = AN_CONTENT_COMPARE_CACHE_NAME,
 ) -> dict[str, dict[str, Any]]:
     """Load persistable AN content-compare entries from the runtime JSON."""
 
     if runtime_dir is None:
         return {}
-    path = cache_path(runtime_dir)
+    path = cache_path(runtime_dir, name=name)
     if not path.is_file():
         return {}
     try:
@@ -137,6 +144,8 @@ def load_an_content_compare_cache(
 def save_an_content_compare_cache(
     runtime_dir: str | Path | None,
     entries: Mapping[str, Mapping[str, Any]],
+    *,
+    name: str = AN_CONTENT_COMPARE_CACHE_NAME,
 ) -> None:
     """Write persistable AN content-compare entries to the runtime JSON."""
 
@@ -147,7 +156,7 @@ def save_an_content_compare_cache(
         for key, entry in entries.items()
         if isinstance(entry, Mapping)
     }
-    path = cache_path(runtime_dir)
+    path = cache_path(runtime_dir, name=name)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": AN_CONTENT_COMPARE_CACHE_VERSION,

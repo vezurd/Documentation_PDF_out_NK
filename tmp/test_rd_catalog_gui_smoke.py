@@ -996,8 +996,12 @@ def main() -> None:
         assert window._tabs.indexOf(window._an_tab) == (
             window._tabs.indexOf(window._mto_worklist_tab) + 1
         )
-        assert window._tabs.indexOf(window._mto_readiness_tab) == (
+        assert window._tabs.tabText(window._tabs.indexOf(window._rd_dump_tab)) == "РД"
+        assert window._tabs.indexOf(window._rd_dump_tab) == (
             window._tabs.indexOf(window._an_tab) + 1
+        )
+        assert window._tabs.indexOf(window._mto_readiness_tab) == (
+            window._tabs.indexOf(window._rd_dump_tab) + 1
         )
         assert window._tabs.tabText(
             window._tabs.indexOf(window._approval_mail_tab)

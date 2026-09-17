@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from rd_catalog.mto_diff import MtoComparisonResult, RowLoader
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 _FILE_ID_CHUNK = 400
 _OVERRIDE_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
 FILE_MTIME_OVERRIDE_REASONS = frozenset(
@@ -592,6 +592,9 @@ class CatalogDatabase:
                 version = 11
             if version < 12:
                 self._migrate_11_to_12(connection)
+                version = 12
+            if version < 13:
+                self._migrate_12_to_13(connection)
             self._ensure_kit_pipeline_columns(connection)
 
     @staticmethod
@@ -1240,6 +1243,35 @@ class CatalogDatabase:
             ("12",),
         )
 
+    @staticmethod
+    def _migrate_12_to_13(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE rd_dump_mto_file (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                path_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                mark TEXT NOT NULL,
+                revision_text TEXT NOT NULL DEFAULT '',
+                core_stem TEXT NOT NULL DEFAULT '',
+                discipline_block TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                parent_dir TEXT NOT NULL DEFAULT '',
+                mtime_ns INTEGER NOT NULL DEFAULT 0,
+                size INTEGER NOT NULL DEFAULT 0,
+                scanned_at TEXT NOT NULL
+            );
+            CREATE INDEX rd_dump_mto_file_kit_idx
+                ON rd_dump_mto_file(title COLLATE NOCASE, mark COLLATE NOCASE);
+            """
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES"
+            " ('schema_version', ?)",
+            ("13",),
+        )
+
     def schema_version(self) -> int:
         """Return the initialized database schema version.
 
@@ -1307,7 +1339,7 @@ class CatalogDatabase:
         paths for the rest of RD. After missing detection, RD rows whose
         path is not the issued ``title/mark/gate/NN_`` layout are deleted
         (legacy leftover; canonical ``present=0`` is kept). Does not touch
-        ``an_mto_file``.
+        ``an_mto_file`` or ``rd_dump_mto_file``.
 
         Args:
             summary: Completed or partial scanner output.
@@ -3345,7 +3377,7 @@ class CatalogDatabase:
         ``kit_working_flag``, ``kit_annulled_flag``, ``file_mtime_override``,
         ``kit_package``,
         ``kit_pipeline``, ``kit_cycle``, ``file_entry``,
-        or ``an_mto_file``.
+        ``an_mto_file``, or ``rd_dump_mto_file``.
         Duplicate
         ``(title, mark)`` kits are collapsed with last-wins using
         :func:`kit_identity_key`. All issuance sends are stored.
@@ -3661,7 +3693,8 @@ class CatalogDatabase:
         Does not touch ``kit_liquidity_review``, ``issuance_review``,
         ``kit_working_flag``, ``kit_annulled_flag``, ``file_mtime_override``,
         Google snapshot
-        tables, ``file_entry``, ``kit_revision_cell``, or ``an_mto_file``.
+        tables, ``file_entry``, ``kit_revision_cell``, ``an_mto_file``,
+        or ``rd_dump_mto_file``.
         ``KitCycleRow.package_id``
         values are remapped from matching :attr:`KitPackageRow.id` in
         ``packages``. Duplicate pipeline identities keep the last row via
@@ -4847,6 +4880,85 @@ class CatalogDatabase:
 
         grouped: dict[tuple[str, str], list[AnMtoFile]] = {}
         for file in self.list_an_mto_files():
+            key = kit_identity_key(file.title, file.mark)
+            grouped.setdefault(key, []).append(file)
+        return {key: tuple(items) for key, items in grouped.items()}
+
+    def replace_rd_dump_snapshot(
+        self,
+        files: Sequence[AnMtoFile],
+        *,
+        scanned_at: str,
+    ) -> None:
+        """Replace all ``rd_dump_mto_file`` rows in one transaction.
+
+        Does not touch ``file_entry``, overlay, ``an_mto_file``,
+        ``issuance_review``, ``kit_liquidity_review``, ``kit_working_flag``,
+        or ``kit_annulled_flag``.
+
+        Args:
+            files: Parsed RD-dump MTO workbooks from the last walk.
+            scanned_at: ISO timestamp stored on every inserted row.
+        """
+
+        with self._connection() as connection, connection:
+            connection.execute("DELETE FROM rd_dump_mto_file")
+            connection.executemany(
+                """
+                INSERT INTO rd_dump_mto_file(
+                    path, path_key, title, mark, revision_text, core_stem,
+                    discipline_block, name, parent_dir, mtime_ns, size,
+                    scanned_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        file.path,
+                        file.path_key,
+                        file.title,
+                        file.mark,
+                        file.revision_text,
+                        file.core_stem,
+                        file.discipline_block,
+                        file.name,
+                        file.parent_dir,
+                        int(file.mtime_ns),
+                        int(file.size),
+                        scanned_at,
+                    )
+                    for file in files
+                ],
+            )
+
+    def list_rd_dump_mto_files(self) -> tuple[AnMtoFile, ...]:
+        """Return every stored RD-dump MTO file.
+
+        Returns:
+            Rows ordered by title, mark, revision text, and path.
+        """
+
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT path, path_key, title, mark, revision_text, core_stem,
+                       discipline_block, name, parent_dir, mtime_ns, size
+                FROM rd_dump_mto_file
+                ORDER BY title, mark, revision_text, path
+                """
+            ).fetchall()
+        return tuple(self._an_mto_file_from_row(row) for row in rows)
+
+    def list_rd_dump_files_by_kit(
+        self,
+    ) -> dict[tuple[str, str], tuple[AnMtoFile, ...]]:
+        """Group stored RD-dump MTO files by kit identity.
+
+        Returns:
+            Mapping of :func:`kit_identity_key` to files in list order.
+        """
+
+        grouped: dict[tuple[str, str], list[AnMtoFile]] = {}
+        for file in self.list_rd_dump_mto_files():
             key = kit_identity_key(file.title, file.mark)
             grouped.setdefault(key, []).append(file)
         return {key: tuple(items) for key, items in grouped.items()}
