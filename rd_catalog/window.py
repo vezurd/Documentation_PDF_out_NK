@@ -286,6 +286,17 @@ from rd_catalog.approval_mail_preview import (
     kit_lookup_from_issuance,
 )
 from rd_catalog.approval_mail_tab import ApprovalMailTab
+from rd_catalog.f_journal import build_journal_patch
+from rd_catalog.f_legalize import (
+    LEGALIZE_APPROVAL_ACTION,
+    LEGALIZE_APPROVAL_STAGE,
+    LEGALIZE_APPROVAL_TITLE,
+    LEGALIZE_APPROVAL_TOKEN,
+    f_line_date_from_mtime_ns,
+    legalize_approval_f_line,
+    mto_revision_from_records,
+)
+from rd_catalog.f_legalize_dialog import FLegalizeDialog
 from rd_catalog.google_f_write_thread import GoogleFWriteThread
 from rd_catalog.google_sheet_links import (
     SheetLinkContext,
@@ -7663,6 +7674,7 @@ class CatalogWindow(QMainWindow):
         unmark_action = None
         mark_annulled_action = None
         unmark_annulled_action = None
+        legalize_f_action = None
         if item.data(0, _ROLE_NODE_KIND) == _NODE_REVISION:
             revision_text = folder_revision_label(self._tree_item_records(item))
             if revision_text == NO_REVISION_LABEL:
@@ -7738,6 +7750,20 @@ class CatalogWindow(QMainWindow):
                     )
                     mark_annulled_action.setChecked(has_annulled)
                     unmark_annulled_action.setEnabled(has_annulled)
+                menu.addSeparator()
+                legalize_f_action = menu.addAction(LEGALIZE_APPROVAL_ACTION)
+                has_rd = any(
+                    record.source is SourceKind.RD and record.present
+                    for record in self._tree_item_records(item)
+                )
+                legalize_f_action.setEnabled(
+                    bool(revision_text and title and mark and has_rd)
+                    and not scanning
+                )
+                legalize_f_action.setToolTip(
+                    "Пишет код А в столбец F листа «Контроль выдачи» "
+                    f"(вместо TRM: {LEGALIZE_APPROVAL_TOKEN})."
+                )
         chosen = exec_tracked_menu(
             menu, MENU_DOC_TREE, self._doc_tree.viewport().mapToGlobal(position)
         )
@@ -7762,6 +7788,97 @@ class CatalogWindow(QMainWindow):
             and chosen == unmark_annulled_action
         ):
             self._apply_tree_annulled_flag(item, remove=True)
+        elif legalize_f_action is not None and chosen == legalize_f_action:
+            self._open_legalize_approval_f_dialog(item)
+
+    def _open_legalize_approval_f_dialog(self, item: QTreeWidgetItem) -> None:
+        """Preview F до/F после and write code A to КСБ ИД.
+
+        Args:
+            item: Documents-tree revision node.
+        """
+
+        if self._busy():
+            QMessageBox.information(
+                self,
+                LEGALIZE_APPROVAL_TITLE,
+                "Дождитесь завершения текущей загрузки или сканирования.",
+            )
+            return
+        records = self._tree_item_records(item)
+        title = ""
+        mark = ""
+        bundles = item.data(0, _ROLE_ROW) or ()
+        for bundle in bundles:
+            if isinstance(bundle, DocumentBundle) and bundle.title and bundle.mark:
+                title = bundle.title
+                mark = bundle.mark
+                break
+        if not title or not mark:
+            title, mark, _transfer = self._tree_item_identity(item)
+        revision = folder_revision_label(records)
+        if revision == NO_REVISION_LABEL:
+            revision = ""
+        if not title or not mark or not revision:
+            QMessageBox.warning(
+                self,
+                LEGALIZE_APPROVAL_TITLE,
+                "У папки нет разобранных титула, марки и ревизии файла.",
+            )
+            return
+        if not any(
+            record.source is SourceKind.RD and record.present
+            for record in records
+        ):
+            QMessageBox.warning(
+                self,
+                LEGALIZE_APPROVAL_TITLE,
+                "Легализация F доступна только для папки с файлами РД.",
+            )
+            return
+        kits = self._google_kits or self.database.list_google_kits()
+        looked = comment_lookup_from_kits(kits)(title, mark)
+        if looked is None:
+            QMessageBox.warning(
+                self,
+                LEGALIZE_APPROVAL_TITLE,
+                f"Нет комплекта {title}-{mark} в КСБ ИД. "
+                "Новые строки не создаются.",
+            )
+            return
+        date_text = f_line_date_from_mtime_ns(latest_save_mtime_ns(records))
+        mto_revision = mto_revision_from_records(records)
+        try:
+            f_line = legalize_approval_f_line(
+                date=date_text,
+                revision=revision,
+                mto_revision=mto_revision,
+            )
+            patch = build_journal_patch(
+                looked.comment_raw,
+                f_line,
+                revision=revision,
+                stage=LEGALIZE_APPROVAL_STAGE,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, LEGALIZE_APPROVAL_TITLE, str(exc))
+            return
+        dialog = FLegalizeDialog(
+            title=title,
+            mark=mark,
+            revision=revision,
+            patch=patch,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        job = dialog.job()
+        if job is None:
+            return
+        self._start_google_journal_write(
+            (job,),
+            log_line=f"Легализация F {title}-{mark} рев. {revision}…",
+        )
 
     def _apply_tree_working_flag(
         self,

@@ -60,6 +60,48 @@ class JournalPatch:
     added_end: int
 
 
+def catalog_f_line(
+    *,
+    date: str,
+    stage: str,
+    revision: str | None = None,
+    transmittal: str | None = None,
+    mto_revision: str | None = None,
+    mto_absent: bool = False,
+) -> str:
+    """Build an F line written by the catalog (always ``auto``).
+
+    Shared by «Письма о согласовании» and folder legalize. Callers that
+    parse a letter still gather date/stage/rev/MTO; this wrapper only
+    stamps ``auto``.
+
+    Args:
+        date: ``DD.MM.YYYY``.
+        stage: Classifier key (``code_a``, ``incoming_passed``, …).
+        revision: Filename/OD revision text such as ``04`` or ``01-AN02``.
+        transmittal: TRM token, placeholder comment, or empty.
+        mto_revision: Optional MTO filename revision.
+        mto_absent: When True and ``mto_revision`` is empty, append
+            ``MTO Нет``.
+
+    Returns:
+        Canonical F line from :func:`format_history_line`.
+
+    Raises:
+        ValueError: If ``date`` or ``stage`` cannot be formatted.
+    """
+
+    return format_history_line(
+        date=date,
+        stage=stage,
+        revision=revision,
+        transmittal=transmittal,
+        mto_revision=mto_revision,
+        mto_absent=mto_absent,
+        from_robot_auto=True,
+    )
+
+
 def format_history_line(
     *,
     date: str,
@@ -116,6 +158,46 @@ def format_history_line(
     if from_robot_auto:
         parts.append("auto")
     return " ".join(parts)
+
+
+def added_history_line(
+    comment_before: str,
+    comment_after: str,
+    *,
+    fallback: str = "",
+) -> str:
+    """Return the single new or changed F line in ``comment_after``.
+
+    Used when the user may edit «F после» before a Google write. The write
+    engine still applies one :class:`~rd_catalog.google_f_write.JournalWriteJob`
+    line to the live cell.
+
+    Args:
+        comment_before: Current column F (F до).
+        comment_after: Edited column F (F после).
+        fallback: Proposed new line when after still contains it (no
+            unique added line).
+
+    Returns:
+        One stripped F line.
+
+    Raises:
+        ValueError: No unique new/changed line.
+    """
+
+    before_set = {line.strip() for line in _split_comment_lines(comment_before)}
+    after_lines = _split_comment_lines(comment_after)
+    added = [line for line in after_lines if line.strip() not in before_set]
+    fallback_stripped = (fallback or "").strip()
+    if len(added) == 1:
+        return added[0].strip()
+    after_set = {line.strip() for line in after_lines}
+    if fallback_stripped and fallback_stripped in after_set:
+        return fallback_stripped
+    raise ValueError(
+        "В «F после» должна быть ровно одна новая или изменённая "
+        "строка журнала."
+    )
 
 
 def apply_history_line(comment_raw: str, new_line: str) -> tuple[str, str]:

@@ -8,8 +8,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rd_catalog.f_journal import (
+    added_history_line,
     apply_history_line,
     build_journal_patch,
+    catalog_f_line,
     format_history_line,
     format_sheet_revision_cell,
     journal_diff_html,
@@ -384,6 +386,35 @@ def main() -> None:
     stub_upgraded_mto, stub_mto_kind = apply_history_line(stub_with_mto, stub_filled)
     assert stub_mto_kind == "replaced"
     assert stub_upgraded_mto == stub_filled
+
+    auto_line = catalog_f_line(
+        date="17.09.2026",
+        stage="code_a",
+        revision="01-AN02",
+        transmittal="Добавлен_для_легализации_ревизии",
+        mto_revision="01",
+    )
+    assert auto_line.endswith(" auto")
+    assert "код А на рев. 01-AN02" in auto_line
+    assert "Добавлен_для_легализации_ревизии" in auto_line
+    assert "MTO 01" in auto_line
+    auto_event = parse_history_line(auto_line)
+    assert auto_event.stage == "code_a"
+    assert auto_event.from_robot_auto is True
+    assert auto_event.mto_revision == "01"
+
+    before = "02.12.2024 код А на рев. 04 AGCC-BCC-TRM-000582"
+    after = before + "\n" + auto_line
+    assert added_history_line(before, after, fallback=auto_line) == auto_line
+    edited = auto_line.replace("17.09.2026", "18.09.2026")
+    edited_after = before + "\n" + edited
+    assert added_history_line(before, edited_after, fallback=auto_line) == edited
+    try:
+        added_history_line(before, before, fallback=auto_line)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("missing new F line must raise")
 
     print("RD catalog F journal: OK")
 

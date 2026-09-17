@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtTest import QTest
 
 from rd_catalog.ban_dialog import BannedTitlesDialog
+from rd_catalog.f_legalize import LEGALIZE_APPROVAL_ACTION
 from rd_catalog.google_f_write import JournalWriteJob
 from rd_catalog.kits_legend_dialog import KitsPaintLegendDialog
 from rd_catalog.sheet_de_sync import SheetDeSyncRow
@@ -1362,6 +1363,9 @@ def main() -> None:
         assert "Пометить папку как рабочую" in tree_menu_src
         assert "Пометить папку как аннулированную" in tree_menu_src
         assert "Снять пометку" in tree_menu_src
+        assert "LEGALIZE_APPROVAL_ACTION" in tree_menu_src
+        assert hasattr(window, "_open_legalize_approval_f_dialog")
+        assert LEGALIZE_APPROVAL_ACTION.startswith("Легализовать согласование РД")
         assert "exec_tracked_menu" in tree_menu_src
         usage = get_context_menu_usage()
         assert usage is not None

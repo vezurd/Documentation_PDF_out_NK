@@ -20,7 +20,11 @@ from datetime import datetime
 from html import unescape
 from pathlib import Path
 
-from rd_catalog.f_journal import format_history_line, format_sheet_revision_cell, status_sheet_for_stage
+from rd_catalog.f_journal import (
+    catalog_f_line,
+    format_sheet_revision_cell,
+    status_sheet_for_stage,
+)
 from rd_catalog.kits import is_rd_kit_mark, kit_identity_key
 from rd_catalog.parse import normalize_unicode_dashes
 from utils.file_name_converts import AgccFilenamePatterns
@@ -717,18 +721,17 @@ def _catalog_f_line(
         record_mto_absent: Write ``MTO Нет`` when no MTO document exists.
 
     Returns:
-        Canonical F line from :func:`format_history_line`.
+        Canonical F line from :func:`rd_catalog.f_journal.catalog_f_line`.
     """
 
     mto_revision = _mto_revision_from_documents(documents) or None
-    return format_history_line(
+    return catalog_f_line(
         date=date,
         stage=stage,
         revision=revision,
         transmittal=transmittal,
         mto_revision=mto_revision,
         mto_absent=bool(record_mto_absent and mto_revision is None),
-        from_robot_auto=True,
     )
 
 
