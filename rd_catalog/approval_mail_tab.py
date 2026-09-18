@@ -30,6 +30,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -49,10 +50,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rd_catalog.approval_mail import ApprovalMail, KitLookup, parse_msg_file
+from rd_catalog.approval_mail import (
+    ApprovalMail,
+    KitLookup,
+    apply_mail_parts,
+    mail_field_choices,
+    mail_line_transmittal,
+    mail_mto_text,
+    parse_msg_file,
+)
 from rd_catalog.context_menu_qt import exec_tracked_menu
 from rd_catalog.context_menu_usage import MENU_APPROVAL_MAIL
-from rd_catalog.f_journal import journal_diff_html, journal_highlight_spans
+from rd_catalog.f_journal import (
+    JOURNAL_STAGE_LABELS,
+    journal_diff_html,
+    journal_highlight_spans,
+    journal_stage_key,
+)
 from rd_catalog.approval_mail_dump import (
     build_mail_text_preview,
     build_outlook_dump,
@@ -88,6 +102,9 @@ _HEADERS = (
     "Марка",
     "Дата",
     "Стадия",
+    "Рев.",
+    "TRM",
+    "MTO",
     "Коды",
     "D/E",
     "Запись",
@@ -95,8 +112,54 @@ _HEADERS = (
     "F после",
     "Ошибка",
 )
-_COL_F_BEFORE = 9
-_COL_F_AFTER = 10
+_COL_FILE = 0
+_COL_KIND = 1
+_COL_TITLE = 2
+_COL_MARK = 3
+_COL_DATE = 4
+_COL_STAGE = 5
+_COL_REV = 6
+_COL_TRM = 7
+_COL_MTO = 8
+_COL_CODES = 9
+_COL_DE = 10
+_COL_WRITE = 11
+_COL_F_BEFORE = 12
+_COL_F_AFTER = 13
+_COL_ERROR = 14
+_COLUMN_WIDTHS = {
+    _COL_FILE: 150,
+    _COL_KIND: 72,
+    _COL_TITLE: 72,
+    _COL_MARK: 72,
+    _COL_DATE: 88,
+    _COL_STAGE: 150,
+    _COL_REV: 80,
+    _COL_TRM: 150,
+    _COL_MTO: 72,
+    _COL_CODES: 56,
+    _COL_DE: 40,
+    _COL_WRITE: 80,
+    _COL_ERROR: 140,
+}
+_EDIT_FIELDS = (
+    (_COL_TITLE, "title"),
+    (_COL_MARK, "mark"),
+    (_COL_DATE, "date"),
+    (_COL_STAGE, "stage"),
+    (_COL_REV, "od_revision"),
+    (_COL_TRM, "transmittal"),
+    (_COL_MTO, "mto_text"),
+)
+_COLUMN_TIPS = {
+    _COL_TITLE: "Титул строки F. Список — из письма и имён вложений.",
+    _COL_MARK: "Марка строки F. Можно выбрать или ввести.",
+    _COL_DATE: "Дата события DD.MM.YYYY.",
+    _COL_STAGE: "Стадия журнала F (как в строке записи).",
+    _COL_REV: "Ревизия OD в строке F.",
+    _COL_TRM: "TRM в строке F.",
+    _COL_MTO: "Ревизия MTO, «Нет», или пусто — без суффикса MTO.",
+}
 _SETTINGS_SUBFOLDERS = "window/approval_mail_subfolders"
 _KIND_LABELS = {
     "review_codes": "Коды",
@@ -212,9 +275,11 @@ class ApprovalMailTab(QWidget):
         self._dropped: list[DroppedMsg] = []
         self._write_marks: list[tuple[str, str]] = []
         self._parsed_mails: list[ApprovalMail | None] = []
+        self._overrides: list[dict[str, str]] = []
         self._pending_indexes: tuple[int, ...] = ()
         self._rows: tuple[MailPreviewRow, ...] = ()
         self._catalog_busy = False
+        self._filling = False
         self._skipped_dupes = 0
         self._owned_temp: tempfile.TemporaryDirectory[str] | None = None
         self._runtime_dir = Path(runtime_dir) if runtime_dir is not None else None
@@ -322,6 +387,7 @@ class ApprovalMailTab(QWidget):
             self._dropped.extend(accepted)
             self._write_marks.extend(("", "") for _ in accepted)
             self._parsed_mails.extend(None for _ in accepted)
+            self._overrides.extend({} for _ in accepted)
         self._rebuild()
         if accepted:
             self._log_ingested(accepted)
@@ -343,7 +409,11 @@ class ApprovalMailTab(QWidget):
         layout = QVBoxLayout(self)
         hint = QLabel(
             "Перетащите письма Outlook или файлы .msg (и на окно каталога). "
-            "Одно письмо = один титул–марка. Несколько марок — ошибка, без записи. "
+            "Одно письмо = один титул–марка. Несколько марок — выберите одну "
+            "в колонках Титул/Марка (парсер старых писем не учим: значения "
+            "берём из разбора и имён вложений). "
+            "Титул, марка, дата, стадия, рев., TRM и MTO — список найденных "
+            "или ручной ввод; F после собирается из этих частей. "
             "Повтор того же письма пропускается. Если строка F уже есть в КСБ ИД — "
             "помечается «уже в F»; D и E дописываются только если они ещё не совпали. "
             "«Папка с .msg» берёт только выбранный каталог; галка "
@@ -446,6 +516,13 @@ class ApprovalMailTab(QWidget):
         header.setSectionResizeMode(_COL_F_BEFORE, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(_COL_F_AFTER, QHeaderView.ResizeMode.Stretch)
         header.setStretchLastSection(False)
+        header.setMinimumSectionSize(36)
+        for column, width in _COLUMN_WIDTHS.items():
+            self._table.setColumnWidth(column, width)
+        for column, tip in _COLUMN_TIPS.items():
+            item = self._table.horizontalHeaderItem(column)
+            if item is not None:
+                item.setToolTip(tip)
         self._table.cellDoubleClicked.connect(self._on_row_activated)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_row_menu)
@@ -480,6 +557,7 @@ class ApprovalMailTab(QWidget):
         self._dropped.clear()
         self._write_marks.clear()
         self._parsed_mails.clear()
+        self._overrides.clear()
         self._pending_indexes = ()
         self._skipped_dupes = 0
         self._rebuild()
@@ -572,6 +650,11 @@ class ApprovalMailTab(QWidget):
             for index, mail in enumerate(self._parsed_mails)
             if index not in drop
         ]
+        self._overrides = [
+            item
+            for index, item in enumerate(self._overrides)
+            if index not in drop
+        ]
         self._pending_indexes = ()
         self._rebuild()
 
@@ -592,18 +675,28 @@ class ApprovalMailTab(QWidget):
     def _rebuild(self) -> None:
         self._ensure_write_marks()
         parsed = self._mails_for_dropped()
-        dropped, marks, mails, letter_skipped = _compact_letter_dupes(
-            self._dropped, self._write_marks, parsed
+        dropped, marks, mails, overrides, letter_skipped = _compact_letter_dupes(
+            self._dropped, self._write_marks, parsed, self._overrides
         )
         self._dropped = dropped
         self._write_marks = marks
         self._parsed_mails = list(mails)
+        self._overrides = overrides
         self._skipped_dupes += letter_skipped
         built = build_mail_previews(
-            mails, comment_lookup=self._comment_lookup
+            self._effective_mails(), comment_lookup=self._comment_lookup
         )
         self._rows = self._with_write_marks(built)
         self._fill_table()
+        self._paint_status()
+        self._sync_buttons()
+        if self._rows:
+            current = self._table.currentRow()
+            if current < 0 or current >= len(self._rows):
+                current = 0
+            self._table.selectRow(current)
+
+    def _paint_status(self) -> None:
         writable = sum(1 for row in self._rows if row.writable)
         written = sum(1 for row in self._rows if row.write_status == "written")
         present = sum(
@@ -627,12 +720,6 @@ class ApprovalMailTab(QWidget):
         if self._skipped_dupes:
             parts.append(f"пропущено дублей: {self._skipped_dupes}")
         self._status.setText(" · ".join(parts))
-        self._sync_buttons()
-        if self._rows:
-            current = self._table.currentRow()
-            if current < 0 or current >= len(self._rows):
-                current = 0
-            self._table.selectRow(current)
 
     def _log_ingested(self, accepted: Sequence[DroppedMsg]) -> None:
         if self._runtime_dir is None or not accepted:
@@ -658,6 +745,19 @@ class ApprovalMailTab(QWidget):
         while len(self._write_marks) < len(self._dropped):
             self._write_marks.append(("", ""))
         del self._write_marks[len(self._dropped) :]
+        while len(self._overrides) < len(self._dropped):
+            self._overrides.append({})
+        del self._overrides[len(self._dropped) :]
+
+    def _effective_mails(self) -> list[ApprovalMail]:
+        """Return parsed mails with the user's F-part overrides applied."""
+
+        mails = self._mails_for_dropped()
+        self._ensure_write_marks()
+        return [
+            apply_mail_parts(mail, **override) if override else mail
+            for mail, override in zip(mails, self._overrides, strict=False)
+        ]
 
     def _with_write_marks(
         self, rows: Sequence[MailPreviewRow]
@@ -698,6 +798,12 @@ class ApprovalMailTab(QWidget):
             self._subfolders_box.setEnabled(not busy)
         if hasattr(self, "_open_log_button"):
             self._open_log_button.setEnabled(self._runtime_dir is not None)
+        if hasattr(self, "_table"):
+            for row_index in range(self._table.rowCount()):
+                for column, _field in _EDIT_FIELDS:
+                    widget = self._table.cellWidget(row_index, column)
+                    if widget is not None:
+                        widget.setEnabled(not busy and not _row_written(self._rows, row_index))
 
     def _sync_write_enabled(self) -> None:
         self._sync_buttons()
@@ -766,73 +872,191 @@ class ApprovalMailTab(QWidget):
         return self._temp_dir / f"{index:04d}_{safe}"
 
     def _fill_table(self) -> None:
-        self._table.setRowCount(len(self._rows))
-        for row_index, row in enumerate(self._rows):
-            mail = row.mail
-            kind = _KIND_LABELS.get(mail.kind, mail.kind or "—")
-            de = ""
-            if row.patch is not None:
-                if row.write_d or row.write_e:
-                    de = "да"
-                elif row.patch.update_de:
-                    de = "уже"
-                else:
-                    de = "нет"
-            if row.write_status == "written":
-                write_text = f"записано · {row.write_detail}" if row.write_detail else "записано"
-            elif row.write_status == "failed":
-                write_text = "не записано"
-            elif row.already_complete or row.write_status == "present":
-                write_text = "уже в F"
-            elif row.already_in_f and (row.write_d or row.write_e):
-                write_text = "только D/E"
+        self._filling = True
+        try:
+            self._table.setRowCount(len(self._rows))
+            originals = self._mails_for_dropped()
+            for row_index, row in enumerate(self._rows):
+                self._write_row_items(row_index, row)
+                source = (
+                    originals[row_index]
+                    if row_index < len(originals)
+                    else row.mail
+                )
+                self._install_part_combos(row_index, source, row.mail)
+        finally:
+            self._filling = False
+        self._table.resizeRowsToContents()
+
+    def _fill_derived_columns(self) -> None:
+        self._filling = True
+        try:
+            for row_index, row in enumerate(self._rows):
+                self._write_row_items(row_index, row)
+                self._sync_part_combos(row_index, row.mail)
+        finally:
+            self._filling = False
+        self._table.resizeRowsToContents()
+
+    def _write_row_items(self, row_index: int, row: MailPreviewRow) -> None:
+        mail = row.mail
+        kind = _KIND_LABELS.get(mail.kind, mail.kind or "—")
+        de = ""
+        if row.patch is not None:
+            if row.write_d or row.write_e:
+                de = "да"
+            elif row.patch.update_de:
+                de = "уже"
             else:
-                write_text = ""
-            f_before = row.comment_before
-            f_after = row.patch.comment_after if row.patch is not None else ""
-            before_spans, after_spans = journal_highlight_spans(f_before, f_after)
-            values = (
-                Path(mail.source_path).name or mail.subject or "письмо",
-                kind,
-                mail.title,
-                mail.mark,
-                mail.date,
-                mail.stage,
-                row.letter_counts_text,
-                de,
-                write_text,
-                f_before,
-                f_after,
-                row.error
-                or (row.write_detail if row.write_status == "failed" else ""),
+                de = "нет"
+        if row.write_status == "written":
+            write_text = (
+                f"записано · {row.write_detail}" if row.write_detail else "записано"
             )
-            for column, text in enumerate(values):
-                item = QTableWidgetItem(text)
+        elif row.write_status == "failed":
+            write_text = "не записано"
+        elif row.already_complete or row.write_status == "present":
+            write_text = "уже в F"
+        elif row.already_in_f and (row.write_d or row.write_e):
+            write_text = "только D/E"
+        else:
+            write_text = ""
+        f_before = row.comment_before
+        f_after = row.patch.comment_after if row.patch is not None else ""
+        before_spans, after_spans = journal_highlight_spans(f_before, f_after)
+        values = {
+            _COL_FILE: Path(mail.source_path).name or mail.subject or "письмо",
+            _COL_KIND: kind,
+            _COL_TITLE: mail.title,
+            _COL_MARK: mail.mark,
+            _COL_DATE: mail.date,
+            _COL_STAGE: JOURNAL_STAGE_LABELS.get(mail.stage, mail.stage),
+            _COL_REV: mail.od_revision,
+            _COL_TRM: mail_line_transmittal(mail),
+            _COL_MTO: mail_mto_text(mail),
+            _COL_CODES: row.letter_counts_text,
+            _COL_DE: de,
+            _COL_WRITE: write_text,
+            _COL_F_BEFORE: f_before,
+            _COL_F_AFTER: f_after,
+            _COL_ERROR: row.error
+            or (row.write_detail if row.write_status == "failed" else ""),
+        }
+        for column, text in values.items():
+            item = self._table.item(row_index, column)
+            if item is None:
+                item = QTableWidgetItem()
                 item.setTextAlignment(
                     Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
                 )
-                if column == 0:
-                    item.setData(_ROLE_ROW, row_index)
-                if column in {_COL_F_BEFORE, _COL_F_AFTER} and text:
-                    item.setToolTip(text)
-                    spans = before_spans if column == _COL_F_BEFORE else after_spans
-                    item.setData(
-                        _ROLE_DIFF_SPANS,
-                        [list(span) for span in spans],
-                    )
-                if (
-                    row.write_status == "written"
-                    or row.already_complete
-                    or row.write_status == "present"
-                ):
-                    item.setForeground(_WRITTEN)
-                elif row.error or row.write_status == "failed":
-                    item.setForeground(_FAILED)
                 self._table.setItem(row_index, column, item)
-        self._table.resizeRowsToContents()
+            item.setText(text)
+            if column == _COL_FILE:
+                item.setData(_ROLE_ROW, row_index)
+                item.setToolTip(text)
+            if column in {_COL_F_BEFORE, _COL_F_AFTER}:
+                item.setToolTip(text)
+                spans = before_spans if column == _COL_F_BEFORE else after_spans
+                item.setData(
+                    _ROLE_DIFF_SPANS,
+                    [list(span) for span in spans] if text else [],
+                )
+            if (
+                row.write_status == "written"
+                or row.already_complete
+                or row.write_status == "present"
+            ):
+                item.setForeground(_WRITTEN)
+            elif row.error or row.write_status == "failed":
+                item.setForeground(_FAILED)
+            else:
+                item.setForeground(self._table.palette().text().color())
 
-    def _on_row_activated(self, row_index: int, _column: int) -> None:
+    def _install_part_combos(
+        self,
+        row_index: int,
+        source: ApprovalMail,
+        current: ApprovalMail,
+    ) -> None:
+        choices = mail_field_choices(source)
+        by_field = {
+            "title": (choices.titles, current.title),
+            "mark": (choices.marks, current.mark),
+            "date": (choices.dates, current.date),
+            "stage": (choices.stages, current.stage),
+            "od_revision": (choices.revisions, current.od_revision),
+            "transmittal": (choices.transmittals, mail_line_transmittal(current)),
+            "mto_text": (choices.mto_values, mail_mto_text(current)),
+        }
+        for column, field in _EDIT_FIELDS:
+            options, value = by_field[field]
+            combo = _make_part_combo(
+                self._table,
+                options,
+                value,
+                stage=field == "stage",
+            )
+            combo.activated.connect(
+                lambda _i, r=row_index, f=field, c=combo: self._on_part_edited(
+                    r, f, c
+                )
+            )
+            edit = combo.lineEdit()
+            if edit is not None:
+                edit.editingFinished.connect(
+                    lambda r=row_index, f=field, c=combo: self._on_part_edited(
+                        r, f, c
+                    )
+                )
+            combo.setEnabled(
+                not self._catalog_busy
+                and not _row_written(self._rows, row_index)
+            )
+            self._table.setCellWidget(row_index, column, combo)
+
+    def _sync_part_combos(self, row_index: int, mail: ApprovalMail) -> None:
+        current = {
+            "title": mail.title,
+            "mark": mail.mark,
+            "date": mail.date,
+            "stage": mail.stage,
+            "od_revision": mail.od_revision,
+            "transmittal": mail_line_transmittal(mail),
+            "mto_text": mail_mto_text(mail),
+        }
+        for column, field in _EDIT_FIELDS:
+            combo = self._table.cellWidget(row_index, column)
+            if not isinstance(combo, QComboBox):
+                continue
+            _set_combo_value(combo, current[field], stage=field == "stage")
+
+    def _on_part_edited(
+        self, row_index: int, field: str, combo: QComboBox
+    ) -> None:
+        if self._filling or self._catalog_busy:
+            return
+        if row_index < 0 or row_index >= len(self._dropped):
+            return
+        if _row_written(self._rows, row_index):
+            return
+        value = _combo_value(combo, field=field)
+        self._ensure_write_marks()
+        previous = self._overrides[row_index].get(field)
+        if previous == value:
+            return
+        self._overrides[row_index] = {**self._overrides[row_index], field: value}
+        built = build_mail_previews(
+            self._effective_mails(), comment_lookup=self._comment_lookup
+        )
+        self._rows = self._with_write_marks(built)
+        self._fill_derived_columns()
+        self._paint_status()
+        self._sync_buttons()
+
+    def _on_row_activated(self, row_index: int, column: int) -> None:
         if row_index < 0 or row_index >= len(self._rows):
+            return
+        if column in {item[0] for item in _EDIT_FIELDS}:
             return
         row = self._rows[row_index]
         if row.error or not row.mail.title:
@@ -1063,15 +1287,26 @@ def _compact_letter_dupes(
     dropped: Sequence[DroppedMsg],
     marks: Sequence[tuple[str, str]],
     mails: Sequence[ApprovalMail],
-) -> tuple[list[DroppedMsg], list[tuple[str, str]], list[ApprovalMail], int]:
+    overrides: Sequence[dict[str, str]],
+) -> tuple[
+    list[DroppedMsg],
+    list[tuple[str, str]],
+    list[ApprovalMail],
+    list[dict[str, str]],
+    int,
+]:
     """Drop later letters with the same title+mark+F line."""
 
     kept_dropped: list[DroppedMsg] = []
     kept_marks: list[tuple[str, str]] = []
     kept_mails: list[ApprovalMail] = []
+    kept_overrides: list[dict[str, str]] = []
     seen: set[str] = set()
     skipped = 0
-    for item, mark, mail in zip(dropped, marks, mails, strict=False):
+    for index, (item, mark, mail) in enumerate(
+        zip(dropped, marks, mails, strict=False)
+    ):
+        override = overrides[index] if index < len(overrides) else {}
         key = mail_dedupe_key(mail)
         if key and key in seen:
             skipped += 1
@@ -1081,7 +1316,82 @@ def _compact_letter_dupes(
         kept_dropped.append(item)
         kept_marks.append(mark)
         kept_mails.append(mail)
-    return kept_dropped, kept_marks, kept_mails, skipped
+        kept_overrides.append(dict(override))
+    return kept_dropped, kept_marks, kept_mails, kept_overrides, skipped
+
+
+def _row_written(rows: Sequence[MailPreviewRow], row_index: int) -> bool:
+    if row_index < 0 or row_index >= len(rows):
+        return False
+    return rows[row_index].write_status == "written"
+
+
+def _combo_value(combo: QComboBox, *, field: str) -> str:
+    text = combo.currentText().strip()
+    if field != "stage":
+        return text
+    index = combo.currentIndex()
+    if 0 <= index < combo.count() and combo.itemText(index) == combo.currentText():
+        data = combo.itemData(index)
+        if data:
+            return str(data)
+        return ""
+    return journal_stage_key(text) or text
+
+
+def _set_combo_value(combo: QComboBox, value: str, *, stage: bool) -> None:
+    combo.blockSignals(True)
+    try:
+        if stage:
+            pos = combo.findData(value)
+            if pos >= 0:
+                combo.setCurrentIndex(pos)
+            else:
+                combo.setEditText(JOURNAL_STAGE_LABELS.get(value, value))
+        elif combo.currentText() != value:
+            combo.setEditText(value)
+    finally:
+        combo.blockSignals(False)
+
+
+def _make_part_combo(
+    parent: QWidget,
+    choices: Sequence[str],
+    current: str,
+    *,
+    stage: bool,
+) -> QComboBox:
+    combo = QComboBox(parent)
+    combo.setEditable(True)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    combo.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    )
+    combo.setMinimumContentsLength(10 if len(current) > 8 else 4)
+    combo.setFrame(False)
+    if stage:
+        combo.addItem("", "")
+        for key in JOURNAL_STAGE_LABELS:
+            combo.addItem(JOURNAL_STAGE_LABELS[key], key)
+        pos = combo.findData(current)
+        if pos >= 0:
+            combo.setCurrentIndex(pos)
+        elif current:
+            combo.setEditText(JOURNAL_STAGE_LABELS.get(current, current))
+    else:
+        combo.addItem("")
+        seen = {""}
+        if current:
+            combo.addItem(current)
+            seen.add(current.casefold())
+        for value in choices:
+            key = value.casefold()
+            if not value or key in seen:
+                continue
+            seen.add(key)
+            combo.addItem(value)
+        combo.setEditText(current)
+    return combo
 
 
 def _settings_flag(settings: QSettings, key: str, default: bool) -> bool:

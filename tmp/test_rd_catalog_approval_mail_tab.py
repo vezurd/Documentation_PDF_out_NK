@@ -24,6 +24,12 @@ from rd_catalog.approval_mail_tab import (
     ApprovalMailTab,
     _COL_F_AFTER,
     _COL_F_BEFORE,
+    _COL_MTO,
+    _COL_REV,
+    _COL_STAGE,
+    _COL_TRM,
+    _COL_WRITE,
+    _HEADERS,
     _ROLE_DIFF_SPANS,
 )
 from rd_catalog.sheet_de_sync_dialog import SHEET_DE_SYNC_BUTTON
@@ -109,6 +115,12 @@ def main() -> None:
     assert rows[0].writable
 
     tab = ApprovalMailTab()
+    assert list(_HEADERS)[ _COL_REV ] == "Рев."
+    assert _HEADERS[_COL_TRM] == "TRM"
+    assert _HEADERS[_COL_MTO] == "MTO"
+    assert _HEADERS[_COL_WRITE] == "Запись"
+    assert tab._table.columnWidth(_COL_STAGE) == 150
+    assert tab._table.columnWidth(_COL_TRM) == 150
     assert tab._de_sync_button.text() == SHEET_DE_SYNC_BUTTON
     assert tab._open_log_button.isEnabled() is False
     de_sync_clicks: list[int] = []
@@ -223,6 +235,15 @@ def main() -> None:
         assert "дубл" in tab._status.text()
         assert "09.09.2026" in tab._table.item(0, _COL_F_AFTER).text()
         assert "02.12.2024" in tab._table.item(0, _COL_F_BEFORE).text()
+        assert "на рев. 04" in tab._table.item(0, _COL_F_AFTER).text()
+        rev_combo = tab._table.cellWidget(0, _COL_REV)
+        assert rev_combo is not None
+        rev_combo.setEditText("05")
+        tab._on_part_edited(0, "od_revision", rev_combo)
+        app.processEvents()
+        assert "на рев. 05" in tab._table.item(0, _COL_F_AFTER).text()
+        mto_combo = tab._table.cellWidget(0, _COL_MTO)
+        assert mto_combo is not None
         after_spans = tab._table.item(0, _COL_F_AFTER).data(_ROLE_DIFF_SPANS) or []
         assert after_spans
         after_text = tab._table.item(0, _COL_F_AFTER).text()
@@ -340,7 +361,7 @@ def main() -> None:
         assert tab.preview_rows()[0].writable is False
         assert tab._write_button.isEnabled() is False
         assert tab._clear_written_button.isEnabled() is True
-        assert "уже в F" in tab._table.item(0, 8).text()
+        assert "уже в F" in tab._table.item(0, _COL_WRITE).text()
         tab._clear_written()
         app.processEvents()
         assert tab._table.rowCount() == 0

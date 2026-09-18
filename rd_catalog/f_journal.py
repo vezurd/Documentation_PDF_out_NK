@@ -32,6 +32,7 @@ _STAGE_F_TEXT: dict[str, str] = {
     "sr_upload": "отпр. на загрузку в СР",
     "tdo_sent": "отпр на ТДО",
 }
+JOURNAL_STAGE_LABELS: dict[str, str] = _STAGE_F_TEXT
 
 _STATUS_BY_STAGE: dict[str, str] = {
     "code_a": "РД Согласовано",
@@ -58,6 +59,28 @@ class JournalPatch:
     status_sheet: str
     added_start: int
     added_end: int
+
+
+def journal_stage_key(text: str) -> str:
+    """Map a stage key or Russian F-line label to the classifier key.
+
+    Args:
+        text: ``code_a`` or ``код А`` (any ``JOURNAL_STAGE_LABELS`` value).
+
+    Returns:
+        Classifier key, or empty string when ``text`` is unknown.
+    """
+
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    if raw in _STAGE_F_TEXT:
+        return raw
+    folded = raw.casefold()
+    for key, label in _STAGE_F_TEXT.items():
+        if label.casefold() == folded:
+            return key
+    return ""
 
 
 def catalog_f_line(

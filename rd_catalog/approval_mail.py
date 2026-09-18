@@ -15,18 +15,20 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from html import unescape
 from pathlib import Path
 
 from rd_catalog.f_journal import (
+    JOURNAL_STAGE_LABELS,
     catalog_f_line,
     format_sheet_revision_cell,
+    journal_stage_key,
     status_sheet_for_stage,
 )
-from rd_catalog.kits import is_rd_kit_mark, kit_identity_key
+from rd_catalog.kits import F_LINE_MTO_ABSENT, is_rd_kit_mark, kit_identity_key
 from rd_catalog.parse import normalize_unicode_dashes
 from utils.file_name_converts import AgccFilenamePatterns
 
@@ -140,6 +142,215 @@ class ApprovalMail:
     error: str
     documents: tuple[MailDocument, ...]
     source_path: str = ""
+    mto_revision: str = ""
+    mto_absent: bool = False
+    attachment_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class MailFieldChoices:
+    """Candidate values for the editable F-line parts on the mail tab."""
+
+    titles: tuple[str, ...]
+    marks: tuple[str, ...]
+    dates: tuple[str, ...]
+    stages: tuple[str, ...]
+    revisions: tuple[str, ...]
+    transmittals: tuple[str, ...]
+    mto_values: tuple[str, ...]
+
+
+def attachment_names_from_message(message: object) -> tuple[str, ...]:
+    """Return unique attachment filenames from an ``extract_msg`` message.
+
+    Names only — the attachment bodies are not read. Old-format letters
+    often carry AGCC files here while the body is not worth teaching.
+
+    Args:
+        message: Open ``extract_msg`` message (or a test double).
+
+    Returns:
+        Filenames in first-seen order.
+    """
+
+    names: list[str] = []
+    seen: set[str] = set()
+    attachments = getattr(message, "attachments", None) or ()
+    for item in attachments:
+        try:
+            raw = (
+                getattr(item, "longFilename", None)
+                or getattr(item, "shortFilename", None)
+                or getattr(item, "name", None)
+                or ""
+            )
+        except Exception:
+            continue
+        name = str(raw).strip()
+        if not name:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return tuple(names)
+
+
+def mail_line_transmittal(mail: ApprovalMail) -> str:
+    """Return the TRM token that belongs on the F line."""
+
+    if mail.stage == "incoming_passed" and mail.incoming_transmittal:
+        return mail.incoming_transmittal
+    return mail.send_transmittal
+
+
+def mail_mto_text(mail: ApprovalMail) -> str:
+    """Return the MTO combo text (``Нет``, a revision, or empty)."""
+
+    if mail.mto_absent:
+        return F_LINE_MTO_ABSENT
+    return mail.mto_revision
+
+
+def mail_field_choices(mail: ApprovalMail) -> MailFieldChoices:
+    """Collect combo candidates from the parse and attachment names.
+
+    Args:
+        mail: Parsed letter, including ``attachment_names``.
+
+    Returns:
+        Unique values in first-seen order. Stages are always the journal set.
+    """
+
+    attached = _documents_from_attachment_names(mail.attachment_names)
+    docs = [*mail.documents, *attached]
+    mto_from_docs = [
+        item.revision
+        for item in docs
+        if item.revision and _is_mto_filename(item.filename)
+    ]
+    return MailFieldChoices(
+        titles=_unique_texts((mail.title,), (item.title for item in docs)),
+        marks=_unique_texts((mail.mark,), (item.mark for item in docs)),
+        dates=_unique_texts((mail.date,)),
+        stages=tuple(JOURNAL_STAGE_LABELS),
+        revisions=_unique_texts(
+            (mail.od_revision,),
+            (item.revision for item in docs),
+        ),
+        transmittals=_unique_texts(
+            (mail.send_transmittal, mail.incoming_transmittal),
+            (_first_trm(name) for name in mail.attachment_names),
+            (_first_trm(item.filename) for item in docs),
+        ),
+        mto_values=_unique_texts(
+            (mail_mto_text(mail),),
+            mto_from_docs,
+            (F_LINE_MTO_ABSENT,),
+        ),
+    )
+
+
+def apply_mail_parts(
+    mail: ApprovalMail,
+    *,
+    title: str | None = None,
+    mark: str | None = None,
+    date: str | None = None,
+    stage: str | None = None,
+    od_revision: str | None = None,
+    transmittal: str | None = None,
+    mto_text: str | None = None,
+) -> ApprovalMail:
+    """Rebuild ``f_line`` from edited F-line parts.
+
+    Used when the body parser missed values that sit in attachments or
+    that the user types. Does not invent a new letter kind.
+
+    Args:
+        mail: Original parse.
+        title: Kit title, or None to keep.
+        mark: Kit mark, or None to keep.
+        date: ``DD.MM.YYYY``, or None to keep.
+        stage: Classifier key or Russian F label, or None to keep.
+        od_revision: OD revision text, or None to keep.
+        transmittal: TRM for the F line, or None to keep.
+        mto_text: MTO revision, ``Нет``, empty (no suffix), or None to keep.
+
+    Returns:
+        Copy with a new ``f_line`` / ``error``. Recoverable parse errors
+        are cleared when the parts form a dated journal event.
+    """
+
+    new_title = mail.title if title is None else title.strip()
+    new_mark = mail.mark if mark is None else mark.strip()
+    new_date = mail.date if date is None else date.strip()
+    if stage is None:
+        new_stage = mail.stage
+    else:
+        new_stage = journal_stage_key(stage) or stage.strip()
+    new_rev = mail.od_revision if od_revision is None else od_revision.strip()
+    send = mail.send_transmittal
+    incoming = mail.incoming_transmittal
+    if transmittal is not None:
+        token = transmittal.strip()
+        if new_stage == "incoming_passed":
+            incoming = token
+        else:
+            send = token
+    if transmittal is not None:
+        line_trm = transmittal.strip()
+    elif new_stage == "incoming_passed" and incoming:
+        line_trm = incoming
+    else:
+        line_trm = send
+    mto_revision = mail.mto_revision
+    mto_absent = mail.mto_absent
+    if mto_text is not None:
+        text = mto_text.strip()
+        if not text:
+            mto_revision, mto_absent = "", False
+        elif text.casefold() == F_LINE_MTO_ABSENT.casefold():
+            mto_revision, mto_absent = "", True
+        else:
+            mto_revision, mto_absent = text, False
+    error = ""
+    f_line = ""
+    if not new_title or not new_mark or not new_date or not new_stage:
+        error = mail.error or "Не хватает титула, марки, даты или стадии."
+    else:
+        try:
+            f_line = catalog_f_line(
+                date=new_date,
+                stage=new_stage,
+                revision=new_rev or None,
+                transmittal=line_trm,
+                mto_revision=mto_revision or None,
+                mto_absent=mto_absent,
+            )
+        except ValueError as exc:
+            error = str(exc)
+    sheet_revision = (
+        format_sheet_revision_cell(new_rev) if new_rev and not error else ""
+    )
+    status_sheet = status_sheet_for_stage(new_stage) if not error else ""
+    return replace(
+        mail,
+        title=new_title,
+        mark=new_mark,
+        date=new_date,
+        stage=new_stage,
+        send_transmittal=send,
+        incoming_transmittal=incoming,
+        od_revision=new_rev,
+        f_line=f_line,
+        sheet_revision=sheet_revision,
+        status_sheet=status_sheet,
+        error=error,
+        mto_revision=mto_revision,
+        mto_absent=mto_absent,
+    )
 
 
 def parse_msg_file(
@@ -179,6 +390,7 @@ def parse_msg_file(
             html=message.htmlBody,
         )
         sent_at = message.date
+        attachments = attachment_names_from_message(message)
     finally:
         message.close()
     parsed = parse_approval_mail_text(
@@ -187,6 +399,7 @@ def parse_msg_file(
         sent_at=sent_at,
         kit_from_transmittal=kit_from_transmittal,
         kit_hint=kit_hint_from_path(file_path),
+        attachment_names=attachments,
     )
     return replace(parsed, source_path=str(file_path))
 
@@ -251,6 +464,7 @@ def parse_approval_mail_text(
     sent_at: datetime | str | None = None,
     kit_from_transmittal: KitLookup | None = None,
     kit_hint: tuple[str, str] | None = None,
+    attachment_names: Sequence[str] = (),
 ) -> ApprovalMail:
     """Parse already extracted mail text.
 
@@ -260,6 +474,8 @@ def parse_approval_mail_text(
         sent_at: Message datetime; used when Transmittal Date is absent.
         kit_from_transmittal: Optional issuance lookup by send TRM.
         kit_hint: Optional ``(title, mark)`` from the parent folder name.
+        attachment_names: Filenames from the ``.msg`` (old-format letters).
+            Stored as combo candidates; they do not change auto-parse.
 
     Returns:
         Parsed mail. Domain failures set ``error`` and leave ``f_line`` empty.
@@ -267,29 +483,34 @@ def parse_approval_mail_text(
 
     subject_norm = normalize_unicode_dashes(subject or "").strip()
     body_norm = normalize_unicode_dashes(body or "").replace("\r\n", "\n")
+    names = _unique_texts(attachment_names)
     notification_trm = _notification_trm(subject_norm)
     if notification_trm or "transmittal notification" in body_norm.casefold():
-        return _parse_notification(
+        parsed = _parse_notification(
             subject=subject_norm,
             body=body_norm,
             sent_at=sent_at,
             fallback_trm=notification_trm,
         )
-    if _is_cover_letter(subject_norm, body_norm):
-        return _parse_cover_letter(
+    elif _is_cover_letter(subject_norm, body_norm):
+        parsed = _parse_cover_letter(
             subject=subject_norm,
             body=body_norm,
             sent_at=sent_at,
             kit_from_transmittal=kit_from_transmittal,
             kit_hint=kit_hint,
         )
-    return _parse_tdo_reply(
-        subject=subject_norm,
-        body=body_norm,
-        sent_at=sent_at,
-        kit_from_transmittal=kit_from_transmittal,
-        kit_hint=kit_hint,
-    )
+    else:
+        parsed = _parse_tdo_reply(
+            subject=subject_norm,
+            body=body_norm,
+            sent_at=sent_at,
+            kit_from_transmittal=kit_from_transmittal,
+            kit_hint=kit_hint,
+        )
+    if not names:
+        return parsed
+    return replace(parsed, attachment_names=names)
 
 
 def _parse_notification(
@@ -330,6 +551,9 @@ def _parse_notification(
     letter_counts = tuple(
         sorted(Counter(item.code or "?" for item in documents).items())
     )
+    mto_revision, mto_absent = _mto_line_fields(
+        documents, record_mto_absent=True
+    )
     f_line = ""
     if not error and date and stage:
         f_line = _catalog_f_line(
@@ -357,6 +581,8 @@ def _parse_notification(
         status_sheet=status_sheet_for_stage(stage) if not error else "",
         error=error,
         documents=tuple(documents),
+        mto_revision=mto_revision,
+        mto_absent=mto_absent,
     )
 
 
@@ -413,6 +639,9 @@ def _parse_cover_letter(
     ):
         od_revision = prose[2]
     stage = "tdo_sent"
+    mto_revision, mto_absent = _mto_line_fields(
+        documents, record_mto_absent=True
+    )
     f_line = ""
     if not error and date and stage:
         f_line = _catalog_f_line(
@@ -444,6 +673,8 @@ def _parse_cover_letter(
         status_sheet=status_sheet_for_stage(stage) if not error else "",
         error=error,
         documents=tuple(documents),
+        mto_revision=mto_revision,
+        mto_absent=mto_absent,
     )
 
 
@@ -506,6 +737,9 @@ def _parse_tdo_reply(
         and kit_identity_key(title, mark) == kit_identity_key(prose[0], prose[1])
     ):
         od_revision = prose[2]
+    mto_revision, mto_absent = _mto_line_fields(
+        documents, record_mto_absent=False
+    )
     f_line = ""
     if not error and date and stage:
         trm_for_line = incoming if stage == "incoming_passed" and incoming else send_trm
@@ -534,6 +768,8 @@ def _parse_tdo_reply(
         status_sheet=status_sheet_for_stage(stage) if not error else "",
         error=error,
         documents=tuple(documents),
+        mto_revision=mto_revision,
+        mto_absent=mto_absent,
     )
 
 
@@ -747,6 +983,51 @@ def _is_mto_filename(filename: str) -> bool:
     return ".MTO-" in upper or upper.endswith(".MTO")
 
 
+def _mto_line_fields(
+    documents: list[MailDocument],
+    *,
+    record_mto_absent: bool,
+) -> tuple[str, bool]:
+    revision = _mto_revision_from_documents(documents)
+    if revision:
+        return revision, False
+    return "", bool(record_mto_absent)
+
+
+def _unique_texts(*groups: Iterable[str]) -> tuple[str, ...]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for raw in group:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(text)
+    return tuple(ordered)
+
+
+def _documents_from_attachment_names(
+    names: Sequence[str],
+) -> list[MailDocument]:
+    documents: list[MailDocument] = []
+    seen: set[str] = set()
+    for name in names:
+        stem = Path(name).name
+        key = stem.casefold()
+        if not stem or key in seen:
+            continue
+        doc = _mail_document_from_filename(stem)
+        if doc is None:
+            continue
+        seen.add(key)
+        documents.append(doc)
+    return documents
+
+
 def _mto_revision_from_documents(documents: list[MailDocument]) -> str:
     """Return MTO filename revision from letter documents, or empty."""
 
@@ -783,13 +1064,14 @@ def _catalog_f_line(
     """
 
     mto_revision = _mto_revision_from_documents(documents) or None
+    mto_absent = bool(record_mto_absent and mto_revision is None)
     return catalog_f_line(
         date=date,
         stage=stage,
         revision=revision,
         transmittal=transmittal,
         mto_revision=mto_revision,
-        mto_absent=bool(record_mto_absent and mto_revision is None),
+        mto_absent=mto_absent,
     )
 
 

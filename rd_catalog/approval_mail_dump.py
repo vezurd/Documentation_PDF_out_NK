@@ -217,6 +217,12 @@ def _parsed_lines(mail: ApprovalMail) -> list[str]:
             f"  {item.filename} rev={item.revision} code={item.code} "
             f"od={item.is_od} {item.title}-{item.mark}"
         )
+    if mail.attachment_names:
+        lines.append(f"attachments: {len(mail.attachment_names)}")
+        for name in mail.attachment_names:
+            lines.append(f"  {name}")
+    lines.append(f"mto_revision: {mail.mto_revision or '—'}")
+    lines.append(f"mto_absent: {mail.mto_absent}")
     return lines
 
 

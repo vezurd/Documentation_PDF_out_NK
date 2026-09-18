@@ -16,6 +16,7 @@ from rd_catalog.f_journal import (
     format_sheet_revision_cell,
     journal_diff_html,
     journal_highlight_spans,
+    journal_stage_key,
     journal_write_needed,
     status_sheet_for_stage,
 )
@@ -34,6 +35,11 @@ _SOT_F = (
 
 def main() -> None:
     """Run formatter and patch assertions without Google or Outlook."""
+
+    assert journal_stage_key("code_a") == "code_a"
+    assert journal_stage_key("код А") == "code_a"
+    assert journal_stage_key("отпр на ТДО") == "tdo_sent"
+    assert journal_stage_key("нет такой") == ""
 
     code_a = format_history_line(
         date="02.12.2024",

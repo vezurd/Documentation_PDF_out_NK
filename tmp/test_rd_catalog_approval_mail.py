@@ -505,6 +505,92 @@ def main() -> None:
     ) == ("1600", "SOT")
     assert kit_hint_from_path(Path("x") / "a.msg") is None
 
+    class _Att:
+        longFilename = "AGCC.287-3150-KSB.MTO-0001_01_RU.xlsx"
+        shortFilename = None
+        name = None
+
+    class _Msg:
+        attachments = [_Att(), _Att()]
+
+    from rd_catalog.approval_mail import (
+        ApprovalMail,
+        apply_mail_parts,
+        attachment_names_from_message,
+        mail_field_choices,
+    )
+
+    assert attachment_names_from_message(_Msg()) == (
+        "AGCC.287-3150-KSB.MTO-0001_01_RU.xlsx",
+    )
+    two_kits = parse_approval_mail_text(
+        subject="RE: old",
+        body=_TDO_TWO_KITS,
+        sent_at=datetime(2026, 8, 10, tzinfo=_TZ),
+        attachment_names=(
+            "AGCC.287-3150-KSB.OD-0001_01_RU.pdf",
+            "AGCC.287-3150-KSB.MTO-0001_01_RU.xlsx",
+        ),
+    )
+    assert "несколько титул" in two_kits.error
+    choices = mail_field_choices(two_kits)
+    assert "3150" in choices.titles
+    assert "5110" in choices.titles
+    assert "01" in choices.revisions
+    assert "01" in choices.mto_values
+    picked = apply_mail_parts(
+        two_kits,
+        title="3150",
+        mark="KSB",
+        od_revision="01",
+        transmittal="AGCC.287-PGS-PGS-TRM-22028",
+        mto_text="01",
+    )
+    assert picked.error == ""
+    assert picked.title == "3150"
+    assert "3150" not in picked.f_line
+    assert picked.f_line.startswith("10.08.2026")
+    assert "рев. 01" in picked.f_line
+    assert "MTO 01" in picked.f_line
+    assert picked.f_line.endswith("auto")
+    absent = apply_mail_parts(picked, mto_text="Нет")
+    assert "MTO Нет" in absent.f_line
+    empty_mto = apply_mail_parts(picked, mto_text="")
+    assert "MTO" not in empty_mto.f_line
+    typed = apply_mail_parts(
+        ApprovalMail(
+            kind="tdo_reply",
+            subject="old",
+            date="",
+            stage="",
+            send_transmittal="",
+            incoming_transmittal="",
+            title="",
+            mark="",
+            od_revision="",
+            kit_code="",
+            letter_counts=(),
+            f_line="",
+            sheet_revision="",
+            status_sheet="",
+            error="В уведомлении нет строк документов.",
+            documents=(),
+            attachment_names=("scan.pdf",),
+        ),
+        title="8610",
+        mark="SKUD",
+        date="25.08.2024",
+        stage="отпр на ТДО",
+        od_revision="01",
+        transmittal="AGCC-BCC-TRM-000275",
+        mto_text="Нет",
+    )
+    assert typed.error == ""
+    assert typed.stage == "tdo_sent"
+    assert typed.f_line == (
+        "25.08.2024 отпр на ТДО рев. 01 AGCC-BCC-TRM-000275 MTO Нет auto"
+    )
+
     if _SAMPLES.is_dir():
         code_a = parse_msg_file(
             _SAMPLES / "2024.12.02_Код А на рев. 04 (МТО_рев.03).msg"
