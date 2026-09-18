@@ -1978,12 +1978,37 @@ def _package_is_annulled(
     return _sequence_is_annulled(package.sequence, exclusion)
 
 
+def _issued_folder_is_void(
+    transfer_name: str | None,
+    package_path: str | None = None,
+) -> bool:
+    """Return whether an issued NN folder is named Void.
+
+    Lexical: ``kit_annulled_flag`` / pipeline JSON are not required.
+    Checks ``transfer_name`` and the last segment of ``package_path``.
+
+    Args:
+        transfer_name: Package or file transfer folder name.
+        package_path: Issued package directory, or empty.
+
+    Returns:
+        True when either name contains a Void token.
+    """
+
+    if transfer_name_is_void(str(transfer_name or "")):
+        return True
+    path = str(package_path or "").strip()
+    return bool(path) and transfer_name_is_void(Path(path).name)
+
+
 def _package_is_skipped_from_official(
     package: KitPackageRow,
     exclusion: _WorkingExclusion | None,
 ) -> bool:
-    return _package_is_working(package, exclusion) or _package_is_annulled(
-        package, exclusion
+    return (
+        _package_is_working(package, exclusion)
+        or _package_is_annulled(package, exclusion)
+        or _issued_folder_is_void(package.transfer_name, package.package_path)
     )
 
 
@@ -2041,15 +2066,32 @@ def _record_group_is_annulled(
     return any(_sequence_is_annulled(sequence, exclusion) for sequence in sequences)
 
 
+def _record_group_is_lexically_void(files: Sequence[FileRecord]) -> bool:
+    """Return whether any file in the group sits in a Void-named folder."""
+
+    for record in files:
+        names = list(_record_folder_keys(record))
+        package = issued_package_dir(record.path)
+        if package:
+            names.append(Path(package).name)
+        if any(transfer_name_is_void(name) for name in names):
+            return True
+    return False
+
+
 def _record_group_is_skipped_from_official(
     files: Sequence[FileRecord],
     exclusion: _WorkingExclusion | None,
     *,
     working_revision: str = "",
 ) -> bool:
-    return _record_group_is_working(
-        files, exclusion, working_revision=working_revision
-    ) or _record_group_is_annulled(files, exclusion)
+    return (
+        _record_group_is_working(
+            files, exclusion, working_revision=working_revision
+        )
+        or _record_group_is_annulled(files, exclusion)
+        or _record_group_is_lexically_void(files)
+    )
 
 
 def _exclusion_from_pipeline(row: KitPipelineRow) -> _WorkingExclusion:
@@ -3319,13 +3361,15 @@ def _official_package_files(
 ) -> list[FileRecord]:
     """Return present RD files in the official issued package.
 
-    A working-head or annulled package is excluded by **folder name**,
-    not by leftover files that still carry ``official`` and not by
-    sharing the same NN as a sibling package.
-    Packages matching ``official`` win; otherwise the newest remaining
-    (non-working and non-annulled) package is used so open-folder and
+    A working-head, annulled, or Void-named package is excluded by
+    **folder name**, not by leftover files that still carry ``official``
+    and not by sharing the same NN as a sibling package. Void folders
+    are skipped lexically even when pipeline JSON is stale.
+    Among remaining groups, MTO revision matching ``official`` wins over
+    filename revision (a leftover same-rev BOM/BOQ without MTO loses);
+    otherwise the newest remaining package is used so open-folder and
     «РД · рев.» share the same disk NN when F/send is ``01-AN01`` but
-    files are still ``01``.
+    files are still ``01``. ``is_current`` is not used.
 
     Args:
         records: Catalog file records.
@@ -3355,18 +3399,22 @@ def _official_package_files(
             continue
         package = issued_package_dir(record.path) or record.path
         groups.setdefault(package.casefold(), []).append(record)
-    matched: list[list[FileRecord]] = []
+    mto_hit: list[list[FileRecord]] = []
+    rev_hit: list[list[FileRecord]] = []
     rest: list[list[FileRecord]] = []
     for files in groups.values():
         if _record_group_is_skipped_from_official(
             files, exclusion, working_revision=working
         ):
             continue
-        highest = _highest_revision_text(files)
         rest.append(files)
+        mto_rev = _highest_mto_revision_text(files)
+        highest = _highest_revision_text(files)
+        if official and mto_rev and revision_texts_equivalent(mto_rev, official):
+            mto_hit.append(files)
         if official and highest and revision_texts_equivalent(highest, official):
-            matched.append(files)
-    pool = matched or rest
+            rev_hit.append(files)
+    pool = mto_hit or rev_hit or rest
     if not pool:
         return []
 
@@ -3379,26 +3427,20 @@ def _official_package_files(
     return max(pool, key=_sequence)
 
 
-def pick_official_rd_package(
+def _newest_rd_package(packages: Sequence[KitPackageRow]) -> KitPackageRow:
+    return max(
+        packages,
+        key=lambda package: (
+            package.sequence if package.sequence is not None else -1,
+            package.id or 0,
+        ),
+    )
+
+
+def _eligible_rd_packages_for_pick(
     packages: Sequence[KitPackageRow],
     pipeline: KitPipelineRow | None,
-) -> KitPackageRow | None:
-    """Return the issued RD folder that matches «РД · рев.».
-
-    ``is_current`` (newest non-working NN) is only used when no package
-    has ``revision_text`` equivalent to ``official_revision_text``. A
-    later delta between the agreed folder and the working head must not
-    win open-folder / export.
-
-    Args:
-        packages: ``kit_package`` rows for one kit (other kits ignored
-            when ``pipeline`` is set).
-        pipeline: Derived kit pipeline, or ``None`` when unknown.
-
-    Returns:
-        The official non-grey RD package, or ``None``.
-    """
-
+) -> list[KitPackageRow]:
     key = (
         kit_identity_key(pipeline.title, pipeline.mark)
         if pipeline is not None
@@ -3418,27 +3460,95 @@ def pick_official_rd_package(
         if _package_is_skipped_from_official(package, exclusion):
             continue
         eligible.append(package)
+    return eligible
+
+
+def pick_rd_package_for_revision(
+    packages: Sequence[KitPackageRow],
+    pipeline: KitPipelineRow | None,
+    revision_text: str,
+) -> KitPackageRow | None:
+    """Return the issued RD folder for ``revision_text``.
+
+    Working, annulled, and Void-named folders are skipped. Void is
+    skipped lexically even when ``annulled_transfer_names`` is empty.
+    ``is_current`` is not used.
+
+    When ``revision_text`` is empty, the newest eligible package wins.
+    When it equals ``pipeline.official_revision_text`` (or ``pipeline``
+    is None), packages whose MTO revision matches win over packages
+    whose filename revision matches; a leftover same-rev folder without
+    MTO loses to a package that has matching MTO. Otherwise (historical
+    heatmap cell) only filename-revision hits for that text; no fallback
+    to other revisions.
+
+    Args:
+        packages: ``kit_package`` rows for one kit (other kits ignored
+            when ``pipeline`` is set).
+        pipeline: Derived kit pipeline, or ``None`` when unknown.
+        revision_text: Filename revision to pick, or empty.
+
+    Returns:
+        The chosen non-grey RD package, or ``None``.
+    """
+
+    eligible = _eligible_rd_packages_for_pick(packages, pipeline)
     if not eligible:
         return None
+    wanted = (revision_text or "").strip()
+    if not wanted:
+        return _newest_rd_package(eligible)
     official = (
         (pipeline.official_revision_text or "").strip()
         if pipeline is not None
         else ""
     )
-    matched = [
+    mto_hit = [
         package
         for package in eligible
-        if official
-        and revision_texts_equivalent(package.revision_text, official)
+        if revision_texts_equivalent(package.mto_revision_text, wanted)
     ]
-    pool = matched or eligible
-    return max(
-        pool,
-        key=lambda package: (
-            package.sequence if package.sequence is not None else -1,
-            package.id or 0,
-        ),
+    rev_hit = [
+        package
+        for package in eligible
+        if revision_texts_equivalent(package.revision_text, wanted)
+    ]
+    if pipeline is None or revision_texts_equivalent(wanted, official):
+        pool = mto_hit or rev_hit or eligible
+        return _newest_rd_package(pool)
+    if not rev_hit:
+        return None
+    return _newest_rd_package(rev_hit)
+
+
+def pick_official_rd_package(
+    packages: Sequence[KitPackageRow],
+    pipeline: KitPipelineRow | None,
+) -> KitPackageRow | None:
+    """Return the issued RD folder that matches «РД · рев.».
+
+    Void-named folders are skipped lexically. A leftover same-rev
+    package without MTO loses to one whose MTO revision matches
+    ``official_revision_text``. ``is_current`` (newest non-working NN)
+    is not used; it only highlights the kit-card bold row. A later
+    delta between the agreed folder and the working head must not win
+    open-folder / export.
+
+    Args:
+        packages: ``kit_package`` rows for one kit (other kits ignored
+            when ``pipeline`` is set).
+        pipeline: Derived kit pipeline, or ``None`` when unknown.
+
+    Returns:
+        The official non-grey RD package, or ``None``.
+    """
+
+    official = (
+        (pipeline.official_revision_text or "").strip()
+        if pipeline is not None
+        else ""
     )
+    return pick_rd_package_for_revision(packages, pipeline, official)
 
 
 def _highest_mto_revision_text(records: Sequence[FileRecord]) -> str:
@@ -4426,8 +4536,10 @@ def list_mto_worklist(
         ``gap_kind`` is ``no_package`` when no non-grey RD folder is
         linked, ``no_mto_file`` when a folder exists but no MTO xlsx
         matched, ``no_rd`` for a Google/issuance kit with no heatmap
-        cells, otherwise empty. ``package_path`` is the official
-        ``is_current`` issued folder, not the working NN.
+        cells, otherwise empty. ``package_path`` is
+        :func:`pick_official_rd_package` when the cell is the official
+        rev, else that revision's issued folder (Void/working/annulled
+        skipped). Not ``kit_package.is_current``.
     """
 
     with perf_span("pipeline.list_mto_worklist"):
@@ -4474,21 +4586,26 @@ def list_mto_worklist(
                 and not pkg.is_grey
             ]
             package_count = len(rd_packages)
-            if rd_packages:
-                chosen_packages = [pkg for pkg in rd_packages if pkg.is_current]
-                if not chosen_packages and official_text:
-                    chosen_packages = [
-                        pkg
-                        for pkg in rd_packages
-                        if revision_texts_equivalent(pkg.revision_text, official_text)
-                    ]
-                newest = max(
-                    chosen_packages or rd_packages,
-                    key=lambda pkg: (
-                        pkg.sequence if pkg.sequence is not None else -1,
-                        pkg.id or 0,
-                    ),
+            kit_rd_packages = [
+                pkg
+                for pkg in packages_by_id.values()
+                if pkg.source == "rd"
+                and not pkg.is_grey
+                and kit_identity_key(pkg.title, pkg.mark) == key
+            ]
+            official_match = bool(
+                official_text
+                and revision_texts_equivalent(cell.revision_text, official_text)
+            )
+            if official_match:
+                newest = pick_official_rd_package(
+                    kit_rd_packages or rd_packages, pipeline
                 )
+            else:
+                newest = pick_rd_package_for_revision(
+                    rd_packages, pipeline, cell.revision_text
+                )
+            if newest is not None:
                 package_path = newest.package_path or ""
                 package_label = (
                     newest.transfer_name
@@ -4506,11 +4623,13 @@ def list_mto_worklist(
             )
             chosen: FileRecord | None = None
             if candidates:
-                prefix = package_path.casefold()
                 chosen = max(
                     candidates,
                     key=lambda record: (
-                        bool(prefix and record.path.casefold().startswith(prefix)),
+                        bool(
+                            package_path
+                            and path_is_under(record.path, package_path)
+                        ),
                         _record_mtime_ns(record) or 0,
                         record.path_key,
                     ),

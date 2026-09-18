@@ -14,7 +14,7 @@ import re
 import sys
 import tempfile
 from collections import Counter, defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from itertools import combinations
@@ -273,6 +273,98 @@ def auto_mto_rd_paths_match(left: str, right: str) -> bool:
     if not left or not right:
         return False
     return auto_mto_rd_path_key(left) == auto_mto_rd_path_key(right)
+
+
+def official_rd_mto_paths_changed(
+    previous: Mapping[tuple[str, str], str] | None,
+    current: Mapping[tuple[str, str], str],
+    *,
+    include_new_keys: bool = True,
+) -> set[tuple[str, str]]:
+    """Return kit keys whose official RD MTO workbook path moved.
+
+    ``previous is None`` is the first observation: nothing is reported.
+    A later empty mapping still treats every current key as new when
+    ``include_new_keys`` is true.
+
+    Args:
+        previous: Last remembered identity → path, or ``None`` before
+            the first worklist overlay.
+        current: Identity → non-empty official RD MTO path.
+        include_new_keys: When false, only keys present in both maps
+            can be reported (first paint vs Auto MTO cache).
+
+    Returns:
+        Keys that appeared or whose path no longer matches
+        :func:`auto_mto_rd_paths_match`.
+    """
+
+    if previous is None:
+        return set()
+    changed: set[tuple[str, str]] = set()
+    for key, path in current.items():
+        path_text = str(path or "").strip()
+        if not path_text:
+            continue
+        if key not in previous:
+            if include_new_keys:
+                changed.add(key)
+            continue
+        old = str(previous.get(key) or "").strip()
+        if not auto_mto_rd_paths_match(path_text, old):
+            changed.add(key)
+    return changed
+
+
+def cached_auto_mto_rd_paths_by_kit(
+    entries: Mapping[str, Mapping[str, object]],
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    """Group Auto MTO cache JSON entries by kit identity.
+
+    Args:
+        entries: ``cache_key`` → persistable compare mapping.
+
+    Returns:
+        Identity → stored ``rd_path`` values (may include older files).
+    """
+
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for entry in entries.values():
+        title = str(entry.get("title") or "").strip()
+        mark = str(entry.get("mark") or "").strip()
+        path = str(entry.get("rd_path") or "").strip()
+        if not title or not mark or not path:
+            continue
+        grouped.setdefault(kit_identity_key(title, mark), []).append(path)
+    return {key: tuple(paths) for key, paths in grouped.items()}
+
+
+def kits_with_moved_cached_rd_mto_path(
+    current: Mapping[tuple[str, str], str],
+    cached_paths_by_kit: Mapping[tuple[str, str], Sequence[str]],
+) -> set[tuple[str, str]]:
+    """Return kits whose official RD MTO path matches none of the cache.
+
+    Kits without a cache entry are skipped so a first paint does not
+    enqueue the whole catalog.
+
+    Args:
+        current: Identity → official RD MTO path.
+        cached_paths_by_kit: Identity → RD paths last compared as Auto MTO.
+
+    Returns:
+        Keys present in both maps whose current path is a different file.
+    """
+
+    changed: set[tuple[str, str]] = set()
+    for key, path in current.items():
+        stored = cached_paths_by_kit.get(key) or ()
+        if not stored:
+            continue
+        if any(auto_mto_rd_paths_match(path, item) for item in stored):
+            continue
+        changed.add(key)
+    return changed
 
 
 def _compare_target_line(rd_path: str, *, pinned: bool) -> str:

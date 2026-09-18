@@ -77,6 +77,7 @@ from rd_catalog.an_index import (
 from rd_catalog.an_scan import AnScanProgress, _an_root_disabled
 from rd_catalog.an_scan_thread import AnScanThread
 from rd_catalog.an_tab import AnTab
+from rd_catalog.auto_mto_compare_cache import load_auto_mto_compare_cache
 from rd_catalog.rd_dump_index import rd_dump_kind
 from rd_catalog.rd_dump_scan import (
     RdDumpScanProgress,
@@ -102,9 +103,12 @@ from rd_catalog.customer_pi_auto_mto import (
     AutoMtoFile,
     auto_mto_compare_status,
     auto_mto_path,
+    cached_auto_mto_rd_paths_by_kit,
     format_auto_mto_cell_text,
+    kits_with_moved_cached_rd_mto_path,
     list_auto_mto_files_by_kit,
     needs_auto_mto_compare,
+    official_rd_mto_paths_changed,
     pick_auto_mto_file,
 )
 from rd_catalog.customer_pi_dialog import CustomerPiDialog
@@ -1154,6 +1158,7 @@ class CatalogWindow(QMainWindow):
         self._handoff_export_thread: HandoffExportThread | None = None
         self._mto_compare_thread: MtoCompareThread | None = None
         self._mto_pending_keys: set[tuple[str, str]] = set()
+        self._official_rd_mto_path_by_kit: dict[tuple[str, str], str] | None = None
         self._mto_queued: (
             tuple[frozenset[tuple[str, str]] | None, tuple[tuple[str, str], ...]] | None
         ) = None
@@ -2780,6 +2785,7 @@ class CatalogWindow(QMainWindow):
             self._update_action_states()
             if not self._catalog_workers_busy():
                 self.statusBar().clearMessage()
+        self._resume_pending_mto_compare()
 
     def _apply_startup_snapshot(self, snapshot: StartupSnapshot) -> None:
         """Install the worker snapshot and paint only the Комплекты table."""
@@ -3807,6 +3813,7 @@ class CatalogWindow(QMainWindow):
             if kit_keys is not None and self._kit_rows:
                 self._rebuild_kit_rows_for_keys(kit_keys)
                 self._paint_kits_table(kit_keys=kit_keys)
+                self._sync_official_rd_mto_compares()
                 return
             if rebuild_rows:
                 self._reload_export_pins()
@@ -3820,6 +3827,7 @@ class CatalogWindow(QMainWindow):
                     self._append_log(f"Pipeline list: {type(exc).__name__}: {exc}")
                 self._rebuild_kit_rows()
             self._paint_kits_table()
+            self._sync_official_rd_mto_compares()
 
     def _kits_paint_context(
         self,
@@ -4831,6 +4839,63 @@ class CatalogWindow(QMainWindow):
         result = rd_mto_overlay_by_kit(self._mto_worklist_rows, self._kit_pipelines)
         self._rd_mto_overlay_cache = (token, result)
         return result
+
+    def _official_rd_mto_path_map(self) -> dict[tuple[str, str], str]:
+        """Return official issued-folder RD MTO paths from the worklist overlay."""
+
+        return {
+            key: path
+            for key, (path, _revision) in self._rd_mto_overlay_by_kit().items()
+            if str(path or "").strip()
+        }
+
+    def _cached_auto_mto_rd_paths_by_kit(
+        self,
+    ) -> dict[tuple[str, str], tuple[str, ...]]:
+        """Return last Auto MTO compare RD paths (memory, else runtime JSON)."""
+
+        tab = getattr(self, "_revision_matrix_tab", None)
+        grouped: dict[tuple[str, str], list[str]] = {}
+        if tab is not None:
+            for key, payload in getattr(tab, "_auto_mto_comparisons", {}).items():
+                path = payload[0] if payload else ""
+                if path:
+                    grouped.setdefault(key, []).append(str(path))
+            if grouped:
+                return {key: tuple(paths) for key, paths in grouped.items()}
+        return cached_auto_mto_rd_paths_by_kit(
+            load_auto_mto_compare_cache(self.config.runtime_dir)
+        )
+
+    def _sync_official_rd_mto_compares(self) -> None:
+        """Enqueue RD↔robot and Auto MTO when official RD MTO paths moved.
+
+        Uses the in-memory worklist overlay. The child job still plans
+        pairs. The first paint only reports kits whose Auto MTO cache
+        path is a different workbook. Later paints diff against the last
+        overlay.
+        """
+
+        current = self._official_rd_mto_path_map()
+        previous = self._official_rd_mto_path_by_kit
+        if previous is None:
+            if not current:
+                return
+            changed = kits_with_moved_cached_rd_mto_path(
+                current, self._cached_auto_mto_rd_paths_by_kit()
+            )
+        else:
+            changed = official_rd_mto_paths_changed(previous, current)
+        self._official_rd_mto_path_by_kit = current
+        if not changed:
+            return
+        self._enqueue_auto_mto_compares_for_kits(changed)
+        self._mto_pending_keys |= changed
+        if self._busy():
+            self._update_mto_sync_label()
+            return
+        keys = frozenset(self._mto_pending_keys)
+        self._enqueue_mto_compare(keys, tuple(sorted(changed)))
 
     def _auto_mto_rd_target(self, title: str, mark: str) -> tuple[str, str, bool]:
         """Return (path, revision, pinned) for AutoMTO content compare."""
@@ -8202,7 +8267,10 @@ class CatalogWindow(QMainWindow):
     ) -> None:
         """Refresh derived GUI surfaces after a one-kit pipeline write.
 
-        Does not rebuild the issuance journal, АН tab, or collisions.
+        Reloads the worklist overlay then paints Комплекты, which
+        enqueues RD↔robot / Auto MTO when the official RD MTO path
+        moved. Does not rebuild the issuance journal, АН tab, or
+        collisions.
 
         Args:
             kit_keys: Identities whose derived tables just changed.

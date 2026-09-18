@@ -3409,6 +3409,212 @@ def test_pick_official_rd_package_falls_back_when_official_rev_missing() -> None
     assert picked.revision_text == "01"
 
 
+def _sos_package(
+    *,
+    sequence: int,
+    revision_text: str,
+    mto_revision_text: str,
+    folder: str,
+    is_current: bool = False,
+) -> KitPackageRow:
+    base = r"\\bcc\eng\PrDoc\РД\7570\SOS\Для передачи"
+    return KitPackageRow(
+        title="7570",
+        mark="SOS",
+        source="rd",
+        sequence=sequence,
+        transfer_name=folder,
+        package_path=rf"{base}\{folder}",
+        revision_text=revision_text,
+        mto_revision_text=mto_revision_text,
+        is_current=is_current,
+        id=sequence,
+    )
+
+
+def test_pick_official_rd_package_skips_void_and_prefers_mto() -> None:
+    """7570-SOS: Void leftover and same-rev BOM without MTO lose to NN 06."""
+
+    folder06 = "06_рев.02-AN01_AGCC.287-7570-SOS"
+    folder07 = "07_рев.02-AN02_AGCC.287-7570-SOS"
+    folder08_void = "08_SQ-UIO-GEM-ELT-26444-0 Void"
+    folder08_plain = "08_SQ-UIO-GEM-ELT-26444-0"
+    packages_void = (
+        _sos_package(
+            sequence=6,
+            revision_text="02-AN01",
+            mto_revision_text="02-AN01",
+            folder=folder06,
+        ),
+        _sos_package(
+            sequence=7,
+            revision_text="02-AN02",
+            mto_revision_text="02-AN02",
+            folder=folder07,
+        ),
+        _sos_package(
+            sequence=8,
+            revision_text="02-AN01",
+            mto_revision_text="",
+            folder=folder08_void,
+            is_current=True,
+        ),
+    )
+    pipeline = KitPipelineRow(
+        title="7570",
+        mark="SOS",
+        status="agreed",
+        code="A",
+        official_revision_text="02-AN01",
+        working_revision_text="02-AN02",
+        working_transfer_names=(folder07,),
+        working_sequences=(7,),
+        annulled_transfer_names=(),
+        annulled_sequences=(),
+    )
+    picked = pick_official_rd_package(packages_void, pipeline)
+    assert picked is not None
+    assert picked.sequence == 6
+    packages_plain = (
+        packages_void[0],
+        packages_void[1],
+        _sos_package(
+            sequence=8,
+            revision_text="02-AN01",
+            mto_revision_text="",
+            folder=folder08_plain,
+            is_current=True,
+        ),
+    )
+    picked_mto = pick_official_rd_package(packages_plain, pipeline)
+    assert picked_mto is not None
+    assert picked_mto.sequence == 6
+
+
+def test_7570_sos_void_leftover_is_not_official_folder(temp: Path) -> None:
+    """Rebuild: Void leftover NN 08 must not steal 02-AN01 open-folder."""
+
+    database = _open_db(temp / "c7570")
+    folder06 = "06_рев.02-AN01_AGCC.287-7570-SOS"
+    folder07 = "07_рев.02-AN02_AGCC.287-7570-SOS"
+    folder08 = "08_SQ-UIO-GEM-ELT-26444-0 Void"
+    od06 = _record(
+        75706,
+        title="7570",
+        mark="SOS",
+        revision="02",
+        appendix="01",
+        sequence=6,
+        folder=folder06,
+        mtime_ns=_mtime_ns(2026, 6, 1),
+    )
+    mto06 = _record(
+        75707,
+        title="7570",
+        mark="SOS",
+        revision="02",
+        appendix="01",
+        sequence=6,
+        folder=folder06,
+        mtime_ns=_mtime_ns(2026, 6, 1),
+        file_kind="mto_xlsx",
+    )
+    mto07 = _record(
+        75717,
+        title="7570",
+        mark="SOS",
+        revision="02",
+        appendix="02",
+        sequence=7,
+        folder=folder07,
+        mtime_ns=_mtime_ns(2026, 7, 1),
+        file_kind="mto_xlsx",
+    )
+    leftover = _record(
+        75708,
+        title="7570",
+        mark="SOS",
+        revision="02",
+        appendix="01",
+        sequence=8,
+        folder=folder08,
+        mtime_ns=_mtime_ns(2026, 8, 1),
+    )
+    leftover_data = dict(leftover.data)
+    leftover_data["file_kind"] = "source_editable"
+    leftover_data["discipline_block"] = "BOM-0001"
+    leftover_name = "AGCC.287-7570-SOS.BOM-0001_02-AN01_RU.xlsx"
+    leftover_data["name"] = leftover_name
+    leftover_path = leftover.path.replace("OD-0001", "BOM-0001").replace(
+        ".pdf", ".xlsx"
+    )
+    leftover = replace(leftover, path=leftover_path, data=leftover_data)
+    records = [od06, mto06, mto07, leftover]
+    overlay_ids = {od06.id, mto06.id, mto07.id}
+    events = (
+        _event(
+            date="01.06.2026",
+            stage="tdo_passed",
+            stage_label="прошла ТДО",
+            revision="02",
+            appendix="01",
+            transmittals=("TRM-7570",),
+        ),
+        _event(
+            date="10.06.2026",
+            stage="code_a",
+            stage_label="код А",
+            revision="02",
+            appendix="01",
+            transmittals=("TRM-7570",),
+        ),
+    )
+    send = _send(
+        title="7570",
+        mark="SOS",
+        revision="02",
+        appendix="01",
+        status="Принят",
+        send_date="01.06.2026",
+        incoming="01.06.2026",
+        transmittal="TRM-7570",
+    )
+    _rebuild(
+        database,
+        (_google("7570", "SOS", events, revision="02", appendix="01"),),
+        (send,),
+        records,
+        overlay_ids,
+    )
+    pipeline = _pipeline(database, "7570", "SOS")
+    packages = database.list_kit_packages("7570", "SOS")
+    picked = pick_official_rd_package(packages, pipeline)
+    assert picked is not None
+    assert picked.sequence == 6
+    assert "06_" in picked.package_path
+    assert "08_" not in picked.package_path
+    current = [
+        pkg for pkg in packages if pkg.source == "rd" and pkg.is_current
+    ]
+    assert len(current) == 1
+    assert current[0].sequence == 6
+    worklist = list_mto_worklist(database, records=records)
+    an01 = [
+        row
+        for row in worklist
+        if row.title == "7570"
+        and row.mark == "SOS"
+        and row.revision_text == "02-AN01"
+    ]
+    assert an01
+    row = an01[0]
+    assert "06_" in row.package_path
+    assert "08_" not in row.package_path
+    assert "06_" in row.mto_path
+    assert "08_" not in row.mto_path
+    assert row.gap_kind != "no_mto_file"
+
+
 def main() -> None:
     """Run pipeline fixtures against a temporary SQLite file."""
 
@@ -3424,6 +3630,7 @@ def main() -> None:
     test_pipeline_display_v3_de_caption_does_not_force_agreed()
     test_pick_official_rd_package_skips_delta_between_agreed_and_working()
     test_pick_official_rd_package_falls_back_when_official_rev_missing()
+    test_pick_official_rd_package_skips_void_and_prefers_mto()
     with tempfile.TemporaryDirectory(prefix="rd_catalog_pipeline_") as raw:
         root = Path(raw)
         test_9110_tdo_review_package_path(root)
@@ -3443,6 +3650,7 @@ def main() -> None:
         test_manual_working_flag_keeps_sibling_same_rev(root)
         test_manual_annulled_flag_hides_same_rev_from_official(root)
         test_void_folder_name_annuls_without_manual_flag(root)
+        test_7570_sos_void_leftover_is_not_official_folder(root)
         test_manual_annulled_flag_keeps_sibling_same_rev(root)
         test_annulled_overlay_head_is_not_auto_working(root)
         test_annulled_flag_clears_working_flag(root)

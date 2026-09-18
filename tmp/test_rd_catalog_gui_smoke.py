@@ -332,9 +332,53 @@ def _check_mto_compare_not_planned_on_gui(window: CatalogWindow) -> None:
     assert "official_rd_mto_overlay" not in src
     assert "build_mto_compare_plan" not in src
     assert "list_present_robot_mto_files" not in src
+    sync_src = inspect.getsource(CatalogWindow._sync_official_rd_mto_compares)
+    assert "official_rd_mto_overlay" not in sync_src
+    assert "build_mto_compare_plan" not in sync_src
     assert window._mto_compare_thread is None
     assert window._enqueue_mto_compare(frozenset(), ()) is False
     assert window._mto_compare_thread is None
+
+
+def _check_official_rd_mto_path_change_enqueues(window: CatalogWindow) -> None:
+    """Official RD MTO path move must enqueue RD↔robot and Auto MTO."""
+
+    key = kit_identity_key("7570", "SOS")
+    old = r"C:\rd\7570\SOS\08_Void\MTO.xlsx"
+    new = r"C:\rd\7570\SOS\06_рев.02-AN01\MTO.xlsx"
+    previous_map = window._official_rd_mto_path_by_kit
+    previous_cache = getattr(window, "_rd_mto_overlay_cache", None)
+    previous_pending = set(window._mto_pending_keys)
+    window._official_rd_mto_path_by_kit = {key: old}
+    window._rd_mto_overlay_cache = (
+        (id(window._mto_worklist_rows), id(window._kit_pipelines)),
+        {key: (new, "02-AN01")},
+    )
+    captured: dict[str, object] = {}
+
+    def fake_enqueue(document_keys, priority_keys):
+        captured["keys"] = document_keys
+        captured["priority"] = priority_keys
+        return True
+
+    try:
+        with patch.object(window, "_enqueue_mto_compare", side_effect=fake_enqueue):
+            with patch.object(window, "_enqueue_auto_mto_compares_for_kits") as auto:
+                with patch.object(window, "_busy", return_value=False):
+                    window._sync_official_rd_mto_compares()
+        assert key in captured["keys"]
+        assert key in captured["priority"]
+        auto.assert_called_once()
+        assert key in auto.call_args.args[0]
+        with patch.object(window, "_enqueue_mto_compare") as enqueue:
+            with patch.object(window, "_enqueue_auto_mto_compares_for_kits") as auto:
+                window._sync_official_rd_mto_compares()
+        enqueue.assert_not_called()
+        auto.assert_not_called()
+    finally:
+        window._official_rd_mto_path_by_kit = previous_map
+        window._rd_mto_overlay_cache = previous_cache
+        window._mto_pending_keys = previous_pending
 
 
 def _check_overlay_auto_mto_enqueue_while_heatmap_deferred(window: CatalogWindow) -> None:
@@ -1059,6 +1103,7 @@ def main() -> None:
         _check_scan_keep_view_tree_rebuild_contract()
         _check_kits_context_menu_popup_cost(window)
         _check_mto_compare_not_planned_on_gui(window)
+        _check_official_rd_mto_path_change_enqueues(window)
         _check_scoped_gui_refresh(window)
         _check_scoped_kits_table_refresh(window)
         _check_heatmap_patch_cells(window)

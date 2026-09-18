@@ -80,11 +80,14 @@ refresh, deferred stay deferred. Kits table is always live.
 `gui.refresh` with `pipeline_subtrees` that resolve to `kit_keys` must
 `_refresh_kits_table(kit_keys=)`, not `kits=all`.
 SQ→RD keep_view must not force `gui.rebuild_document_tree`; same deferral as robot keep_view.
-`_enqueue_mto_compare` must not run
+`_enqueue_mto_compare` / `_sync_official_rd_mto_compares` must not run
 [`official_rd_mto_overlay`](rd_catalog/pipeline.py) /
 [`build_mto_compare_plan`](rd_catalog/mto_compare_queue.py) on the GUI
 thread; the child job [`mto_compare_job.py`](rd_catalog/mto_compare_job.py)
-already plans (`list_present_robot_mto_files` included).
+already plans (`list_present_robot_mto_files` included). Official-path
+moves are detected from the in-memory worklist overlay
+(`rd_mto_overlay_by_kit`). Scoped pipeline refresh still must not force
+a heatmap hydrate just to enqueue.
 
 Still catalog-wide on the scoped path (cheap vs tree/heatmap rebuild):
 `gui.load_folder_tree_hints`, `gui.reload_mto_worklist_rows`. A live heatmap

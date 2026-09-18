@@ -58,13 +58,16 @@ from rd_catalog.customer_pi_auto_mto import (
     auto_mto_path,
     auto_mto_rd_path_key,
     auto_mto_rd_paths_match,
+    cached_auto_mto_rd_paths_by_kit,
     compare_auto_mto_to_rd,
     format_kits_coverage_summary,
     format_spec_progress_summary,
     index_auto_mto_by_kit,
+    kits_with_moved_cached_rd_mto_path,
     list_spec_progress_rows,
     mto_sheet_row,
     needs_auto_mto_compare,
+    official_rd_mto_paths_changed,
     overlay_written_specs,
     plan_auto_mto_files,
     rebuild_auto_mto_catalog,
@@ -1061,6 +1064,57 @@ class AutoMtoCompareStatusSmoke(unittest.TestCase):
             auto_mto_rd_path_key(dashed),
         )
         self.assertFalse(auto_mto_rd_paths_match(rd_path, r"C:\rd\other.xlsx"))
+
+
+class OfficialRdMtoPathChangeSmoke(unittest.TestCase):
+    def test_in_session_and_first_paint_vs_cache(self) -> None:
+        key = kit_identity_key("7570", "SOS")
+        old = r"\\bcc\eng\PrDoc\РД\7570\SOS\08_Void\AGCC.287-7570-SOS.MTO-0001_02-AN01_RU.xlsx"
+        new = r"\\bcc\eng\PrDoc\РД\7570\SOS\06_рев.02-AN01\AGCC.287-7570-SOS.MTO-0001_02-AN01_RU.xlsx"
+        dashed = new.replace("-7570-", "\u20107570\u2010")
+        self.assertEqual(official_rd_mto_paths_changed(None, {key: new}), set())
+        self.assertEqual(
+            official_rd_mto_paths_changed({key: old}, {key: new}),
+            {key},
+        )
+        self.assertEqual(
+            official_rd_mto_paths_changed({key: new}, {key: dashed}),
+            set(),
+        )
+        other = kit_identity_key("1111", "KSB")
+        self.assertEqual(
+            official_rd_mto_paths_changed({key: new}, {key: new, other: old}),
+            {other},
+        )
+        self.assertEqual(
+            official_rd_mto_paths_changed(
+                {key: new},
+                {key: new, other: old},
+                include_new_keys=False,
+            ),
+            set(),
+        )
+        grouped = cached_auto_mto_rd_paths_by_kit(
+            {
+                "a": {"title": "7570", "mark": "SOS", "rd_path": old},
+                "b": {"title": "1111", "mark": "KSB", "rd_path": old},
+            }
+        )
+        self.assertEqual(
+            kits_with_moved_cached_rd_mto_path({key: new, other: old}, grouped),
+            {key},
+        )
+        self.assertEqual(
+            kits_with_moved_cached_rd_mto_path({key: dashed}, grouped),
+            {key},
+        )
+        grouped_new = cached_auto_mto_rd_paths_by_kit(
+            {"a": {"title": "7570", "mark": "SOS", "rd_path": new}}
+        )
+        self.assertEqual(
+            kits_with_moved_cached_rd_mto_path({key: dashed}, grouped_new),
+            set(),
+        )
 
 
 class AutoMtoCompareCacheSmoke(unittest.TestCase):
