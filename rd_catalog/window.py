@@ -84,6 +84,16 @@ from rd_catalog.rd_dump_scan import (
 )
 from rd_catalog.rd_dump_scan_thread import RdDumpScanThread
 from rd_catalog.rd_dump_tab import RdDumpTab
+from rd_catalog.handoff_export import (
+    HANDOFF_LAYOUT_FLAT,
+    HandoffKitInput,
+    build_handoff_copy_plan,
+    build_handoff_rows,
+    handoff_list_filename,
+    remember_handoff_destination,
+)
+from rd_catalog.handoff_export_tab import HandoffExportTab
+from rd_catalog.handoff_export_thread import HandoffExportThread
 from rd_catalog.customer_pi_auto_mto import (
     AUTO_MTO_COMPARE_STATUS_HEADER,
     AUTO_MTO_COMPARE_STATUS_TOOLTIP,
@@ -329,6 +339,7 @@ from rd_catalog.pipeline import (
     list_mto_worklist,
     official_detected_current_ids,
     patch_official_detected_current_ids,
+    pick_official_rd_package,
     pipeline_algorithm_needs_rebuild,
     pipeline_approval_color_key,
     pipeline_approval_label,
@@ -636,6 +647,7 @@ _DEFERRED_APPROVAL = "approval"
 _DEFERRED_TREE = "tree"
 _DEFERRED_AN = "an"
 _DEFERRED_RD_DUMP = "rd_dump"
+_DEFERRED_HANDOFF = "handoff"
 _DEFERRED_ALL = frozenset(
     {
         _DEFERRED_HEATMAP,
@@ -645,6 +657,7 @@ _DEFERRED_ALL = frozenset(
         _DEFERRED_COLLISIONS,
         _DEFERRED_AN,
         _DEFERRED_RD_DUMP,
+        _DEFERRED_HANDOFF,
         _DEFERRED_APPROVAL,
         _DEFERRED_TREE,
     }
@@ -720,6 +733,23 @@ def scroll_kits_tips_header_to_top(edit: QPlainTextEdit, header: str) -> int | N
     if start is None:
         return None
     return scroll_kits_tips_section_to_top(edit, start)
+
+
+def attach_kits_table_tips_ctrl_click(
+    table: QTableWidget,
+    on_ctrl_click: Callable[[int, int], None],
+) -> object:
+    """Install Ctrl+click that jumps Подсказки to the clicked column.
+
+    Args:
+        table: Комплекты table.
+        on_ctrl_click: ``(row, column)`` handler.
+
+    Returns:
+        Event filter; keep a Python reference for the widget lifetime.
+    """
+
+    return attach_google_href_clicks(table, on_ctrl_click=on_ctrl_click)
 
 
 class _ReadOnlyCopyDelegate(QStyledItemDelegate):
@@ -1119,6 +1149,7 @@ class CatalogWindow(QMainWindow):
         self._google_write_thread: GoogleFWriteThread | None = None
         self._robot_sync_thread: RobotMtoSyncThread | None = None
         self._sq_to_rd_thread: SqToRdThread | None = None
+        self._handoff_export_thread: HandoffExportThread | None = None
         self._mto_compare_thread: MtoCompareThread | None = None
         self._mto_pending_keys: set[tuple[str, str]] = set()
         self._mto_queued: (
@@ -1249,6 +1280,15 @@ class CatalogWindow(QMainWindow):
         self._tabs.addTab(self._rd_dump_tab, "РД")
         self._mto_readiness_tab = self._build_mto_tab()
         self._tabs.addTab(self._mto_readiness_tab, "MTO · Готовность робота")
+        self._handoff_export_tab = HandoffExportTab(self)
+        self._handoff_export_tab.configure(self.config.runtime_dir)
+        self._handoff_export_tab.kit_activated.connect(self._on_revision_matrix_kit)
+        self._handoff_export_tab.copy_requested.connect(self._start_handoff_export)
+        self._handoff_export_tab.filters_changed.connect(
+            self._refresh_handoff_export_tab
+        )
+        self._handoff_export_table = self._handoff_export_tab.table()
+        self._tabs.addTab(self._handoff_export_tab, "Выгрузка комплектов")
         self._issuance_journal_tab = IssuanceJournalTab(
             self, database=self.database
         )
@@ -2045,6 +2085,7 @@ class CatalogWindow(QMainWindow):
             ("window/issuance_journal_header_v1", "_issuance_journal_table"),
             ("window/an_tab_header_v2", "_an_table"),
             ("window/rd_dump_tab_header_v2", "_rd_dump_table"),
+            ("window/handoff_export_header_v1", "_handoff_export_table"),
             # v10: «Ок» after «Марка»; do not restore v9.
             ("window/kits_header_v10", "_kits_table"),
             ("window/collision_header", "_collision_table"),
@@ -2822,6 +2863,8 @@ class CatalogWindow(QMainWindow):
             self._refresh_an_tab()
         elif key == _DEFERRED_RD_DUMP:
             self._refresh_rd_dump_tab()
+        elif key == _DEFERRED_HANDOFF:
+            self._refresh_handoff_export_tab()
         self._deferred_widgets.discard(key)
         if _DEFERRED_HEATMAP not in self._deferred_widgets and (
             _DEFERRED_TREE not in self._deferred_widgets
@@ -2855,6 +2898,12 @@ class CatalogWindow(QMainWindow):
                 self._ensure_deferred_widget(_DEFERRED_AN)
             elif self._an_tab.table().rowCount() == 0:
                 self._refresh_an_tab()
+            return
+        if widget is getattr(self, "_handoff_export_tab", None):
+            if _DEFERRED_HANDOFF in self._deferred_widgets:
+                self._ensure_deferred_widget(_DEFERRED_HANDOFF)
+            elif self._handoff_export_tab.table().rowCount() == 0:
+                self._refresh_handoff_export_tab()
             return
         if not self._deferred_widgets:
             return
@@ -2968,7 +3017,9 @@ class CatalogWindow(QMainWindow):
             if not defer_secondary:
                 # Full refresh paints heatmap/MTO/tree, but not dump finders.
                 # Keep them lazy so a later tab click still loads SQLite.
-                self._deferred_widgets.update({_DEFERRED_AN, _DEFERRED_RD_DUMP})
+                self._deferred_widgets.update(
+                    {_DEFERRED_AN, _DEFERRED_RD_DUMP, _DEFERRED_HANDOFF}
+                )
                 if hasattr(self, "_tabs"):
                     self._on_main_tab_changed(self._tabs.currentIndex())
 
@@ -4733,12 +4784,8 @@ class CatalogWindow(QMainWindow):
         if source == "rd" and snapshot and snapshot.paths:
             package = self._official_rd_package(row.title, row.mark)
             if package is not None and package.package_path:
-                prefix = package.package_path.casefold()
                 for candidate in snapshot.paths:
-                    folder_path = issued_package_dir(str(candidate)) or str(
-                        candidate
-                    )
-                    if folder_path.casefold().startswith(prefix):
+                    if path_is_under(str(candidate), package.package_path):
                         path = candidate
                         break
         if not snapshot or not path or not snapshot.present:
@@ -4917,6 +4964,54 @@ class CatalogWindow(QMainWindow):
                 rd_root=self.config.rd_root,
                 allowed_kits=known,
             )
+
+    def _refresh_handoff_export_tab(self) -> None:
+        """Push official-kit dump rows into the manager export tab."""
+
+        if not hasattr(self, "_handoff_export_tab"):
+            return
+        self._deferred_widgets.discard(_DEFERRED_HANDOFF)
+        with perf_span("gui.refresh_handoff_export"):
+            overlay_mto, ifc_by_kit, excluded_by_kit = self._kits_paint_context()
+            inputs: list[HandoffKitInput] = []
+            for row in self._kit_rows:
+                key = kit_identity_key(row.title, row.mark)
+                painted = self._kits_monitor_row_for(
+                    row,
+                    overlay_mto=overlay_mto,
+                    ifc_by_kit=ifc_by_kit,
+                    excluded_sends=excluded_by_kit.get(key, ()),
+                )
+                pipeline = self._kit_pipelines.get(key)
+                official = (
+                    pipeline.official_revision_text if pipeline is not None else ""
+                ) or (row.rd.revision_text or "")
+                inputs.append(
+                    HandoffKitInput(
+                        title=row.title,
+                        mark=row.mark,
+                        official_revision_text=official or "",
+                        status=pipeline.status if pipeline is not None else "",
+                        code_a=painted.code_a,
+                        pipeline=pipeline,
+                    )
+                )
+            try:
+                packages = self.database.list_kit_packages()
+            except Exception as exc:
+                packages = []
+                self._append_log(
+                    f"Выгрузка комплектов: {type(exc).__name__}: {exc}"
+                )
+            records = self._pipeline_records() or self._all_records or ()
+            rows = build_handoff_rows(
+                inputs,
+                packages,
+                records,
+                include_tdo=self._handoff_export_tab.include_tdo(),
+                is_banned=self._is_banned_pair,
+            )
+            self._handoff_export_tab.set_rows(rows)
 
     def _open_auto_mto_cell(self, table_row: int) -> None:
         item = self._kits_table.item(table_row, _KITS_COL_AUTO_MTO)
@@ -5268,6 +5363,8 @@ class CatalogWindow(QMainWindow):
                 self._refresh_an_tab()
             if _DEFERRED_RD_DUMP not in self._deferred_widgets:
                 self._refresh_rd_dump_tab()
+            if _DEFERRED_HANDOFF not in self._deferred_widgets:
+                self._refresh_handoff_export_tab()
             self._update_ban_action_label()
             self._update_kits_tab_label()
 
@@ -5687,12 +5784,10 @@ class CatalogWindow(QMainWindow):
                 if package is not None and package.package_path:
                     path = package.package_path
                     if snapshot and snapshot.paths:
-                        prefix = package.package_path.casefold()
                         for candidate in snapshot.paths:
-                            folder_path = issued_package_dir(
-                                str(candidate)
-                            ) or str(candidate)
-                            if folder_path.casefold().startswith(prefix):
+                            if path_is_under(
+                                str(candidate), package.package_path
+                            ):
                                 path = candidate
                                 break
             present = bool(
@@ -6479,15 +6574,14 @@ class CatalogWindow(QMainWindow):
         return best
 
     def _official_rd_package(self, title: str, mark: str) -> KitPackageRow | None:
-        """Return the issued RD package for the official (non-working) revision.
+        """Return the issued RD package that matches «РД · рев.».
 
         Args:
             title: Four-digit title.
             mark: Latin AGCC mark.
 
         Returns:
-            ``kit_package`` with ``is_current``, else the newest package
-            whose filename revision matches ``official_revision_text``.
+            Package from :func:`pick_official_rd_package`, not ``is_current``.
         """
 
         token = (
@@ -6506,46 +6600,9 @@ class CatalogWindow(QMainWindow):
             packages = self.database.list_kit_packages(title, mark)
         except Exception:
             packages = []
-        current = [
-            pkg
-            for pkg in packages
-            if pkg.source == "rd" and not pkg.is_grey and pkg.is_current
-        ]
-        result: KitPackageRow | None
-        if current:
-            result = max(
-                current,
-                key=lambda pkg: (
-                    pkg.sequence if pkg.sequence is not None else -1,
-                    pkg.id or 0,
-                ),
-            )
-        else:
-            pipeline = self._kit_pipelines.get(key)
-            official = (
-                pipeline.official_revision_text if pipeline is not None else ""
-            )
-            if not official:
-                result = None
-            else:
-                matched = [
-                    pkg
-                    for pkg in packages
-                    if pkg.source == "rd"
-                    and not pkg.is_grey
-                    and revision_texts_equivalent(pkg.revision_text, official)
-                ]
-                result = (
-                    max(
-                        matched,
-                        key=lambda pkg: (
-                            pkg.sequence if pkg.sequence is not None else -1,
-                            pkg.id or 0,
-                        ),
-                    )
-                    if matched
-                    else None
-                )
+        result = pick_official_rd_package(
+            packages, self._kit_pipelines.get(key)
+        )
         cached[key] = result
         return result
 
@@ -8889,6 +8946,8 @@ class CatalogWindow(QMainWindow):
             pass
         elif self._mto_compare_thread is not None:
             self._cancel_action.setEnabled(True)
+        elif self._handoff_export_thread is not None:
+            self._cancel_action.setEnabled(True)
         if hasattr(self, "_kits_de_sync_button"):
             self._kits_de_sync_button.setEnabled(not scanning)
         if hasattr(self, "_approval_mail_tab"):
@@ -8916,6 +8975,7 @@ class CatalogWindow(QMainWindow):
             hasattr(self, "_revision_matrix_tab")
             and self._revision_matrix_tab.is_copy_running()
         )
+        handoff_copy = self._handoff_export_thread is not None
         customer_pi = (
             self._customer_pi_dialog is not None
             and self._customer_pi_dialog.is_busy()
@@ -8929,6 +8989,7 @@ class CatalogWindow(QMainWindow):
             or self._robot_sync_thread is not None
             or self._sq_to_rd_thread is not None
             or export_copy
+            or handoff_copy
             or customer_pi
         )
 
@@ -8958,6 +9019,8 @@ class CatalogWindow(QMainWindow):
             self._an_tab.set_scan_enabled(enabled)
         if hasattr(self, "_rd_dump_tab"):
             self._rd_dump_tab.set_scan_enabled(enabled)
+        if hasattr(self, "_handoff_export_tab"):
+            self._handoff_export_tab.set_copy_enabled(enabled)
         if hasattr(self, "_kits_de_sync_button"):
             self._kits_de_sync_button.setEnabled(enabled)
 
@@ -9189,6 +9252,9 @@ class CatalogWindow(QMainWindow):
         elif self._rd_dump_scan_thread is not None:
             self._cancel_action.setEnabled(False)
             self._rd_dump_scan_thread.request_cancel()
+        elif self._handoff_export_thread is not None:
+            self._cancel_action.setEnabled(False)
+            self._handoff_export_thread.request_cancel()
         elif self._mto_compare_thread is not None:
             self._cancel_mto_compare(resume_later=False)
 
@@ -9210,6 +9276,151 @@ class CatalogWindow(QMainWindow):
             robot_subtree=folder,
             keep_view=True,
         )
+
+    @Slot()
+    def _start_handoff_export(self) -> None:
+        """Copy official MTO + BBB files into the chosen dump folder."""
+
+        if self._busy():
+            QMessageBox.information(
+                self,
+                "Выгрузка комплектов",
+                "Дождитесь завершения текущей загрузки или сканирования.",
+            )
+            return
+        tab = self._handoff_export_tab
+        dest = tab.dest_root()
+        rows = tab.visible_rows()
+        if not rows:
+            QMessageBox.information(
+                self,
+                "Выгрузка комплектов",
+                "Нет комплектов для выгрузки.",
+            )
+            return
+        try:
+            plan = build_handoff_copy_plan(
+                rows,
+                dest_root=dest,
+                layout=tab.layout_mode(),
+                rd_root=str(self.config.rd_root or ""),
+                sq_root=str(self.config.sq_root or ""),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Выгрузка комплектов", str(exc))
+            return
+        layout_label = (
+            "плоская"
+            if plan.layout == HANDOFF_LAYOUT_FLAT
+            else "по титул / марка"
+        )
+        reply = QMessageBox.question(
+            self,
+            "Выгрузка комплектов",
+            (
+                f"Выгрузить {len(plan.rows)} комплектов "
+                f"({len(plan.items)} файл(ов) MTO/BBB) в:\n"
+                f"{plan.dest_root}\n"
+                f"Раскладка: {layout_label}\n"
+                f"Перечень: {handoff_list_filename()}"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        remember_handoff_destination(self.config.runtime_dir, plan.dest_root)
+        tab.configure(self.config.runtime_dir)
+        self._cancel_mto_compare(resume_later=True)
+        self._cancel_export_pair_compare()
+        thread = HandoffExportThread(plan, self, now=datetime.now())
+        thread.log.connect(self._append_log)
+        thread.error.connect(self._on_handoff_export_error)
+        thread.progress.connect(self._on_handoff_export_progress)
+        thread.finished.connect(self._on_handoff_export_finished)
+        self._handoff_export_thread = thread
+        self._set_workers_enabled(False)
+        self._cancel_action.setEnabled(True)
+        self._progress.setRange(0, max(len(plan.items), 1))
+        self._progress.setValue(0)
+        self.statusBar().showMessage("Выгрузка комплектов…")
+        self._update_action_states()
+        thread.start()
+
+    @Slot(int, int)
+    def _on_handoff_export_progress(self, completed: int, total: int) -> None:
+        self._progress.setRange(0, max(total, 1))
+        self._progress.setValue(completed)
+        self.statusBar().showMessage(
+            f"Выгрузка комплектов: {completed} / {total}"
+        )
+
+    @Slot(str)
+    def _on_handoff_export_error(self, message: str) -> None:
+        self._append_log(message)
+        self.statusBar().showMessage("Ошибка выгрузки комплектов")
+
+    @Slot()
+    def _on_handoff_export_finished(self) -> None:
+        thread = self._handoff_export_thread
+        if thread is None:
+            return
+        report = thread.report
+        failure = thread.failure
+        dest = thread.plan.dest_root
+        self._set_workers_enabled(True)
+        self._cancel_action.setEnabled(False)
+        self._progress.setRange(0, 1)
+        self._progress.setValue(1)
+        self._handoff_export_thread = None
+        thread.deleteLater()
+        self._update_action_states()
+        resumed = self._resume_pending_mto_compare()
+        self._mto_resume_on_idle = (
+            not resumed
+            and bool(self._mto_pending_keys)
+            and (self._mto_compare_thread is not None or self._busy())
+        )
+        if failure:
+            self.statusBar().showMessage("Ошибка выгрузки комплектов", 10_000)
+            QMessageBox.warning(self, "Выгрузка комплектов", failure)
+            return
+        if report is None:
+            self.statusBar().showMessage("Выгрузка комплектов не выполнена", 10_000)
+            return
+        if report.cancelled:
+            self.statusBar().showMessage("Выгрузка комплектов отменена", 10_000)
+            return
+        if hasattr(self, "_handoff_export_tab"):
+            self._handoff_export_tab.configure(self.config.runtime_dir)
+        failed_text = ""
+        if report.failed:
+            preview = "\n".join(report.failed[:8])
+            extra = len(report.failed) - 8
+            failed_text = f"\nОшибки:\n{preview}"
+            if extra > 0:
+                failed_text += f"\n… ещё {extra}"
+        list_line = f"\nПеречень: {report.list_path}" if report.list_path else ""
+        self.statusBar().showMessage(
+            "Выгрузка комплектов: "
+            f"скопировано {report.copied}, пропущено {report.skipped}",
+            10_000,
+        )
+        open_reply = QMessageBox.question(
+            self,
+            "Выгрузка комплектов",
+            (
+                f"Скопировано: {report.copied}\n"
+                f"Пропущено (отпечаток совпал): {report.skipped}\n"
+                f"Ошибок: {len(report.failed)}"
+                f"{list_line}{failed_text}\n\n"
+                "Открыть папку выгрузки?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if open_reply == QMessageBox.StandardButton.Yes and dest:
+            self._open_result(dest, folder=False)
 
     def _cancel_mto_compare(self, *, resume_later: bool = False) -> None:
         """Request cooperative cancellation of a running MTO compare thread.
@@ -10288,6 +10499,8 @@ class CatalogWindow(QMainWindow):
             self._an_tab.restore_filters(self._settings)
         if hasattr(self, "_rd_dump_tab"):
             self._rd_dump_tab.restore_filters(self._settings)
+        if hasattr(self, "_handoff_export_tab"):
+            self._handoff_export_tab.restore_filters(self._settings)
         if hasattr(self, "_approval_mail_tab"):
             self._approval_mail_tab.restore_settings(self._settings)
         if hasattr(self, "_kits_filter"):
@@ -10619,6 +10832,17 @@ class CatalogWindow(QMainWindow):
                 self._restore_deferred_load_timers(startup_pending, secondary_pending)
                 event.ignore()
                 return
+        if self._handoff_export_thread is not None:
+            self._handoff_export_thread.request_cancel()
+            if not self._handoff_export_thread.wait(3000):
+                QMessageBox.information(
+                    self,
+                    "Выгрузка комплектов",
+                    "Выгрузка ещё завершается. Повторите закрытие через несколько секунд.",
+                )
+                self._restore_deferred_load_timers(startup_pending, secondary_pending)
+                event.ignore()
+                return
         if self._mto_compare_thread is not None:
             self._mto_compare_thread.request_cancel()
             if not self._mto_compare_thread.wait(3000):
@@ -10656,6 +10880,8 @@ class CatalogWindow(QMainWindow):
             self._an_tab.save_filters(self._settings)
         if hasattr(self, "_rd_dump_tab"):
             self._rd_dump_tab.save_filters(self._settings)
+        if hasattr(self, "_handoff_export_tab"):
+            self._handoff_export_tab.save_filters(self._settings)
         if hasattr(self, "_approval_mail_tab"):
             self._approval_mail_tab.save_settings(self._settings)
         if hasattr(self, "_kits_filter"):

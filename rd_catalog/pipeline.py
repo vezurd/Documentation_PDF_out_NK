@@ -3347,6 +3347,68 @@ def _official_package_files(
     return max(pool, key=_sequence)
 
 
+def pick_official_rd_package(
+    packages: Sequence[KitPackageRow],
+    pipeline: KitPipelineRow | None,
+) -> KitPackageRow | None:
+    """Return the issued RD folder that matches «РД · рев.».
+
+    ``is_current`` (newest non-working NN) is only used when no package
+    has ``revision_text`` equivalent to ``official_revision_text``. A
+    later delta between the agreed folder and the working head must not
+    win open-folder / export.
+
+    Args:
+        packages: ``kit_package`` rows for one kit (other kits ignored
+            when ``pipeline`` is set).
+        pipeline: Derived kit pipeline, or ``None`` when unknown.
+
+    Returns:
+        The official non-grey RD package, or ``None``.
+    """
+
+    key = (
+        kit_identity_key(pipeline.title, pipeline.mark)
+        if pipeline is not None
+        else None
+    )
+    exclusion = (
+        _exclusion_from_pipeline(pipeline) if pipeline is not None else None
+    )
+    eligible: list[KitPackageRow] = []
+    for package in packages:
+        if package.source != "rd" or package.is_grey:
+            continue
+        if not str(package.package_path or "").strip():
+            continue
+        if key is not None and kit_identity_key(package.title, package.mark) != key:
+            continue
+        if _package_is_skipped_from_official(package, exclusion):
+            continue
+        eligible.append(package)
+    if not eligible:
+        return None
+    official = (
+        (pipeline.official_revision_text or "").strip()
+        if pipeline is not None
+        else ""
+    )
+    matched = [
+        package
+        for package in eligible
+        if official
+        and revision_texts_equivalent(package.revision_text, official)
+    ]
+    pool = matched or eligible
+    return max(
+        pool,
+        key=lambda package: (
+            package.sequence if package.sequence is not None else -1,
+            package.id or 0,
+        ),
+    )
+
+
 def _highest_mto_revision_text(records: Sequence[FileRecord]) -> str:
     return _highest_revision_text(
         [

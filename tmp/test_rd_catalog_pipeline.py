@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rd_catalog.db import CatalogDatabase, KitPipelineRow
+from rd_catalog.db import CatalogDatabase, KitPackageRow, KitPipelineRow
 from rd_catalog.issuance_review import (
     add_manual_journal_row,
     effective_issuance_sends,
@@ -48,6 +48,7 @@ from rd_catalog.pipeline import (
     list_revision_matrix,
     official_detected_current_ids,
     patch_official_detected_current_ids,
+    pick_official_rd_package,
     pipeline_algorithm_needs_rebuild,
     APPROVAL_REL_AHEAD,
     APPROVAL_REL_NO_REV,
@@ -3271,6 +3272,105 @@ def test_1600_sos_legalize_orphan_in_heatmap(temp: Path) -> None:
     assert an01[0].in_issuance is True
 
 
+def test_pick_official_rd_package_skips_delta_between_agreed_and_working() -> None:
+    """8950-SOO1: open-folder is NN 11 (03-AN01), not is_current NN 13."""
+
+    base = r"\\bcc\eng\PrDoc\РД\8950\14_SOO1\Для передачи"
+    packages = (
+        KitPackageRow(
+            title="8950",
+            mark="SOO1",
+            source="rd",
+            sequence=11,
+            transfer_name="11_рев.03-AN01_от_2026.01.22",
+            package_path=rf"{base}\11_рев.03-AN01_от_2026.01.22",
+            revision_text="03-AN01",
+            is_current=False,
+            id=11,
+        ),
+        KitPackageRow(
+            title="8950",
+            mark="SOO1",
+            source="rd",
+            sequence=13,
+            transfer_name="13_рев.03_AN02_AGCC.287-8950-SOO1",
+            package_path=rf"{base}\13_рев.03_AN02_AGCC.287-8950-SOO1",
+            revision_text="03-AN02",
+            is_current=True,
+            id=13,
+        ),
+        KitPackageRow(
+            title="8950",
+            mark="SOO1",
+            source="rd",
+            sequence=14,
+            transfer_name="14_рев.03_AN03_AGCC.287-8950-SOO1",
+            package_path=rf"{base}\14_рев.03_AN03_AGCC.287-8950-SOO1",
+            revision_text="03-AN03",
+            is_current=False,
+            id=14,
+        ),
+    )
+    pipeline = KitPipelineRow(
+        title="8950",
+        mark="SOO1",
+        status="agreed",
+        code="A",
+        official_revision_text="03-AN01",
+        working_revision_text="03-AN03",
+        working_transfer_names=("14_рев.03_AN03_AGCC.287-8950-SOO1",),
+        working_sequences=(14,),
+    )
+    picked = pick_official_rd_package(packages, pipeline)
+    assert picked is not None
+    assert picked.sequence == 11
+    assert picked.revision_text == "03-AN01"
+
+
+def test_pick_official_rd_package_falls_back_when_official_rev_missing() -> None:
+    """Send 01-AN01, disk still 01 → newest non-working package."""
+
+    base = r"\\bcc\eng\PrDoc\РД\2000\KSB\Для передачи"
+    packages = (
+        KitPackageRow(
+            title="2000",
+            mark="KSB",
+            source="rd",
+            sequence=8,
+            transfer_name="08_рев.01_AGCC.287-2000-KSB",
+            package_path=rf"{base}\08_рев.01_AGCC.287-2000-KSB",
+            revision_text="01",
+            is_current=True,
+            id=8,
+        ),
+        KitPackageRow(
+            title="2000",
+            mark="KSB",
+            source="rd",
+            sequence=9,
+            transfer_name="09_рев.01-AN02_working",
+            package_path=rf"{base}\09_рев.01-AN02_working",
+            revision_text="01-AN02",
+            is_current=False,
+            id=9,
+        ),
+    )
+    pipeline = KitPipelineRow(
+        title="2000",
+        mark="KSB",
+        status="agreed",
+        code="A",
+        official_revision_text="01-AN01",
+        working_revision_text="01-AN02",
+        working_transfer_names=("09_рев.01-AN02_working",),
+        working_sequences=(9,),
+    )
+    picked = pick_official_rd_package(packages, pipeline)
+    assert picked is not None
+    assert picked.sequence == 8
+    assert picked.revision_text == "01"
+
+
 def main() -> None:
     """Run pipeline fixtures against a temporary SQLite file."""
 
@@ -3284,6 +3384,8 @@ def main() -> None:
     test_pipeline_review_label_agreed_date_not_send_date()
     test_pipeline_display_v3_google_face_ahead_of_disk()
     test_pipeline_display_v3_de_caption_does_not_force_agreed()
+    test_pick_official_rd_package_skips_delta_between_agreed_and_working()
+    test_pick_official_rd_package_falls_back_when_official_rev_missing()
     with tempfile.TemporaryDirectory(prefix="rd_catalog_pipeline_") as raw:
         root = Path(raw)
         test_9110_tdo_review_package_path(root)

@@ -1,0 +1,78 @@
+---
+description: "RD Catalog: официальный пакет РД и вкладка «Выгрузка комплектов»."
+globs: ["rd_catalog/handoff_export*.py", "rd_catalog/pipeline.py", "rd_catalog/window.py", "tmp/test_rd_catalog_handoff_export*.py", "tmp/test_rd_catalog_pipeline.py"]
+alwaysApply: false
+---
+
+# Официальный пакет РД и выгрузка комплектов
+
+Не путать с теплокартой «В папку робота» ([`rd_catalog/mto_export.py`](rd_catalog/mto_export.py)) и с ПИ заказчика ([AI_rd_catalog_customer_pi.mdc](.cursor/rules/AI_rd_catalog_customer_pi.mdc)). Qt only, не WEB. Не писать в `rd_root` / `sq_root`.
+
+## 1. Какой NN открывать («РД · рев.»)
+
+`kit_package.is_current` = **последний нерабочий NN** (карточка, дельта между agreed и working). Это **не** папка ячейки «РД · рев.».
+
+Пример 8950-SOO1: agreed **11** `03-AN01`, дельта **13** `03-AN02` (`is_current`), working **14** `03-AN03`. Ячейка и «Открыть содержащую папку · РД» → **11**.
+
+Единственный Qt-free выбор: [`pick_official_rd_package`](rd_catalog/pipeline.py).
+
+1. `source=rd`, не grey, непустой `package_path`.
+2. Выкинуть рабочую и аннулированную **папку** (`_package_is_skipped_from_official`).
+3. Среди оставшихся — `revision_texts_equivalent(package.revision_text, official_revision_text)`.
+4. Несколько совпадений — больший `sequence`, затем `id`.
+5. Нет точной рев. на диске (send `01-AN01`, файлы `01`) — тот же fallback, что `_official_package_files`: newest remaining = фактически `is_current`.
+6. Открывать **`package_path`** (`NN_…`), не `\PDF` / `\DWG`. Файл внутри — [`path_is_under`](rd_catalog/path_actions.py), не `startswith` по UNC.
+
+`CatalogWindow._official_rd_package` только вызывает этот хелпер. Потребители: открыть/копировать · РД, прыжок в «Все документы», поиск MTO рядом, вкладка выгрузки.
+
+Карточка пакетов: выделенная строка открывает **свой** NN. Автовыбор `is_current` на карточке не менять в том же шаге.
+
+Не парсить `рев.*` из имени папки. Не брать `snapshot.paths[0]` по sequence (позже NN перебьёт official).
+
+Тест: `tmp/test_rd_catalog_pipeline.py` — 8950-подобный набор 11/13/14.
+
+## 2. Вкладка «Выгрузка комплектов»
+
+Сразу после **«MTO · Готовность робота»**, до **«Выдача · Журнал»**. Smoke: индексы **0/1/2/3** и АН+1 (**РД**) не двигать. Журнал = эта вкладка + 1 = readiness + 2.
+
+Вселенная = Комплекты после бана (`KitsMonitorRow` / тот же `code_a`, что фильтр «Код A»). Ревизия = `official_revision_text` / пакет из §1, **не** working и **не** `is_current`-дельта.
+
+| По умолчанию | Опция |
+|---|---|
+| `code_a` как в Комплектах (`pipeline_display_code_a` / `KitsMonitorRow.code_a`) | чекбокс **«Включая отправленные на ТДО»**: плюс `pipeline.status` в `{sent_tdo, tdo_review}` |
+
+Не подмешивать `agreed` без кода A. Не heatmap-export pin.
+
+### Таблица (превью = перечень)
+
+Титул | Марка | РД · рев. | Статус | Код A | MTO | BOE | BOM | BOQ | BBB | Примечание | Пакет
+
+- MTO / BOE / BOM / BOQ — filename-рев. **в официальном пакете** (не overlay с более старой NN). `discipline_block` startswith `mto`/`boe`/`bom`/`boq`; MTO также `FileKind.MTO_XLSX`. Нет файла — «нет», заливка `#F7E8BE`. Есть и рев. ≡ official — текст рев., `#E2F2E1`. Есть, но рев. другая — показать ту рев., жёлтый, в примечании `{вид} {рев} ≠ {official}`.
+- BBB — число файлов, чей **родительский сегмент** `BBB` (как `is_package_media_folder`). 0 → «нет» + примечание «нет BBB».
+- Примечание: «нет пакета»; «нет MTO/BOE/BOM/BOQ»; расхождение рев.; «нет BBB». Несколько фраз через `; `.
+- Бан как на Комплектах. Header `window/handoff_export_header_v1`. Фильтры `window/handoff_export_include_tdo`, `window/handoff_export_layout` (`title_mark` по умолчанию / `flat`).
+
+### Копирование
+
+В передачу: **MTO xlsx** официального пакета + **все файлы в `BBB/`** того же пакета. BOE/BOM/BOQ из PDF/DWG только в таблице, не копировать, если они не в BBB.
+
+Раскладка в корне назначения:
+
+- `title_mark` (default): `{dest}/{титул}/{марка}/{имя файла}`
+- `flat`: `{dest}/{имя файла}`
+
+Не создавать `_old_*`. Не читать содержимое. `shutil.copy2`. Пропуск, если назначение уже файл и `(size, mtime_ns)` совпали с [`mto_file_stat_signature`](rd_catalog/db.py) источника (`path_key` у dest другой — сравнивать только size + `disk_mtime_ns`/`mtime_ns`). Иначе перезаписать.
+
+После копирования (и при пустом списке файлов, если строки были) записать в **тот же dest** `Перечень_YYYY.MM.DD.xlsx` через [`write_exported_table_xlsx`](rd_catalog/table_xlsx.py) — снимок видимой таблицы с заливкой. Тот xlsx всегда перезаписывать (не fingerprint).
+
+Dest не под `rd_root` и не под `sq_root` (`path_is_under`). Поток как heatmap export: в `_catalog_workers_busy` / `_busy()`, не пересекать scan / АН / РД dump / Google / robot / SQ→RD / PI / heatmap copy. Старт отменяет deferred RD↔robot MTO compare. `_DEFERRED_HANDOFF`. Бан/refresh комплектов обновляет вкладку, если она уже не deferred.
+
+История корней: `%LOCALAPPDATA%\Documentation_PDF_out_NK\rd_catalog\handoff_export_destinations.json` (не UNC, не QSettings как единственное хранилище). Combo + «Обзор…» (`QFileDialog.Directory`). Последний путь первым, без дублей, потолок 20.
+
+Домен Qt-free: [`rd_catalog/handoff_export.py`](rd_catalog/handoff_export.py). GUI: [`rd_catalog/handoff_export_tab.py`](rd_catalog/handoff_export_tab.py), поток [`rd_catalog/handoff_export_thread.py`](rd_catalog/handoff_export_thread.py).
+
+```
+python tmp/test_rd_catalog_pipeline.py
+python tmp/test_rd_catalog_handoff_export.py
+python tmp/test_rd_catalog_gui_smoke.py
+```

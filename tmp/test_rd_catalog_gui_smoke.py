@@ -35,6 +35,7 @@ from PySide6.QtTest import QTest
 from rd_catalog.ban_dialog import BannedTitlesDialog
 from rd_catalog.f_legalize import LEGALIZE_APPROVAL_ACTION
 from rd_catalog.issuance_journal_tab import LEGALIZE_RD_TREE_ACTION
+from rd_catalog.handoff_export import HANDOFF_HEADERS
 from rd_catalog.google_f_write import JournalWriteJob
 from rd_catalog.kits_legend_dialog import KitsPaintLegendDialog
 from rd_catalog.sheet_de_sync import SheetDeSyncRow
@@ -1036,7 +1037,11 @@ def main() -> None:
         window.refresh()
         assert window._mto_compare_thread is None
         assert window._busy() is False
-        assert not window._deferred_widgets
+        assert window._deferred_widgets == {
+            rd_window._DEFERRED_AN,
+            rd_window._DEFERRED_RD_DUMP,
+            rd_window._DEFERRED_HANDOFF,
+        }
         _check_layout_report_action(window, Path(window.config.rd_root))
         window._mto_compare_thread = object()  # type: ignore[assignment]
         assert window._busy() is False
@@ -1110,8 +1115,17 @@ def main() -> None:
         )
         journal_index = window._tabs.indexOf(window._issuance_journal_tab)
         assert window._tabs.tabText(journal_index) == "Выдача · Журнал"
-        assert journal_index == window._tabs.indexOf(window._mto_readiness_tab) + 1
+        handoff_index = window._tabs.indexOf(window._handoff_export_tab)
+        assert window._tabs.tabText(handoff_index) == "Выгрузка комплектов"
+        assert handoff_index == window._tabs.indexOf(window._mto_readiness_tab) + 1
+        assert journal_index == handoff_index + 1
+        assert journal_index == window._tabs.indexOf(window._mto_readiness_tab) + 2
         assert journal_index == window._tabs.indexOf(window._approval_mail_tab) - 1
+        handoff_headers = [
+            window._handoff_export_table.horizontalHeaderItem(index).text()
+            for index in range(window._handoff_export_table.columnCount())
+        ]
+        assert handoff_headers == list(HANDOFF_HEADERS)
         journal_table = window._issuance_journal_tab.table()
         journal_headers = [
             journal_table.horizontalHeaderItem(index).text()

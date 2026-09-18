@@ -97,6 +97,7 @@ alwaysApply: true
 | RD catalog WEB-монитор + dual GUI/WEB (`monitor_views`) | `AI_rd_catalog_web.mdc` |
 | RD catalog GUI hangs / `perf_span` / scope refresh | `AI_rd_catalog_perf.mdc` |
 | Выгрузка ПИ заказчика (xlsb→pickle, BCC) | `AI_rd_catalog_customer_pi.mdc` |
+| RD catalog: официальный пакет РД + «Выгрузка комплектов» | `AI_rd_catalog_handoff_export.mdc` |
 | main_v2 Qt6 hub / темы / runners | `AI_main_v2.mdc` |
 | PDF v2 движок (fitz, pipeline, шаблоны JSON) | `AI_v2_engine.mdc`, `pdf_parsing_v2/INTERFACES.md` |
 | PDF v2 ОД (ведомость документов) | `AI_v2_od.mdc` |
