@@ -209,9 +209,12 @@ def scan_document_source(
 
     RD collects PDF, MTO XLSX, and source-editables, but stores only files
     on a canonical issued path
-    (``title/mark/gate/NN_/[PDF|DWG|BBB|ПДФ]``). Names that match AGCC
-    but sit outside that layout are skipped. SQ collects PDF and MTO XLSX
-    in any folder under the SQ root. Names that do not match
+    (``title/mark/gate/NN_/[PDF|DWG|BBB|ПДФ]``). Source-editables are
+    taken from a media folder, from a folder that also contains a PDF, or
+    from the issued ``NN_…`` package root itself (BOE/BOM/BOQ xlsx next
+    to MTO without a PDF sibling). Names that match AGCC but sit outside
+    that layout are skipped. SQ collects PDF and MTO XLSX in any folder
+    under the SQ root. Names that do not match
     ``AgccFilenamePatterns`` (``parse_strict`` then ``parse_loose``) are
     skipped.
 
@@ -312,7 +315,12 @@ def scan_document_source(
             sq = source is SourceKind.SQ
             is_media_dir = is_package_media_folder(Path(current_root).name)
             has_pdf = any(n.casefold().endswith(".pdf") for n in names)
-            allow_source = (not sq) and (is_media_dir or has_pdf)
+            in_issued_package = has_canonical_rd_issued_path(
+                os.path.join(current_root, "_"), root_text
+            )
+            allow_source = (not sq) and (
+                is_media_dir or has_pdf or in_issued_package
+            )
             for name in names:
                 if _is_cancelled(is_cancelled):
                     result.cancelled = True

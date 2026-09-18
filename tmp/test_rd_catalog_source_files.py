@@ -358,6 +358,15 @@ def main() -> None:
         (dwg_folder / dwg_name).write_bytes(b"dwg-dir")
         (other_folder / dwg_name).write_bytes(b"stray-dwg")
         (transfer / mto_name).write_bytes(b"mto")
+        boe_name = "AGCC.287-1513-POS.BOE-0001_01_RU.xlsx"
+        bom_name = "AGCC.287-1513-POS.BOM-0001_01_RU.xlsx"
+        boq_name = "AGCC.287-1513-POS.BOQ-0001_01_RU.xlsx"
+        boe_zip_name = "AGCC.287-1513-POS.BOE-0001_01_RU.zip"
+        (transfer / boe_name).write_bytes(b"boe")
+        (transfer / bom_name).write_bytes(b"bom")
+        (transfer / boq_name).write_bytes(b"boq")
+        (transfer / boe_zip_name).write_bytes(b"boe-zip")
+        (transfer / "notes.xlsx").write_bytes(b"not-agcc")
         bbb_folder = transfer / "BBB"
         bbb_folder.mkdir(parents=True)
         (bbb_folder / dwg_name).write_bytes(b"bbb-only-dwg")
@@ -396,6 +405,14 @@ def main() -> None:
             for path in editable_paths
         )
         assert any(path.endswith(mto_name) for path in mto_paths)
+        assert any(
+            Path(path).parent.name == transfer.name and path.endswith(boe_name)
+            for path in editable_paths
+        )
+        assert any(path.endswith(bom_name) for path in editable_paths)
+        assert any(path.endswith(boq_name) for path in editable_paths)
+        assert any(path.endswith(boe_zip_name) for path in editable_paths)
+        assert not any(path.endswith("notes.xlsx") for path in scanned_paths)
         assert str(loose_pdf) not in scanned_paths
         assert str(loose_dwg) not in scanned_paths
         assert str(mark_dwg_dir / dwg_name) not in scanned_paths
