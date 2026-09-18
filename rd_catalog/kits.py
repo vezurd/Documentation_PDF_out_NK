@@ -106,6 +106,15 @@ _REV_BODY_RE = re.compile(
 _LETTER_REV_RE = re.compile(r"^[A-Z]$", re.IGNORECASE)
 _DATE_RE = re.compile(r"^(\d{1,2}\.\d{1,2}\.\d{4})\s*(.*)$")
 _TRM_RE = re.compile(r"[A-Z0-9]+(?:[.-][A-Z0-9]+)*-TRM-\d+", re.IGNORECASE)
+_TRM_WORD_RE = re.compile(r"\b(?:trm|трм)\b", re.IGNORECASE)
+_ANNUL_NOTE_RE = re.compile(
+    r"аннулир|отмен[её]н|annul|cancel",
+    re.IGNORECASE,
+)
+_NOT_ANNUL_NOTE_RE = re.compile(
+    r"\bне\s+(?:аннулир|отмен)",
+    re.IGNORECASE,
+)
 _REV_IN_TEXT_RE = re.compile(
     r"рев\.?\s*(\d{1,2}(?:-AN\d{1,2})?|[VS]|[A-Z])",
     re.IGNORECASE,
@@ -658,6 +667,35 @@ def extract_confirm_transmittal(note: str) -> str:
 
     match = _TRM_RE.search(normalize_unicode_dashes(note or ""))
     return match.group(0) if match else ""
+
+
+def issuance_note_implies_annulled(note: str) -> bool:
+    """Return whether a «Выдача РД ПД» note marks the send as cancelled.
+
+    Matches sheet phrases such as ``TRM аннулирован``, ``TRM отменен``,
+    ``ТРМ отменен``, and ``загрузка отменена``. A confirm-TRM token alone
+    is not a cancellation.
+
+    Args:
+        note: Column Q «Примечание».
+
+    Returns:
+        ``True`` when the remaining prose after stripping TRM ids is a
+        cancellation remark.
+    """
+
+    text = normalize_unicode_dashes(note or "").strip()
+    if not text:
+        return False
+    text = _TRM_RE.sub(" ", text)
+    text = _TRM_WORD_RE.sub(" ", text)
+    text = re.sub(r"[\s._\-–—]+", " ", text).strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    if _NOT_ANNUL_NOTE_RE.search(folded):
+        return False
+    return _ANNUL_NOTE_RE.search(folded) is not None
 
 
 def revisions_equivalent(

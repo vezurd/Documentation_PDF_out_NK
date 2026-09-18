@@ -22,6 +22,7 @@ from rd_catalog.issuance_review import (
     pick_journal_row_for_issuance,
     send_evidence_fingerprint,
     send_identity_fingerprint,
+    sheet_send_decision,
     validate_issuance_decision,
 )
 from rd_catalog.kits import (
@@ -548,6 +549,60 @@ def test_apply_journal_decision_annuls_sheet(temp: Path) -> None:
     assert latest[0].revision_text == "02"
 
 
+def test_note_annulled_is_implicit_and_skips_latest(temp: Path) -> None:
+    database = _open_db(temp / "note_annul")
+    send_02 = _send(
+        revision="02",
+        send_date="01.08.2026",
+        transmittal="AGCC-BCC-TRM-000010",
+        row_index=10,
+    )
+    send_03 = _send(
+        revision="03",
+        send_date="15.08.2026",
+        transmittal="AGCC-BCC-TRM-000011",
+        row_index=11,
+        note_raw="TRM аннулирован",
+    )
+    _ingest(database, (send_02, send_03))
+    rows = list_issuance_journal(database)
+    sheet_02 = next(row for row in rows if row.revision_text == "02")
+    sheet_03 = next(row for row in rows if row.revision_text == "03")
+    assert sheet_02.decision == "active"
+    assert sheet_03.decision == "annulled"
+    assert sheet_03.review_id is None
+    assert sheet_send_decision(send_03, None) == "annulled"
+    latest = latest_effective_issuance_kits(database, "1600", "SOS")
+    assert latest[0].revision_text == "02"
+    review_id = apply_journal_decision(database, sheet_03, decision="annulled")
+    stored = database.get_issuance_review(review_id)
+    assert stored is not None
+    assert stored.decision == "annulled"
+    assert stored.comment == "TRM аннулирован"
+
+
+def test_user_active_overrides_note_annulled(temp: Path) -> None:
+    database = _open_db(temp / "note_override")
+    send_03 = _send(
+        revision="03",
+        send_date="15.08.2026",
+        transmittal="AGCC-BCC-TRM-000011",
+        row_index=11,
+        note_raw="ТРМ отменен",
+    )
+    _ingest(database, (send_03,))
+    rows = list_issuance_journal(database)
+    sheet_03 = next(row for row in rows if row.revision_text == "03")
+    assert sheet_03.decision == "annulled"
+    apply_journal_decision(database, sheet_03, decision="active")
+    latest = latest_effective_issuance_kits(database, "1600", "SOS")
+    assert latest[0].revision_text == "03"
+    rows = list_issuance_journal(database)
+    sheet_03 = next(row for row in rows if row.revision_text == "03")
+    assert sheet_03.decision == "active"
+    assert sheet_03.review_id is not None
+
+
 def test_add_manual_journal_row_draft_and_legalize(temp: Path) -> None:
     database = _open_db(temp / "manual_row")
     draft_id = add_manual_journal_row(database, "1600", "SOS")
@@ -657,6 +712,8 @@ def main() -> None:
         test_journal_collapses_same_revision_across_files(root)
         test_journal_includes_sheet_and_robot_orphan(root)
         test_apply_journal_decision_annuls_sheet(root)
+        test_note_annulled_is_implicit_and_skips_latest(root)
+        test_user_active_overrides_note_annulled(root)
         test_add_manual_journal_row_draft_and_legalize(root)
         test_pick_journal_row_for_effective_issuance(root)
     print("RD catalog issuance review: OK")

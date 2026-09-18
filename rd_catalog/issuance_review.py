@@ -15,6 +15,7 @@ from rd_catalog.kits import (
     IssuanceKit,
     format_event_date_sortable,
     format_revision,
+    issuance_note_implies_annulled,
     kit_identity_key,
     latest_issuance_from_sends,
     parse_sheet_revision,
@@ -285,6 +286,31 @@ def decision_includes(decision: str) -> bool:
     return decision in _INCLUDE_DECISIONS
 
 
+def sheet_send_decision(
+    send: IssuanceKit,
+    review: IssuanceReviewRow | None,
+) -> str:
+    """Return the journal decision for one sheet send.
+
+    A stored review always wins. Otherwise a cancellation remark in
+    «Примечание» is implicit ``annulled``; a send with no review and no
+    such remark is implicit ``active``.
+
+    Args:
+        send: Parsed «Выдача РД ПД» row.
+        review: Matching ``kind=send`` review, if any.
+
+    Returns:
+        Decision token shown as «Наш статус».
+    """
+
+    if review is not None:
+        return review.decision
+    if issuance_note_implies_annulled(send.note_raw):
+        return "annulled"
+    return "active"
+
+
 def _issuance_kit_from_fields(
     *,
     title: str,
@@ -380,6 +406,12 @@ def apply_journal_decision(
     )
     merged_status = row.sheet_status if sheet_status is None else sheet_status
     merged_note = row.note if note is None else note
+    if (
+        decision == "annulled"
+        and not (merged_comment or "").strip()
+        and issuance_note_implies_annulled(merged_note)
+    ):
+        merged_comment = merged_note.strip()
     send_date_sortable = (
         row.send_date_sortable
         if send_date is None
@@ -760,10 +792,12 @@ def effective_issuance_sends(
 ) -> list[tuple[int | None, IssuanceKit]]:
     """Return include-contour sends plus legalized orphan/manual kits.
 
-    Sheet sends with no review are implicit ``active``. A ``kind=send``
-    review whose current identity is present excludes that send when
-    :func:`decision_includes` is false, including unmatched/ambiguous
-    exclude decisions.
+    Sheet sends with no review are implicit ``active``, unless the sheet
+    note is a cancellation remark — then implicit ``annulled``. A
+    ``kind=send`` review whose current identity is present excludes that
+    send when :func:`decision_includes` is false, including
+    unmatched/ambiguous exclude decisions. A stored review wins over the
+    note.
 
     Args:
         database: Initialized catalog database.
@@ -784,7 +818,7 @@ def effective_issuance_sends(
     result: list[tuple[int | None, IssuanceKit]] = []
     for send_id, send in database.list_issuance_sends_with_ids(title, mark):
         review = send_reviews.get(send_identity_fingerprint(send))
-        if review is not None and not decision_includes(review.decision):
+        if not decision_includes(sheet_send_decision(send, review)):
             continue
         result.append((send_id, send))
     for row in reviews:
@@ -967,7 +1001,7 @@ def _overlay_send_row(
     flags: tuple[bool, bool, bool, bool],
 ) -> IssuanceJournalRow:
     if review is None:
-        decision = "active"
+        decision = sheet_send_decision(send, None)
         comment = None
         match_state = ""
         review_id = None

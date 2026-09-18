@@ -28,6 +28,7 @@ from rd_catalog.kits import (
     format_event_date_sortable,
     format_revision,
     extract_confirm_transmittal,
+    issuance_note_implies_annulled,
     is_rd_kit_mark,
     kit_identity_key,
     kit_revision_match_flags,
@@ -146,6 +147,15 @@ def main() -> None:
     assert extract_confirm_transmittal(
         "PGS\u2013BCC\u2013TRM\u2013000334 extra"
     ) == "PGS-BCC-TRM-000334"
+    assert issuance_note_implies_annulled("TRM аннулирован")
+    assert issuance_note_implies_annulled("TRM отменен")
+    assert issuance_note_implies_annulled("ТРМ отменен")
+    assert issuance_note_implies_annulled("ТРМ отменён")
+    assert issuance_note_implies_annulled("загрузка отменена")
+    assert not issuance_note_implies_annulled("")
+    assert not issuance_note_implies_annulled("AGCC.287-PGS-PGS-TRM-19062")
+    assert not issuance_note_implies_annulled("AGCC.0091-04-0000")
+    assert not issuance_note_implies_annulled("не аннулирован")
 
     comment = (
         "31.03.2024 AGCC-BCC-TRM-000311\n"
