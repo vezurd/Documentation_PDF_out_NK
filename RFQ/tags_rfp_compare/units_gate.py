@@ -29,7 +29,6 @@ from RFQ.units_convert.models import (
     STATUS_IDENTITY,
     STATUS_NO_GOOGLE,
     UnitsConversionError,
-    normalize_code,
     parse_decimal_quantity,
 )
 from RFQ.units_convert import apply_conversion_plan, build_conversion_plan, build_google_units_index
@@ -199,11 +198,6 @@ def _append_position_request(
     invariant: ConversionInvariant,
 ) -> None:
     code = str(row.get_value(CODE) or "").strip()
-    # Conversion is keyed by BCC/Google code. Empty-code position rows
-    # (typical in MTO, also possible in RFP leftover) stay as-is; do not
-    # submit them to ``build_conversion_plan``, which treats empty code as fatal.
-    if not normalize_code(code):
-        return
     units = str(row.get_value(UNITS) or "").strip()
     tags_count = _tags_count(row)
     item_name = _position_name(row)

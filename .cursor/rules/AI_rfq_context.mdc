@@ -88,7 +88,7 @@ UL_NAME, UL_TYPE_MARK, UL_VENDOR, UL_TAGS,
 4. Parallel **`step2_load_mto`** + **`step3_load_vo`** + **`load_base()`** (Google rows once)
 5. Optional **`load_packing_dataset()`** once (кэш уже свежий после preflight)
 5b. **`load_tags=false`**: preflight требует `rfp_parts_net_no_tags.xlsx` (лот как в ДС); in-memory blank `TAGS` on RFP/MTO/VO/УЛ (кэш УЛ не трогает)
-6. **`run_units_gate`** — один immutable plan для raw RFP + MTO + active UL rows (VO excluded); transactional **`apply_conversion_plan`**. Строки без нормализованного `CODE` **не** входят в plan (qty/ЕИ как есть); пустой код в самом `build_conversion_plan` по-прежнему fatal. Пустая ЕИ при непустом коде — fatal.
+6. **`run_units_gate`** — один immutable plan для raw RFP + MTO + active UL rows (VO excluded); transactional **`apply_conversion_plan`**
 7. **`step1_finalize_rfp_data`** — normalize, optional split, validation
 8. **`column_optimization`**
 9. **`step4_analyze_and_match`** — snapshots/TM → balances → packing → Excel
