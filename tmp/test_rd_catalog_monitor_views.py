@@ -69,7 +69,10 @@ from rd_catalog.monitor_views import (
     monitor_to_json,
     build_kits_monitor_row,
     effective_kit_summary,
+    format_kits_f_history_line,
     format_kits_google_f_rev,
+    historical_f_mto_event,
+    F_MTO_HISTORICAL_MARK,
     kits_official_folder_mto_text,
     official_rd_rev_text,
     pipeline_approval_tooltip,
@@ -1058,6 +1061,16 @@ class MonitorViewsTests(unittest.TestCase):
         )
         self.assertEqual(f_absent.text, "04 · MTO Нет")
         self.assertEqual(f_absent.fill, REV_MATCH_FILL)
+        f_hist = next(
+            item
+            for item in samples
+            if item.column == "Google · рев. F"
+            and F_MTO_HISTORICAL_MARK in item.text
+        )
+        self.assertEqual(
+            f_hist.text, f"01-AN02 · MTO 01-AN01 {F_MTO_HISTORICAL_MARK}"
+        )
+        self.assertEqual(f_hist.fill, REV_MATCH_FILL)
         ok_samples = [item for item in samples if item.column == KITS_OK_HEADER]
         self.assertEqual({item.text for item in ok_samples}, {"да", "нет"})
         self.assertFalse(any(item.bold for item in ok_samples))
@@ -1930,12 +1943,17 @@ class GoogleFMtoPaintTests(unittest.TestCase):
     def _paint(
         self,
         *,
-        line: str,
+        line: str | None = None,
+        lines: tuple[str, ...] | None = None,
         rd_rev: str,
         disk_mto: str | None,
         snapshot_mto: str | None = None,
         pipeline: KitPipelineRow | None = None,
     ):
+        if lines is None:
+            if line is None:
+                raise ValueError("line or lines is required")
+            lines = (line,)
         if snapshot_mto is not None:
             snap_mto = snapshot_mto
         elif disk_mto is not None:
@@ -1946,7 +1964,7 @@ class GoogleFMtoPaintTests(unittest.TestCase):
             title="2210",
             mark="KSB",
             sheet=rd_rev,
-            lines=(line,),
+            lines=lines,
         )
         row = KitMatrixRow(
             title="2210",
@@ -2004,7 +2022,7 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         mto_cell = painted.cells["MTO · рев."]
         self.assertEqual(mto_cell.text, "04")
         self.assertEqual(mto_cell.fill, REV_DIFF_FILL)
-        self.assertIn("MTO на диске 04", mto_cell.tooltip)
+        self.assertIn("MTO xlsx на диске 04", mto_cell.tooltip)
         self.assertIn("в F указано MTO 03", mto_cell.tooltip)
         ok_row = _ok_kit_row(
             google=_google_kit(
@@ -2117,6 +2135,71 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         self.assertEqual(mto_cell.text, "03")
         self.assertEqual(mto_cell.fill, REV_DIFF_FILL)
         self.assertIn("MTO Нет", mto_cell.tooltip)
+
+    def test_historical_f_mto_when_last_line_says_absent(self) -> None:
+        painted = self._paint(
+            lines=(
+                "28.05.2025 код А на рев. 01-AN01 PGS-BCC-TRM-000091 "
+                "MTO 01-AN01 auto",
+                "14.08.2025 код А на рев. 01-AN02 PGS-BCC-TRM-000135 "
+                "MTO Нет auto",
+            ),
+            rd_rev="01-AN02",
+            disk_mto="01-AN01",
+        )
+        expected = f"01-AN02 · MTO 01-AN01 {F_MTO_HISTORICAL_MARK}"
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(f_cell.text, expected)
+        self.assertNotIn("auto", f_cell.text)
+        self.assertEqual(f_cell.fill, REV_MATCH_FILL)
+        self.assertIn(F_MTO_HISTORICAL_MARK, f_cell.tooltip)
+        self.assertIn("28.05.2025", f_cell.tooltip)
+        self.assertIn("MTO Нет", f_cell.tooltip)
+        self.assertIn("совпала с MTO · рев.", f_cell.tooltip)
+        self.assertIn("mto 01-an01", painted.haystack)
+        self.assertIn("(и)", painted.haystack.casefold())
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.text, "01-AN01")
+        self.assertNotEqual(mto_cell.fill, REV_DIFF_FILL)
+        self.assertIn("F MTO совпала", mto_cell.tooltip)
+        self.assertIn("28.05.2025", mto_cell.tooltip)
+
+    def test_historical_f_mto_yellow_when_disk_differs(self) -> None:
+        painted = self._paint(
+            lines=(
+                "28.05.2025 код А на рев. 01-AN01 MTO 01-AN01",
+                "14.08.2025 код А на рев. 01-AN02 MTO Нет",
+            ),
+            rd_rev="01-AN02",
+            disk_mto="01-AN02",
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(
+            f_cell.text, f"01-AN02 · MTO 01-AN01 {F_MTO_HISTORICAL_MARK}"
+        )
+        self.assertEqual(f_cell.fill, REV_DIFF_FILL)
+        self.assertIn("расходится с MTO · рев. 01-AN02", f_cell.tooltip)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.fill, REV_DIFF_FILL)
+
+    def test_f_history_line_keeps_mto_suffix(self) -> None:
+        event = parse_history_line(
+            "28.05.2025 код А на рев. 01-AN01 PGS-BCC-TRM-000091 "
+            "MTO 01-AN01 auto"
+        )
+        text = format_kits_f_history_line(event)
+        self.assertIn("01-AN01", text)
+        self.assertIn("MTO 01-AN01", text)
+        self.assertIn("auto", text)
+        self.assertIn("PGS-BCC-TRM-000091", text)
+        absent = parse_history_line(
+            "14.08.2025 код А на рев. 01-AN02 PGS-BCC-TRM-000135 MTO Нет auto"
+        )
+        absent_text = format_kits_f_history_line(absent)
+        self.assertIn("MTO Нет", absent_text)
+        self.assertIn("auto", absent_text)
+        hist = historical_f_mto_event((event, absent), absent)
+        self.assertIs(hist, event)
 
 
 if __name__ == "__main__":

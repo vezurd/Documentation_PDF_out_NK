@@ -316,10 +316,13 @@ ISSUANCE_EXCLUDE_TOOLTIP = {
 }
 
 OFFICIAL_FOLDER_MTO_MISSING = "нет"
+F_MTO_HISTORICAL_MARK = "(и)"
 KITS_MTO_REV_TOOLTIP = (
-    "Файл MTO в официальной папке передачи (имя файла, даже если оно "
-    "отстаёт от OD).\n"
-    "Нет файла в этой папке — «нет»; предыдущие NN не подставляются.\n"
+    "Ревизия по имени файла MTO xlsx в официальной папке передачи "
+    "(даже если она отстаёт от OD).\n"
+    "PDF копии MTO не смотрим.\n"
+    "Если в этой папке нет MTO xlsx, ячейка пишет «нет»; "
+    "файлы из предыдущих NN не подставляются.\n"
     "Эталон для Авто МТО / сверки / АН МТО."
 )
 KITS_WORKING_REV_TOOLTIP = (
@@ -1232,8 +1235,17 @@ def kits_paint_legend(
                 sample(
                     "Google · рев. F",
                     "04 · MTO Нет",
-                    "В передаче не было файла MTO. "
-                    "Жёлтый, только если на диске MTO всё же есть.",
+                    "В последней строке F нет MTO, и в более ранних "
+                    "передачах его тоже нет. Жёлтый, только если на "
+                    "диске всё же лежит MTO xlsx.",
+                    fill=REV_MATCH_FILL,
+                ),
+                sample(
+                    "Google · рев. F",
+                    f"01-AN02 · MTO 01-AN01 {F_MTO_HISTORICAL_MARK}",
+                    "Последняя строка F: MTO Нет; ревизия MTO взята "
+                    "из предыдущей передачи. Жёлтый, только если она "
+                    "не совпала с MTO xlsx на диске.",
                     fill=REV_MATCH_FILL,
                 ),
             ),
@@ -1851,34 +1863,125 @@ def kits_official_folder_mto_text(
     return "—"
 
 
-def format_kits_google_f_rev(event: KitEvent | None) -> str:
+def historical_f_mto_event(
+    events: Sequence[KitEvent],
+    last_event: KitEvent | None,
+) -> KitEvent | None:
+    """Return the latest earlier F line that names an MTO revision.
+
+    The last F event of a later transfer often says ``MTO Нет`` while the
+    previous agreed send still carried the MTO file (8260-SKUD 01-AN02).
+
+    Args:
+        events: Full column-F history, oldest first.
+        last_event: Current last dated F event.
+
+    Returns:
+        Prior event with a concrete MTO revision, or ``None``.
+    """
+
+    if last_event is None or not last_event.mto_absent:
+        return None
+    remaining = list(events)
+    for index in range(len(remaining) - 1, -1, -1):
+        event = remaining[index]
+        if event is last_event or (
+            event.raw == last_event.raw and event.date == last_event.date
+        ):
+            del remaining[index]
+            break
+    for event in reversed(remaining):
+        if event.mto_absent:
+            continue
+        if format_revision(event.mto_revision, event.mto_appendix):
+            return event
+    return None
+
+
+def format_kits_google_f_rev(
+    event: KitEvent | None,
+    *,
+    events: Sequence[KitEvent] = (),
+) -> str:
     """Return Комплекты «Google · рев. F» text.
 
     OD revision stays the same as ``last_event_parts`` (still a 4-tuple).
     When the F line has an MTO suffix, append `` · MTO <rev>`` or
-    `` · MTO Нет``. The journal token ``auto`` is not shown here;
-    review/approval cells append `` (auto)`` instead.
+    `` · MTO Нет``. If the last line is ``MTO Нет`` but an earlier
+    transfer named an MTO revision, show that revision with ``(и)``.
+    The journal token ``auto`` is not shown here; review/approval cells
+    append `` (auto)`` instead.
 
     Args:
         event: Last Google F event, or ``None``.
+        events: Full column-F history (oldest first) for historical MTO.
 
     Returns:
         Display text such as ``04``, ``04 · MTO 03``, ``04 · MTO Нет``,
-        or ``—`` when there is nothing to show.
+        ``01-AN02 · MTO 01-AN01 (и)``, or ``—``.
     """
 
     if event is None:
         return "—"
     od_text = format_revision(event.revision, event.appendix)
-    mto_text = format_revision(event.mto_revision, event.mto_appendix)
+    hist = historical_f_mto_event(events, event)
     parts: list[str] = []
     if od_text:
         parts.append(od_text)
-    if event.mto_absent:
+    if hist is not None:
+        mto_text = format_revision(hist.mto_revision, hist.mto_appendix)
+        parts.append(f"MTO {mto_text} {F_MTO_HISTORICAL_MARK}")
+    elif event.mto_absent:
         parts.append(f"MTO {F_LINE_MTO_ABSENT}")
-    elif mto_text:
-        parts.append(f"MTO {mto_text}")
+    else:
+        mto_text = format_revision(event.mto_revision, event.mto_appendix)
+        if mto_text:
+            parts.append(f"MTO {mto_text}")
     return " · ".join(parts) or "—"
+
+
+def format_kits_f_history_line(event: KitEvent) -> str:
+    """Return one Google F history line for the Комплекты «Текст» pane.
+
+    Keeps OD rev, TRM, ``MTO <rev|Нет>``, and ``auto`` so the dump does
+    not drop the MTO suffix that ``parse_history_line`` split off.
+
+    Args:
+        event: One parsed column-F line.
+
+    Returns:
+        Indented ``date  stage  rev  TRM  MTO …  auto`` text.
+    """
+
+    extra = " ".join(event.transmittals)
+    rev = format_revision(event.revision, event.appendix)
+    mto = format_revision(event.mto_revision, event.mto_appendix)
+    bits: list[str] = [event.date or "—", event.stage_label]
+    if rev:
+        bits.append(rev)
+    if extra:
+        bits.append(extra)
+    if event.mto_absent:
+        bits.append(f"MTO {F_LINE_MTO_ABSENT}")
+    elif mto:
+        bits.append(f"MTO {mto}")
+    if event.from_robot_auto:
+        bits.append("auto")
+    return "  " + "  ".join(bits)
+
+
+def _f_mto_historical_tips(hist: KitEvent) -> tuple[str, ...]:
+    mto = format_revision(hist.mto_revision, hist.mto_appendix)
+    od = format_revision(hist.revision, hist.appendix)
+    date = hist.date or "—"
+    origin = f"MTO {mto} {F_MTO_HISTORICAL_MARK} взята из передачи {date}"
+    if od:
+        origin += f" (рев. {od})"
+    origin += "."
+    return (
+        origin,
+        f"В последней строке F указано MTO {F_LINE_MTO_ABSENT}.",
+    )
 
 
 def _official_folder_mto_shown(text: str) -> bool:
@@ -1908,6 +2011,8 @@ def _paint_kits_google_f_rev_cell(
     f_mto_text: str,
     f_mto_absent: bool,
     disk_mto_text: str,
+    f_mto_historical: bool = False,
+    f_mto_hist_event: KitEvent | None = None,
 ) -> MonitorCell:
     """Fill and tooltip for «Google · рев. F» (OD plus optional F MTO)."""
 
@@ -1923,6 +2028,8 @@ def _paint_kits_google_f_rev_cell(
                 tips.append(
                     f"F · рев. {od_text} расходится с РД · рев. {rd_text}"
                 )
+        if f_mto_historical and f_mto_hist_event is not None:
+            tips.extend(_f_mto_historical_tips(f_mto_hist_event))
         disk_shown = _official_folder_mto_shown(disk_mto_text)
         if f_mto_absent:
             if disk_shown:
@@ -1935,13 +2042,13 @@ def _paint_kits_google_f_rev_cell(
             else:
                 tips.append(
                     f"В F указано MTO {F_LINE_MTO_ABSENT}; "
-                    "в официальной папке нет файла MTO."
+                    "в официальной папке нет файла MTO xlsx."
                 )
         elif not disk_shown:
             cell = _kits_rev_yellow_wins(cell)
             tips.append(
                 f"В F указано MTO {f_mto_text}, "
-                "в официальной папке нет файла MTO."
+                "в официальной папке нет файла MTO xlsx."
             )
         elif revision_texts_match(f_mto_text, disk_mto_text) is True:
             tips.append(f"F MTO {f_mto_text} совпала с MTO · рев.")
@@ -1962,37 +2069,58 @@ def _apply_f_mto_to_official_mto_cell(
     f_mto_text: str,
     f_mto_absent: bool,
     disk_mto_text: str,
+    f_mto_historical: bool = False,
+    f_mto_hist_event: KitEvent | None = None,
 ) -> MonitorCell:
     """Yellow-win «MTO · рев.» when F names a different MTO revision."""
 
     disk_shown = _official_folder_mto_shown(disk_mto_text)
+    hist_tips = (
+        _f_mto_historical_tips(f_mto_hist_event)
+        if f_mto_historical and f_mto_hist_event is not None
+        else ()
+    )
+
+    def with_hist(cell: MonitorCell) -> MonitorCell:
+        for tip in hist_tips:
+            cell = _append_tooltip(cell, tip)
+        return cell
+
     if f_mto_absent:
         if not disk_shown:
-            return _append_tooltip(
+            cell = _append_tooltip(
                 cell,
-                f"В F указано MTO {F_LINE_MTO_ABSENT}; файла в папке нет.",
+                f"В F указано MTO {F_LINE_MTO_ABSENT}; "
+                "файла MTO xlsx в папке нет.",
             )
+            return with_hist(cell)
         shown_disk = (disk_mto_text or "").strip() or "—"
         cell = _kits_rev_yellow_wins(cell)
-        return _append_tooltip(
+        cell = _append_tooltip(
             cell,
-            f"MTO на диске {shown_disk}, в F указано MTO {F_LINE_MTO_ABSENT}",
+            f"MTO xlsx на диске {shown_disk}, "
+            f"в F указано MTO {F_LINE_MTO_ABSENT}",
         )
+        return with_hist(cell)
     if not f_mto_text:
         return cell
     if not disk_shown:
-        return _append_tooltip(
+        cell = _append_tooltip(
             cell,
-            f"В F указано MTO {f_mto_text}, файла в официальной папке нет.",
+            f"В F указано MTO {f_mto_text}, "
+            "файла MTO xlsx в официальной папке нет.",
         )
+        return with_hist(cell)
     if revision_texts_match(f_mto_text, disk_mto_text) is True:
-        return _append_tooltip(cell, "F MTO совпала")
+        cell = _append_tooltip(cell, "F MTO совпала")
+        return with_hist(cell)
     shown_disk = (disk_mto_text or "").strip() or "—"
     cell = _kits_rev_yellow_wins(cell)
-    return _append_tooltip(
+    cell = _append_tooltip(
         cell,
-        f"MTO на диске {shown_disk}, в F указано MTO {f_mto_text}",
+        f"MTO xlsx на диске {shown_disk}, в F указано MTO {f_mto_text}",
     )
+    return with_hist(cell)
 
 
 def _official_package_path_by_kit(
@@ -4158,13 +4286,23 @@ def build_kits_monitor_row(
     issuance = row.issuance
     event_date, event_stage, event_rev, event_trm = last_event_parts(google)
     event = google.last_event if google is not None else None
-    google_f_text = format_kits_google_f_rev(event)
-    f_mto_absent = bool(event is not None and event.mto_absent)
-    f_mto_text = (
-        format_revision(event.mto_revision, event.mto_appendix)
-        if event is not None and not f_mto_absent
-        else ""
-    )
+    events = google.events if google is not None else ()
+    google_f_text = format_kits_google_f_rev(event, events=events)
+    hist = historical_f_mto_event(events, event)
+    if hist is not None:
+        f_mto_absent = False
+        f_mto_text = format_revision(hist.mto_revision, hist.mto_appendix)
+        f_mto_historical = True
+        f_mto_hist_event: KitEvent | None = hist
+    else:
+        f_mto_absent = bool(event is not None and event.mto_absent)
+        f_mto_text = (
+            format_revision(event.mto_revision, event.mto_appendix)
+            if event is not None and not f_mto_absent
+            else ""
+        )
+        f_mto_historical = False
+        f_mto_hist_event = None
     review_view = (
         pipeline_review_display(
             pipeline, google=google, issuance=issuance
@@ -4387,6 +4525,8 @@ def build_kits_monitor_row(
                 f_mto_text=f_mto_text,
                 f_mto_absent=f_mto_absent,
                 disk_mto_text=mto_rev_text,
+                f_mto_historical=f_mto_historical,
+                f_mto_hist_event=f_mto_hist_event,
             )
         elif header == "Авто МТО":
             cell = auto_cell
@@ -4403,6 +4543,8 @@ def build_kits_monitor_row(
                 f_mto_text=f_mto_text,
                 f_mto_absent=f_mto_absent,
                 disk_mto_text=mto_rev_text,
+                f_mto_historical=f_mto_historical,
+                f_mto_hist_event=f_mto_hist_event,
             )
         if header == "Робот МТО · рев.":
             if origin.matched is True:

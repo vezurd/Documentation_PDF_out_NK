@@ -282,6 +282,7 @@ from rd_catalog.monitor_views import (
     effective_kit_summary,
     excluded_issuance_sends_by_kit,
     format_kits_card_mto,
+    format_kits_f_history_line,
     format_kits_progress_stats,
     format_kits_row_tooltips,
     format_kits_tips_pane,
@@ -4269,13 +4270,7 @@ class CatalogWindow(QMainWindow):
             if google.events:
                 lines.append("Google · история (столбец F):")
                 for event in google.events:
-                    extra = " ".join(event.transmittals)
-                    rev = format_revision(event.revision, event.appendix)
-                    lines.append(
-                        f"  {event.date or '—'}  {event.stage_label}"
-                        f"{'  ' + rev if rev else ''}"
-                        f"{'  ' + extra if extra else ''}"
-                    )
+                    lines.append(format_kits_f_history_line(event))
             else:
                 lines.append("Google · история F: пусто")
         issuance = row.issuance
