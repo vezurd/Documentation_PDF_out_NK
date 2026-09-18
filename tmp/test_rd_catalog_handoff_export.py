@@ -1,4 +1,4 @@
-"""Local checks for official-kit manager dump (MTO + BBB)."""
+"""Local checks for official-kit manager dump (MTO + BOE/BOM/BOQ)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from rd_catalog.handoff_export import (
     build_handoff_rows,
     dest_matches_source_fingerprint,
     execute_handoff_copy,
-    is_bbb_media_path,
     kit_handoff_eligible,
     load_handoff_destinations,
     remember_handoff_destination,
@@ -134,12 +133,6 @@ def test_eligibility() -> None:
     assert not kit_handoff_eligible(other, include_tdo=True)
 
 
-def test_bbb_media_path() -> None:
-    assert is_bbb_media_path(r"\\bcc\x\11_рев\BBB\file.pdf")
-    assert not is_bbb_media_path(r"\\bcc\x\11_рев\PDF\file.pdf")
-    assert not is_bbb_media_path(r"\\bcc\x\11_рев\DWG\file.dwg")
-
-
 def test_rows_use_official_package_not_is_current() -> None:
     folder11 = "11_рев.03-AN01_от_2026.01.22"
     folder13 = "13_рев.03_AN02_AGCC.287-8950-SOO1"
@@ -180,10 +173,11 @@ def test_rows_use_official_package_not_is_current() -> None:
     assert row.mto.text == "03-AN01"
     assert row.boe.text == "03-AN01"
     assert row.bom.present and row.boq.present
-    assert row.bbb_count == 1
     assert row.has_problem is False
+    assert "нет BBB" not in row.notes
     assert any(item[0].endswith(".xlsx") for item in row.copy_files)
-    assert any("BBB" in item[0] for item in row.copy_files)
+    assert any("BOE-0001" in item[0] for item in row.copy_files)
+    assert not any("WIR-0001" in item[0] for item in row.copy_files)
     assert not any("LAY-0003" in item[0] for item in row.copy_files)
 
 
@@ -208,6 +202,7 @@ def test_missing_boe_is_a_note() -> None:
     row = build_handoff_rows((kit,), packages, records)[0]
     assert row.boe.text == "нет"
     assert "нет BOE" in row.notes
+    assert "нет BBB" not in row.notes
     assert row.has_problem is True
 
 
@@ -324,7 +319,6 @@ def test_destinations_json(tmp: Path) -> None:
 
 def main() -> None:
     test_eligibility()
-    test_bbb_media_path()
     test_rows_use_official_package_not_is_current()
     test_missing_boe_is_a_note()
     with tempfile.TemporaryDirectory(prefix="handoff_export_") as raw:

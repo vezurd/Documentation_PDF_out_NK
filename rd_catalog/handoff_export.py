@@ -1,4 +1,4 @@
-"""Official-kit dump for managers: preview rows and copy MTO + BBB.
+"""Official-kit dump for managers: preview rows and copy MTO + BOE/BOM/BOQ.
 
 Qt-free. Does not write under ``rd_root`` / ``sq_root``. Skip copy when the
 destination file already has the source ``(size, mtime_ns)`` fingerprint.
@@ -53,7 +53,6 @@ HANDOFF_HEADERS = (
     "BOE",
     "BOM",
     "BOQ",
-    "BBB",
     "Примечание",
     "Пакет",
 )
@@ -104,11 +103,10 @@ class HandoffExportRow:
     boe: HandoffDocCell
     bom: HandoffDocCell
     boq: HandoffDocCell
-    bbb_count: int
     notes: str
     has_problem: bool
-    copy_files: tuple[tuple[str, str, int, int], ...]
-    # Each copy tuple: source_path, filename, size, mtime_ns
+    copy_files: tuple[tuple[str, str, int, int, str], ...]
+    # Each copy tuple: source_path, filename, size, mtime_ns, kind
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,13 +165,6 @@ def kit_handoff_eligible(item: HandoffKitInput, *, include_tdo: bool) -> bool:
     if include_tdo and (item.status or "") in HANDOFF_TDO_STATUSES:
         return True
     return False
-
-
-def is_bbb_media_path(path: str) -> bool:
-    """Return whether the file sits directly in a ``BBB`` media folder."""
-
-    parent = PureWindowsPath(str(path or "")).parent.name
-    return bool(parent) and parent.casefold() == "bbb"
 
 
 def _record_revision_text(record: FileRecord) -> str:
@@ -260,16 +251,21 @@ def _source_stat(record: FileRecord) -> tuple[int, int]:
     return int(signature.get("size") or 0), int(signature.get("mtime_ns") or 0)
 
 
+def _record_copy_kind(record: FileRecord) -> str | None:
+    for kind in _DOC_KINDS:
+        if _record_matches_kind(record, kind):
+            return kind
+    return None
+
+
 def _copy_payload(
     files: Sequence[FileRecord],
-) -> tuple[tuple[str, str, int, int], ...]:
-    payload: list[tuple[str, str, int, int]] = []
+) -> tuple[tuple[str, str, int, int, str], ...]:
+    payload: list[tuple[str, str, int, int, str]] = []
     seen: set[str] = set()
     for record in files:
-        is_mto_xlsx = (
-            str(record.data.get("file_kind") or "") == FileKind.MTO_XLSX.value
-        )
-        if not is_mto_xlsx and not is_bbb_media_path(record.path):
+        kind = _record_copy_kind(record)
+        if kind is None:
             continue
         key = (record.path or "").casefold()
         if not key or key in seen:
@@ -277,7 +273,7 @@ def _copy_payload(
         seen.add(key)
         size, mtime_ns = _source_stat(record)
         payload.append(
-            (record.path, Path(record.path).name, size, mtime_ns)
+            (record.path, Path(record.path).name, size, mtime_ns, kind)
         )
     return tuple(payload)
 
@@ -287,7 +283,6 @@ def _row_notes(
     package_path: str,
     official: str,
     cells: Sequence[HandoffDocCell],
-    bbb_count: int,
 ) -> str:
     parts: list[str] = []
     if not package_path:
@@ -298,8 +293,6 @@ def _row_notes(
             parts.append(f"нет {label}")
         elif official and not cell.matches_official:
             parts.append(f"{label} {cell.text} ≠ {official}")
-    if bbb_count <= 0:
-        parts.append("нет BBB")
     return "; ".join(parts)
 
 
@@ -355,12 +348,10 @@ def build_handoff_rows(
         boe = _pick_doc_cell(files, "boe", official)
         bom = _pick_doc_cell(files, "bom", official)
         boq = _pick_doc_cell(files, "boq", official)
-        bbb_count = sum(1 for record in files if is_bbb_media_path(record.path))
         notes = _row_notes(
             package_path=package_path,
             official=official,
             cells=(mto, boe, bom, boq),
-            bbb_count=bbb_count,
         )
         status_label = pipeline_status_label(item.status) if item.status else "—"
         rows.append(
@@ -377,7 +368,6 @@ def build_handoff_rows(
                 boe=boe,
                 bom=bom,
                 boq=boq,
-                bbb_count=bbb_count,
                 notes=notes or "—",
                 has_problem=bool(notes),
                 copy_files=_copy_payload(files) if package_path else (),
@@ -466,7 +456,7 @@ def build_handoff_copy_plan(
     rd_root: str = "",
     sq_root: str = "",
 ) -> HandoffCopyPlan:
-    """Resolve destination paths for MTO xlsx and BBB files.
+    """Resolve destination paths for MTO and BOE/BOM/BOQ files.
 
     Args:
         rows: Visible preview rows.
@@ -484,7 +474,7 @@ def build_handoff_copy_plan(
     items: list[HandoffCopyItem] = []
     seen_dest: set[str] = set()
     for row in rows:
-        for source_path, filename, size, mtime_ns in row.copy_files:
+        for source_path, filename, size, mtime_ns, kind in row.copy_files:
             relative = handoff_dest_relpath(
                 layout=chosen,
                 title=row.title,
@@ -496,7 +486,6 @@ def build_handoff_copy_plan(
             if dest_key in seen_dest:
                 continue
             seen_dest.add(dest_key)
-            kind = "bbb" if is_bbb_media_path(source_path) else "mto"
             items.append(
                 HandoffCopyItem(
                     source_path=source_path,
@@ -543,10 +532,6 @@ def build_handoff_exported_table(
             (row.bom.text, row.bom.fill_hex),
             (row.boq.text, row.boq.fill_hex),
             (
-                str(row.bbb_count) if row.bbb_count else "нет",
-                None if row.bbb_count else HANDOFF_PROBLEM_FILL,
-            ),
-            (
                 row.notes,
                 HANDOFF_PROBLEM_FILL if row.has_problem else None,
             ),
@@ -571,7 +556,7 @@ def execute_handoff_copy(
     cancel: CancelCallback | None = None,
     progress: ProgressCallback | None = None,
 ) -> HandoffCopyReport:
-    """Copy MTO/BBB files and write the dated перечень xlsx.
+    """Copy MTO/BOE/BOM/BOQ files and write the dated перечень xlsx.
 
     Args:
         plan: Destination and file list.

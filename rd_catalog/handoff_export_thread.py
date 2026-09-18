@@ -1,4 +1,4 @@
-"""Background Qt thread for official-kit dump copy (MTO + BBB)."""
+"""Background Qt thread for official-kit dump copy (MTO + BOE/BOM/BOQ)."""
 
 from __future__ import annotations
 

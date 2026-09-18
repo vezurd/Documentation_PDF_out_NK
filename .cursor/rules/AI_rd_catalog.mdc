@@ -116,7 +116,7 @@ Startup: `StartupSnapshot.rd_dump_files` via `list_rd_dump_mto_files` ([`rd_cata
 
 ## Выдача · Журнал
 
-Tab **«Выгрузка комплектов»** ([`rd_catalog/handoff_export_tab.py`](rd_catalog/handoff_export_tab.py)): after **«MTO · Готовность робота»**, before **«Выдача · Журнал»**. Official NN / code A / MTO+BBB copy: [AI_rd_catalog_handoff_export.mdc](.cursor/rules/AI_rd_catalog_handoff_export.mdc). Smoke: АН stays **3**; journal = this tab + 1 = readiness + 2.
+Tab **«Выгрузка комплектов»** ([`rd_catalog/handoff_export_tab.py`](rd_catalog/handoff_export_tab.py)): after **«MTO · Готовность робота»**, before **«Выдача · Журнал»**. Official NN / code A / MTO+BOE/BOM/BOQ copy: [AI_rd_catalog_handoff_export.mdc](.cursor/rules/AI_rd_catalog_handoff_export.mdc). Smoke: АН stays **3**; journal = this tab + 1 = readiness + 2.
 
 Tab **«Выдача · Журнал»** ([`rd_catalog/issuance_journal_tab.py`](rd_catalog/issuance_journal_tab.py)) sits after **«Выгрузка комплектов»**, before **«Письма о согласовании»**. Domain: [`rd_catalog/issuance_review.py`](rd_catalog/issuance_review.py) + table `issuance_review` (schema **7**) in [AI_rd_catalog_db.mdc](.cursor/rules/AI_rd_catalog_db.mdc) — do not duplicate that contract here.
 

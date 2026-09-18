@@ -45,16 +45,15 @@ alwaysApply: false
 
 ### Таблица (превью = перечень)
 
-Титул | Марка | РД · рев. | Статус | Код A | MTO | BOE | BOM | BOQ | BBB | Примечание | Пакет
+Титул | Марка | РД · рев. | Статус | Код A | MTO | BOE | BOM | BOQ | Примечание | Пакет
 
-- MTO / BOE / BOM / BOQ — filename-рев. **в официальном пакете** (не overlay с более старой NN). `discipline_block` startswith `mto`/`boe`/`bom`/`boq`; MTO также `FileKind.MTO_XLSX`. Нет файла — «нет», заливка `#F7E8BE`. Есть и рев. ≡ official — текст рев., `#E2F2E1`. Есть, но рев. другая — показать ту рев., жёлтый, в примечании `{вид} {рев} ≠ {official}`.
-- BBB — число файлов, чей **родительский сегмент** `BBB` (как `is_package_media_folder`). 0 → «нет» + примечание «нет BBB».
-- Примечание: «нет пакета»; «нет MTO/BOE/BOM/BOQ»; расхождение рев.; «нет BBB». Несколько фраз через `; `.
-- Бан как на Комплектах. Header `window/handoff_export_header_v1`. Фильтры `window/handoff_export_include_tdo`, `window/handoff_export_layout` (`title_mark` по умолчанию / `flat`).
+- MTO / BOE / BOM / BOQ — filename-рев. **в официальном пакете** (не overlay с более старой NN). `discipline_block` startswith `mto`/`boe`/`bom`/`boq`; MTO также `FileKind.MTO_XLSX`. Нет файла — «нет», заливка `#F7E8BE`. Есть и рев. ≡ official — текст рев., `#E2F2E1`. Есть, но рев. другая — показать ту рев., жёлтый, в примечании `{вид} {рев} ≠ {official}`. **BBB** в этой вкладке не колонка и не папка-носитель: это краткое имя BOE+BOM+BOQ.
+- Примечание: «нет пакета»; «нет MTO/BOE/BOM/BOQ»; расхождение рев. Несколько фраз через `; `. Не писать «нет BBB».
+- Бан как на Комплектах. Header `window/handoff_export_header_v2` (не восстанавливать `v1`). Фильтры `window/handoff_export_include_tdo`, `window/handoff_export_layout` (`title_mark` по умолчанию / `flat`).
 
 ### Копирование
 
-В передачу: **MTO xlsx** официального пакета + **все файлы в `BBB/`** того же пакета. BOE/BOM/BOQ из PDF/DWG только в таблице, не копировать, если они не в BBB.
+В передачу: файлы **MTO + BOE + BOM + BOQ** официального пакета (PDF/xlsx/DWG по `discipline_block`, не папка-носитель `BBB/`). Прочие дисциплины (WIR, LAY, …) не копировать.
 
 Раскладка в корне назначения:
 

@@ -2085,7 +2085,7 @@ class CatalogWindow(QMainWindow):
             ("window/issuance_journal_header_v1", "_issuance_journal_table"),
             ("window/an_tab_header_v2", "_an_table"),
             ("window/rd_dump_tab_header_v2", "_rd_dump_table"),
-            ("window/handoff_export_header_v1", "_handoff_export_table"),
+            ("window/handoff_export_header_v2", "_handoff_export_table"),
             # v10: «Ок» after «Марка»; do not restore v9.
             ("window/kits_header_v10", "_kits_table"),
             ("window/collision_header", "_collision_table"),
@@ -9279,7 +9279,7 @@ class CatalogWindow(QMainWindow):
 
     @Slot()
     def _start_handoff_export(self) -> None:
-        """Copy official MTO + BBB files into the chosen dump folder."""
+        """Copy official MTO and BOE/BOM/BOQ files into the chosen dump folder."""
 
         if self._busy():
             QMessageBox.information(
@@ -9319,7 +9319,7 @@ class CatalogWindow(QMainWindow):
             "Выгрузка комплектов",
             (
                 f"Выгрузить {len(plan.rows)} комплектов "
-                f"({len(plan.items)} файл(ов) MTO/BBB) в:\n"
+                f"({len(plan.items)} файл(ов) MTO/BOE/BOM/BOQ) в:\n"
                 f"{plan.dest_root}\n"
                 f"Раскладка: {layout_label}\n"
                 f"Перечень: {handoff_list_filename()}"

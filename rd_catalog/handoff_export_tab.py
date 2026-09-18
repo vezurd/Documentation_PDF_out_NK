@@ -36,6 +36,7 @@ from rd_catalog.handoff_export import (
     HandoffDocCell,
     HandoffExportRow,
     load_handoff_destinations,
+    remember_handoff_destination,
 )
 from rd_catalog.path_actions import open_path
 
@@ -45,7 +46,6 @@ _COL_MTO = HANDOFF_HEADERS.index("MTO")
 _COL_BOE = HANDOFF_HEADERS.index("BOE")
 _COL_BOM = HANDOFF_HEADERS.index("BOM")
 _COL_BOQ = HANDOFF_HEADERS.index("BOQ")
-_COL_BBB = HANDOFF_HEADERS.index("BBB")
 _COL_NOTES = HANDOFF_HEADERS.index("Примечание")
 _COL_PACKAGE = HANDOFF_HEADERS.index("Пакет")
 _COUNTS_EMPTY = "Комплекты: 0 · проблемы: 0 · файлов: 0"
@@ -290,7 +290,6 @@ class HandoffExportTab(QWidget):
             if row.has_problem:
                 problems += 1
             files += len(row.copy_files)
-            bbb_text = str(row.bbb_count) if row.bbb_count else "нет"
             values = (
                 (row.title, row.title),
                 (row.mark, row.mark.casefold()),
@@ -301,7 +300,6 @@ class HandoffExportTab(QWidget):
                 (row.boe.text, row.boe.text),
                 (row.bom.text, row.bom.text),
                 (row.boq.text, row.boq.text),
-                (bbb_text, row.bbb_count),
                 (row.notes, row.notes),
                 (row.package_label, row.package_label),
             )
@@ -329,9 +327,6 @@ class HandoffExportTab(QWidget):
             item = table.item(index, column)
             if item is not None:
                 _paint_doc_cell(item, cell)
-        bbb_item = table.item(index, _COL_BBB)
-        if bbb_item is not None and row.bbb_count <= 0:
-            _paint_fill(bbb_item, HANDOFF_PROBLEM_FILL)
         notes_item = table.item(index, _COL_NOTES)
         if notes_item is not None and row.has_problem:
             _paint_fill(notes_item, HANDOFF_PROBLEM_FILL)
