@@ -4634,7 +4634,10 @@ def list_mto_worklist(
         cells, otherwise empty. ``package_path`` is
         :func:`pick_official_rd_package` when the cell is the official
         rev, else that revision's issued folder (Void/working/annulled
-        skipped). Not ``kit_package.is_current``.
+        skipped). Not ``kit_package.is_current``. The official cell's
+        ``mto_path`` is the MTO xlsx physically in that folder even when
+        the filename revision lags OD (6100-SOT ``04`` package with
+        ``MTO-0001_03``); older NN folders are not searched.
     """
 
     with perf_span("pipeline.list_mto_worklist"):
@@ -4709,26 +4712,39 @@ def list_mto_worklist(
             else:
                 package_path = ""
                 package_label = ""
-            candidates = index.get(
-                (
-                    *key,
-                    _revision_dedupe_key(cell.revision_text),
-                ),
-                (),
-            )
             chosen: FileRecord | None = None
-            if candidates:
-                chosen = max(
-                    candidates,
-                    key=lambda record: (
-                        bool(
-                            package_path
-                            and path_is_under(record.path, package_path)
-                        ),
-                        _record_mtime_ns(record) or 0,
-                        record.path_key,
-                    ),
+            if official_match:
+                folder_hits = _mto_records_under_package(
+                    index, key, package_path
                 )
+                if folder_hits:
+                    chosen = max(
+                        folder_hits,
+                        key=lambda record: (
+                            _record_mtime_ns(record) or 0,
+                            record.path_key,
+                        ),
+                    )
+            else:
+                candidates = index.get(
+                    (
+                        *key,
+                        _revision_dedupe_key(cell.revision_text),
+                    ),
+                    (),
+                )
+                if candidates:
+                    chosen = max(
+                        candidates,
+                        key=lambda record: (
+                            bool(
+                                package_path
+                                and path_is_under(record.path, package_path)
+                            ),
+                            _record_mtime_ns(record) or 0,
+                            record.path_key,
+                        ),
+                    )
             mto_path = chosen.path if chosen is not None else ""
             mto_mtime_ns = (
                 _record_mtime_ns(chosen) if chosen is not None else None
@@ -5772,6 +5788,25 @@ def _approved_warnings(
             f"Согласована ревизия {approved}, а выбрана папка с ревизией {chosen}."
         )
     return tuple(notes)
+
+
+def _mto_records_under_package(
+    index: Mapping[tuple[str, str, tuple], Sequence[FileRecord]],
+    key: tuple[str, str],
+    package_path: str,
+) -> list[FileRecord]:
+    """Return indexed RD MTO files that sit in ``package_path``."""
+
+    if not package_path:
+        return []
+    hits: list[FileRecord] = []
+    for stamp, records in index.items():
+        if stamp[0] != key[0] or stamp[1] != key[1]:
+            continue
+        for record in records:
+            if path_is_under(record.path, package_path):
+                hits.append(record)
+    return hits
 
 
 def _mto_records_by_kit_revision(

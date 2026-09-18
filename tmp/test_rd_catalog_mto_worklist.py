@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from rd_catalog.models import CollisionKind
 from rd_catalog.parse import issued_package_dir
+from rd_catalog.kits import kit_identity_key
+from rd_catalog.monitor_views import rd_mto_overlay_by_kit
 from rd_catalog.pipeline import (
     MtoWorklistRow,
     ingest_google_snapshot,
@@ -963,6 +965,128 @@ def test_worklist_revision_link_and_gap() -> None:
     app.processEvents()
 
 
+def test_official_folder_uses_lagged_mto_filename(temp: Path) -> None:
+    """6100-SOT: official OD 04 package still holds MTO 03; older NN is ignored."""
+
+    database = _open_db(temp / "lagged_mto")
+    older = _record(
+        31,
+        title="6100",
+        mark="SOT",
+        revision="03",
+        appendix=None,
+        sequence=11,
+        folder="11_рев.03_AGCC.287-6100-SOT",
+        mtime_ns=_mtime_ns(2024, 10, 1),
+        file_kind="mto_xlsx",
+    )
+    older_od = _record(
+        32,
+        title="6100",
+        mark="SOT",
+        revision="03",
+        appendix=None,
+        sequence=11,
+        folder="11_рев.03_AGCC.287-6100-SOT",
+        mtime_ns=_mtime_ns(2024, 10, 1),
+    )
+    official_mto = _record(
+        41,
+        title="6100",
+        mark="SOT",
+        revision="03",
+        appendix=None,
+        sequence=14,
+        folder="14_рев.04_AGCC.287-6100-SOT",
+        mtime_ns=_mtime_ns(2024, 11, 19),
+        file_kind="mto_xlsx",
+    )
+    official_od = _record(
+        42,
+        title="6100",
+        mark="SOT",
+        revision="04",
+        appendix=None,
+        sequence=14,
+        folder="14_рев.04_AGCC.287-6100-SOT",
+        mtime_ns=_mtime_ns(2024, 11, 19),
+    )
+    working_mto = _record(
+        51,
+        title="6100",
+        mark="SOT",
+        revision="03",
+        appendix="01",
+        sequence=15,
+        folder="15_рев.AN01_AGCC.287-6100-SOT",
+        mtime_ns=_mtime_ns(2025, 2, 1),
+        file_kind="mto_xlsx",
+    )
+    working_od = _record(
+        52,
+        title="6100",
+        mark="SOT",
+        revision="04",
+        appendix="01",
+        sequence=15,
+        folder="15_рев.AN01_AGCC.287-6100-SOT",
+        mtime_ns=_mtime_ns(2025, 2, 1),
+    )
+    records = [
+        older,
+        older_od,
+        official_mto,
+        official_od,
+        working_mto,
+        working_od,
+    ]
+    _rebuild(
+        database,
+        (
+            _google(
+                "6100",
+                "SOT",
+                (
+                    _event(
+                        date="24.12.2024",
+                        stage="code_a",
+                        stage_label="код А",
+                        revision="04",
+                    ),
+                ),
+                revision="04",
+                appendix=None,
+            ),
+        ),
+        (
+            _send(
+                title="6100",
+                mark="SOT",
+                revision="04",
+                appendix=None,
+                status="Принят",
+                send_date="19.11.2024",
+                incoming="20.11.2024",
+            ),
+        ),
+        records,
+        {42},
+    )
+    rows = _kit_rows(list_mto_worklist(database, records=records), "6100", "SOT")
+    official = next(row for row in rows if row.revision_text == "04")
+    assert official.mto_path == official_mto.path
+    assert official.gap_kind == ""
+    assert official.package_path.endswith("14_рев.04_AGCC.287-6100-SOT")
+    pipelines = {
+        kit_identity_key(row.title, row.mark): row
+        for row in database.list_kit_pipelines()
+    }
+    overlay = rd_mto_overlay_by_kit(rows, pipelines)
+    path, rev = overlay[kit_identity_key("6100", "SOT")]
+    assert path == official_mto.path
+    assert rev == "03"
+
+
 def main() -> None:
     """Run MTO worklist fixtures against a temporary SQLite file."""
 
@@ -979,6 +1103,7 @@ def main() -> None:
         test_worklist_order_matches_revision_matrix(root)
         test_google_only_kit_no_rd(root)
         test_has_f_status_per_revision(root)
+        test_official_folder_uses_lagged_mto_filename(root)
     test_worklist_pin_column()
     test_worklist_revision_link_and_gap()
     print("RD catalog MTO worklist: OK")
