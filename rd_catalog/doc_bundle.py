@@ -15,7 +15,12 @@ from pathlib import Path, PureWindowsPath
 
 from rd_catalog.models import FileKind, FileRecord, SourceKind, make_path_key
 from rd_catalog.overlay import revision_rank
-from rd_catalog.parse import issued_package_dir, parse_transfer_folder, path_is_as_build
+from rd_catalog.parse import (
+    issued_package_dir,
+    parse_transfer_folder,
+    path_is_as_build,
+    transfer_name_is_void,
+)
 
 EDITABLE_KINDS = frozenset({FileKind.SOURCE_EDITABLE, FileKind.MTO_XLSX})
 NO_REVISION_LABEL = "Без ревизии"
@@ -34,6 +39,12 @@ WORKING_TOOLTIP_AUTO = (
 ANNULLED_TOOLTIP = (
     "Помечена как аннулированная. Не участвует в «РД · рев.», "
     "конкурсе рабочей ревизии, экспорте, сверке и «Проверить передачи»."
+)
+ANNULLED_TOOLTIP_VOID = (
+    "Имя папки содержит Void — аннулирована при скане. "
+    "Не участвует в «РД · рев.», конкурсе рабочей ревизии, "
+    "экспорте, сверке и «Проверить передачи». "
+    "Снять можно только переименованием папки."
 )
 
 _BUNDLE_KINDS = frozenset({FileKind.PDF, FileKind.SOURCE_EDITABLE, FileKind.MTO_XLSX})
@@ -659,11 +670,12 @@ def working_folder_tooltip(*, is_working: bool, origin: str = "") -> str:
     return WORKING_TOOLTIP_AUTO
 
 
-def annulled_folder_tooltip(*, is_annulled: bool) -> str:
+def annulled_folder_tooltip(*, is_annulled: bool, folder_name: str = "") -> str:
     """Return the annulled-folder hover text, or empty when not marked.
 
     Args:
-        is_annulled: Whether this issued folder is user-annulled.
+        is_annulled: Whether this issued folder is annulled.
+        folder_name: Issued NN folder name; Void token picks the scan tooltip.
 
     Returns:
         One Russian sentence, or ``""``.
@@ -671,6 +683,8 @@ def annulled_folder_tooltip(*, is_annulled: bool) -> str:
 
     if not is_annulled:
         return ""
+    if transfer_name_is_void(folder_name):
+        return ANNULLED_TOOLTIP_VOID
     return ANNULLED_TOOLTIP
 
 
@@ -742,7 +756,9 @@ def folder_tree_tooltip(
     )
     if working_line:
         lines.append(working_line)
-    annulled_line = annulled_folder_tooltip(is_annulled=is_annulled)
+    annulled_line = annulled_folder_tooltip(
+        is_annulled=is_annulled, folder_name=name
+    )
     if annulled_line:
         lines.append(annulled_line)
     as_build = (

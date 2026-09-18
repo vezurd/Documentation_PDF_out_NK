@@ -1533,6 +1533,44 @@ def test_manual_annulled_flag_hides_same_rev_from_official(temp: Path) -> None:
     )
 
 
+def test_void_folder_name_annuls_without_manual_flag(temp: Path) -> None:
+    """NN folder with Void in the name is annulled on pipeline rebuild."""
+
+    database = _open_db(temp / "c7c_void")
+    folder = "04_рев.0-AN02_AGCC.287-7560-SKUD_Void"
+    record = _record(
+        75601,
+        title="7560",
+        mark="SKUD",
+        revision="0",
+        appendix="02",
+        sequence=4,
+        folder=folder,
+        mtime_ns=_mtime_ns(2026, 8, 19),
+        file_kind="mto_xlsx",
+    )
+    send = _send(
+        title="7560",
+        mark="SKUD",
+        revision="0",
+        appendix="02",
+        status="Принят",
+        send_date="19.08.2026",
+        incoming="19.08.2026",
+        transmittal="TRM-V",
+    )
+    kits = (_google("7560", "SKUD", (), revision="0", appendix="02"),)
+    _rebuild(database, kits, (send,), [record], {75601})
+    flags = database.list_annulled_flags("7560", "SKUD")
+    assert any(flag.transfer_name == folder for flag in flags)
+    row = _pipeline(database, "7560", "SKUD")
+    assert any("void" in name.casefold() for name in row.annulled_transfer_names)
+    hints = list_folder_tree_hints(database)
+    hint = hints[(*kit_identity_key("7560", "SKUD"), folder.casefold())]
+    assert hint.is_annulled is True
+    assert hint.is_working is False
+
+
 def test_manual_annulled_flag_keeps_sibling_same_rev(temp: Path) -> None:
     """Annul NN 10; sibling NN 09 with the same filename rev stays official."""
 
@@ -3404,6 +3442,7 @@ def main() -> None:
         test_manual_working_flag_hides_same_rev_from_official(root)
         test_manual_working_flag_keeps_sibling_same_rev(root)
         test_manual_annulled_flag_hides_same_rev_from_official(root)
+        test_void_folder_name_annuls_without_manual_flag(root)
         test_manual_annulled_flag_keeps_sibling_same_rev(root)
         test_annulled_overlay_head_is_not_auto_working(root)
         test_annulled_flag_clears_working_flag(root)

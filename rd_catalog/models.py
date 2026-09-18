@@ -149,6 +149,7 @@ class TransferMetadata:
         mark: Mark/system component, if present.
         title_system: Combined title and mark, if present.
         is_as_build: Whether the folder identifies an as-built transfer.
+        is_void: Whether the folder name contains a ``Void`` (annulled) token.
         parse_status: Folder parsing result.
         error: Human-readable parse problem.
     """
@@ -162,6 +163,7 @@ class TransferMetadata:
     mark: str | None = None
     title_system: str | None = None
     is_as_build: bool = False
+    is_void: bool = False
     parse_status: ParseStatus = ParseStatus.PARSED
     error: str | None = None
 

@@ -57,6 +57,7 @@ from rd_catalog.parse import (
     normalize_unicode_dashes,
     path_is_as_build,
     record_has_canonical_layout,
+    transfer_name_is_void,
 )
 from rd_catalog.path_actions import path_is_under
 from rd_catalog.perf_log import perf_span
@@ -1508,6 +1509,7 @@ def rebuild_pipeline(
                 for send_id, send in sends_with_ids
                 if kit_identity_key(send.title, send.mark) in scoped
             ]
+        database.apply_void_annulled_flags_from_records(work_records)
         sends_by_key: dict[tuple[str, str], list[tuple[int | None, IssuanceKit]]] = {}
         for send_id, send in work_sends:
             sends_by_key.setdefault(kit_identity_key(send.title, send.mark), []).append(
@@ -1780,6 +1782,28 @@ def _package_folder_keys(package: KitPackageRow) -> tuple[str, ...]:
         if path_key and path_key not in names:
             names.append(path_key)
     return tuple(names)
+
+
+def _void_package_folder_keys(packages: Sequence[KitPackageRow]) -> tuple[str, ...]:
+    """Return issued-folder names that contain a Void (annulled) token."""
+
+    keys: list[str] = []
+    seen: set[str] = set()
+    for package in packages:
+        if package.source != "rd" or package.is_grey:
+            continue
+        raw_names = (
+            package.transfer_name or "",
+            Path(str(package.package_path or "")).name,
+        )
+        for raw in raw_names:
+            if not transfer_name_is_void(raw):
+                continue
+            key = _folder_key(raw)
+            if key and key not in seen:
+                seen.add(key)
+                keys.append(raw)
+    return tuple(keys)
 
 
 def _shared_transfer_sequences(
@@ -2127,6 +2151,14 @@ def _working_exclusion_for_kit(
             shared_sequences=shared_sequences,
         )
     )
+    void_keys = _void_package_folder_keys(rd_packages)
+    if void_keys:
+        seen = {_folder_key(name) for name in annulled_folder_keys}
+        for name in void_keys:
+            key = _folder_key(name)
+            if key and key not in seen:
+                seen.add(key)
+                annulled_folder_keys.append(name)
     annulled_key_set = set(annulled_folder_keys)
     remaining_packages = [
         pkg

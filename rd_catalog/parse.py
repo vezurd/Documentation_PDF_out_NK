@@ -35,6 +35,11 @@ _AS_BUILD_RE = re.compile(
     r"(?:as[\s_.-]*built?|исполнит(?:ельн(?:ая|ой|ые))?)",
     re.IGNORECASE,
 )
+# Issued NN folder marked cancelled: ``04_рев.0-AN02_…_Void``.
+_VOID_RE = re.compile(
+    r"(?:^|[_\-\s.])void(?:$|[_\-\s.])",
+    re.IGNORECASE,
+)
 # Path segments like ``1513`` (title) or ``11_SPP`` / ``06_4130-KSB1`` (mark)
 # start with digits but are not transfer folders.
 _TITLE_ONLY_FOLDER_RE = re.compile(r"^\s*\d{4}\s*$")
@@ -89,6 +94,7 @@ def is_transfer_folder_name(folder_name: str, *, under_gate: bool = False) -> bo
         return True
     remainder = normalized[sequence_match.end() :].strip(" ._-")
     remainder = _AS_BUILD_RE.sub("", remainder).strip(" ._-")
+    remainder = _VOID_RE.sub("", remainder).strip(" ._-")
     return not remainder
 
 
@@ -116,6 +122,7 @@ def parse_transfer_folder(
     revision_match = _TRANSFER_REVISION_RE.search(normalized)
     title_system = AgccFilenamePatterns.scan_title_system(normalized)
     is_as_build = bool(_AS_BUILD_RE.search(normalized))
+    is_void = transfer_name_is_void(normalized)
 
     errors: list[str] = []
     if not is_transfer_folder_name(folder_name, under_gate=under_gate):
@@ -143,6 +150,7 @@ def parse_transfer_folder(
         mark=mark,
         title_system=title_system,
         is_as_build=is_as_build,
+        is_void=is_void,
         parse_status=(
             ParseStatus.UNPARSED_FOLDER if errors else ParseStatus.PARSED
         ),
@@ -284,6 +292,23 @@ def _relative_windows_parts(
         if path_part.casefold() != root_part.casefold():
             return None
     return path_parts[len(root_parts) :]
+
+
+def transfer_name_is_void(folder_name: str) -> bool:
+    """Return whether an issued NN folder name is marked Void (annulled).
+
+    ``Void`` is a folder-name token (``04_рев.0-AN02_…_Void``), not a
+    filename token. Case-insensitive; Unicode dashes are normalized first.
+
+    Args:
+        folder_name: One path segment (the issued ``NN_…`` folder).
+
+    Returns:
+        ``True`` when the name contains a ``Void`` token.
+    """
+
+    normalized = normalize_unicode_dashes(folder_name or "").strip()
+    return bool(normalized and _VOID_RE.search(normalized))
 
 
 def path_is_as_build(path: str) -> bool:

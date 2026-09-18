@@ -88,6 +88,7 @@ from rd_catalog.parse import (
     parse_catalog_file,
     parse_transfer_folder,
     path_is_as_build,
+    transfer_name_is_void,
     record_has_canonical_layout,
 )
 from rd_catalog.layout_report import (
@@ -374,6 +375,7 @@ __all__ = [
     "pick_journal_row_for_issuance",
     "parse_transfer_folder",
     "path_is_as_build",
+    "transfer_name_is_void",
     "PIN_COLUMN_HEADER",
     "pin_evidence",
     "pin_is_current",

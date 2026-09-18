@@ -13,6 +13,7 @@ from rd_catalog.doc_bundle import (
     DocumentTreeLabelOptions,
     ANNULLED_MARKER,
     ANNULLED_TOOLTIP,
+    ANNULLED_TOOLTIP_VOID,
     WORKING_TOOLTIP_MANUAL,
     annulled_folder_tooltip,
     bundle_documents,
@@ -283,6 +284,13 @@ def main() -> None:
     )
     assert annulled_folder_tooltip(is_annulled=False) == ""
     assert annulled_folder_tooltip(is_annulled=True) == ANNULLED_TOOLTIP
+    assert (
+        annulled_folder_tooltip(
+            is_annulled=True,
+            folder_name="04_рев.0-AN02_AGCC.287-7560-SKUD_Void",
+        )
+        == ANNULLED_TOOLTIP_VOID
+    )
     assert (
         folder_tree_label(
             [dated_pdf, dated_dwg],

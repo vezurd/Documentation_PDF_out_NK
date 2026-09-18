@@ -768,6 +768,37 @@ def test_purge_noncanonical_rd_keeps_canonical_missing() -> None:
         assert database.purge_noncanonical_rd_files(root, skip_if_clean=True) == 1
         assert all("again.pdf" not in record.path for record in database.list_files())
 
+    test_store_scan_marks_void_folder_annulled()
+
+
+def test_store_scan_marks_void_folder_annulled() -> None:
+    """RD scan upserts kit_annulled_flag for an NN folder named Void."""
+
+    with tempfile.TemporaryDirectory(prefix="rd_catalog_void_scan_") as raw:
+        root = Path(raw, "rd")
+        transfer = (
+            root
+            / "7560"
+            / "SKUD"
+            / "Для передачи"
+            / "04_рев.0-AN02_AGCC.287-7560-SKUD_Void"
+        )
+        transfer.mkdir(parents=True)
+        document = transfer / "AGCC.287-7560-SKUD.MTO-0001_0-AN02_RU.xlsx"
+        document.write_bytes(b"mto")
+        source_result = scan_document_source(root, SourceKind.RD, skip_dirs=())
+        summary = ScanSummary(sources={SourceKind.RD: source_result})
+        summary.rd_pdf_overlay, summary.rd_mto_overlay = build_rd_overlays(
+            summary.files
+        )
+        database = CatalogDatabase(Path(raw, "rd_catalog.sqlite"))
+        database.initialize()
+        database.store_scan(summary)
+        flags = database.list_annulled_flags("7560", "SKUD")
+        assert len(flags) == 1
+        assert flags[0].transfer_name.endswith("_Void")
+        assert flags[0].revision_text == "0-AN02"
+
 
 if __name__ == "__main__":
     main()

@@ -28,6 +28,7 @@ from rd_catalog.parse import (
     parse_catalog_file,
     parse_transfer_folder,
     path_is_as_build,
+    transfer_name_is_void,
     constructed_kit_rd_title_folder,
     unique_kit_rd_mark_folders,
 )
@@ -48,6 +49,19 @@ def main() -> None:
     assert transfer.title == "2225"
     assert transfer.mark == "KSB"
     assert transfer.is_as_build
+    void_folder = parse_transfer_folder(
+        "04_рев.0-AN02_AGCC.287-7560-SKUD_Void",
+        under_gate=True,
+    )
+    assert void_folder.parse_status is ParseStatus.PARSED
+    assert void_folder.sequence == 4
+    assert void_folder.is_void
+    assert transfer_name_is_void("04_рев.0-AN02_AGCC.287-7560-SKUD_Void")
+    assert transfer_name_is_void("04_Void_рев.0-AN02_AGCC.287-7560-SKUD")
+    assert not transfer_name_is_void("04_рев.0-AN02_AGCC.287-7560-SKUD")
+    assert is_transfer_folder_name(
+        "04_рев.0-AN02_AGCC.287-7560-SKUD_Void", under_gate=True
+    )
     assert path_is_as_build(
         r"\\server\share\РД\as-build\MTO as-build\2245\KSB\file.pdf"
     )

@@ -122,6 +122,7 @@ from rd_catalog.doc_bundle import (
     DocumentTreeLabelOptions,
     ANNULLED_MARKER,
     ANNULLED_TOOLTIP,
+    ANNULLED_TOOLTIP_VOID,
     NO_REVISION_LABEL,
     WORKING_MARKER,
     FolderMeanOverride,
@@ -226,6 +227,7 @@ from rd_catalog.parse import (
     issued_package_dir,
     parse_transfer_folder,
     record_has_canonical_layout,
+    transfer_name_is_void,
     unique_kit_rd_mark_folders,
 )
 from rd_catalog.context_menu_qt import exec_tracked_menu
@@ -7843,8 +7845,17 @@ class CatalogWindow(QMainWindow):
                         )
                         for flag in annulled_flags
                     )
+                    is_void_folder = transfer_name_is_void(transfer_name)
+                    if is_void_folder:
+                        has_annulled = True
                     mark_annulled_action.setChecked(has_annulled)
-                    unmark_annulled_action.setEnabled(has_annulled)
+                    if is_void_folder:
+                        mark_annulled_action.setEnabled(False)
+                        mark_annulled_action.setToolTip(ANNULLED_TOOLTIP_VOID)
+                        unmark_annulled_action.setEnabled(False)
+                        unmark_annulled_action.setToolTip(ANNULLED_TOOLTIP_VOID)
+                    else:
+                        unmark_annulled_action.setEnabled(has_annulled)
                 menu.addSeparator()
                 legalize_f_action = menu.addAction(LEGALIZE_APPROVAL_ACTION)
                 has_rd = any(
@@ -8819,7 +8830,13 @@ class CatalogWindow(QMainWindow):
                             cell,
                             color_for(self._status_colors, "annulled"),
                         )
-                        cell.setToolTip(ANNULLED_TOOLTIP)
+                        cell.setToolTip(
+                            ANNULLED_TOOLTIP_VOID
+                            if transfer_name_is_void(
+                                bundles[0].folder_key if bundles else ""
+                            )
+                            else ANNULLED_TOOLTIP
+                        )
                 if column == _HISTORY_COL_MTO_STATUS:
                     tips = [_MTO_STATUS_COLUMN_TIP]
                     if working_tip:

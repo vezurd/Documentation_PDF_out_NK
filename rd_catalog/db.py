@@ -18,8 +18,10 @@ from rd_catalog.kits import (
     GoogleKit,
     IssuanceKit,
     KitEvent,
+    format_revision,
     kit_identity_key,
     parse_history_line,
+    parse_sheet_revision,
 )
 from rd_catalog.models import (
     FileKind,
@@ -38,12 +40,13 @@ from rd_catalog.models import (
     TransferMetadata,
     make_path_key,
 )
-from rd_catalog.overlay import OVERLAY_ALGORITHM_VERSION, build_rd_overlays
+from rd_catalog.overlay import OVERLAY_ALGORITHM_VERSION, build_rd_overlays, revision_rank
 from rd_catalog.parse import (
     has_canonical_rd_issued_path,
     matches_agcc_filename,
     parse_transfer_folder,
     path_is_as_build,
+    transfer_name_is_void,
 )
 from rd_catalog.path_actions import path_is_under
 from rd_catalog.perf_log import perf_span
@@ -106,6 +109,18 @@ def _working_flag_sequence(
     if not folder:
         return None
     return parse_transfer_folder(folder, under_gate=True).sequence
+
+
+def _better_revision_text(left: str, right: str) -> str:
+    if not right:
+        return left
+    if not left:
+        return right
+    left_rank = revision_rank(*parse_sheet_revision(left))
+    right_rank = revision_rank(*parse_sheet_revision(right))
+    return right if right_rank > left_rank else left
+
+
 _NONCANONICAL_RD_CLEAN_KEY = "noncanonical_rd_clean"
 
 
@@ -1403,6 +1418,7 @@ class CatalogDatabase:
                 self._set_noncanonical_rd_clean(connection, clean=False)
             self._replace_overlays(connection, run_id, summary)
             self._replace_collision_snapshots(connection, run_id, summary)
+            self._apply_void_annulled_flags(connection, summary.files)
 
             if summary.status is ScanRunStatus.SUCCESS:
                 connection.execute(
@@ -4187,6 +4203,104 @@ class CatalogDatabase:
             ).fetchall()
         return [self._working_flag_from_row(row) for row in rows]
 
+    def apply_void_annulled_flags_from_records(
+        self, records: Sequence[FileRecord]
+    ) -> int:
+        """Upsert ``kit_annulled_flag`` for present RD folders named Void.
+
+        Existing rows are left untouched (``decided_at`` stays). Working
+        flags on the same folder are deleted. Folders without a filename
+        revision are skipped.
+
+        Args:
+            records: Catalog files (typically the pipeline contour).
+
+        Returns:
+            Number of Void packages that received an insert.
+        """
+
+        grouped: dict[tuple[str, str, str], tuple[int | None, str]] = {}
+        for record in records:
+            if record.source is not SourceKind.RD or not record.present:
+                continue
+            name = str(record.data.get("transfer_name") or "").strip()
+            if not transfer_name_is_void(name):
+                continue
+            title = str(record.data.get("title") or "").strip()
+            mark = str(record.data.get("mark") or "").strip()
+            if not title or not mark:
+                continue
+            revision = format_revision(
+                str(record.data.get("revision") or "") or None,
+                str(record.data.get("appendix") or "") or None,
+            )
+            sequence = _working_flag_sequence(
+                name, record.data.get("transfer_sequence")
+            )
+            key = (title, mark, name)
+            prev = grouped.get(key)
+            if prev is None:
+                grouped[key] = (sequence, revision)
+            else:
+                grouped[key] = (prev[0] if prev[0] is not None else sequence, _better_revision_text(prev[1], revision))
+        inserted = 0
+        for (title, mark, name), (sequence, revision) in grouped.items():
+            if not revision:
+                continue
+            self.upsert_annulled_flag(
+                title,
+                mark,
+                revision,
+                transfer_name=name,
+                sequence=sequence,
+                touch_existing=False,
+            )
+            inserted += 1
+        return inserted
+
+    @staticmethod
+    def _apply_void_annulled_flags(
+        connection: sqlite3.Connection,
+        files: Sequence[ParsedFile],
+    ) -> None:
+        grouped: dict[tuple[str, str, str], tuple[int | None, str]] = {}
+        for file in files:
+            if file.source is not SourceKind.RD:
+                continue
+            transfer = file.transfer
+            name = str(transfer.original_name if transfer else "").strip()
+            if not transfer_name_is_void(name):
+                continue
+            title = str(file.title or "").strip()
+            mark = str(file.mark or "").strip()
+            if not title or not mark:
+                continue
+            revision = format_revision(file.revision, file.appendix)
+            sequence = transfer.sequence if transfer is not None else None
+            key = (title, mark, name)
+            prev = grouped.get(key)
+            if prev is None:
+                grouped[key] = (sequence, revision)
+            else:
+                grouped[key] = (
+                    prev[0] if prev[0] is not None else sequence,
+                    _better_revision_text(prev[1], revision),
+                )
+        stamped = _utc_now()
+        for (title, mark, name), (sequence, revision) in grouped.items():
+            if not revision:
+                continue
+            CatalogDatabase._upsert_annulled_flag_on(
+                connection,
+                title,
+                mark,
+                revision,
+                name,
+                sequence,
+                stamped,
+                touch_existing=False,
+            )
+
     def upsert_annulled_flag(
         self,
         title: str,
@@ -4196,6 +4310,7 @@ class CatalogDatabase:
         transfer_name: str = "",
         sequence: int | None = None,
         decided_at: str | None = None,
+        touch_existing: bool = True,
     ) -> int:
         """Insert or update a manual annulled-folder mark.
 
@@ -4210,6 +4325,8 @@ class CatalogDatabase:
             transfer_name: Issued folder name of the tree node.
             sequence: Transfer ``NN``; parsed from ``transfer_name`` when omitted.
             decided_at: ISO UTC timestamp; default now.
+            touch_existing: When False, an existing row is left unchanged
+                (scan/rebuild Void sync must not rewrite ``decided_at``).
 
         Returns:
             Row identifier.
@@ -4229,51 +4346,76 @@ class CatalogDatabase:
         stamped = decided_at or _utc_now()
         parsed_sequence = _working_flag_sequence(folder, sequence)
         with self._connection() as connection, connection:
-            existing = connection.execute(
-                """
-                SELECT id FROM kit_annulled_flag
-                WHERE title = ? COLLATE NOCASE
-                  AND mark = ? COLLATE NOCASE
-                  AND transfer_name = ? COLLATE NOCASE
-                """,
-                (parsed_title, parsed_mark, folder),
-            ).fetchone()
-            connection.execute(
-                """
-                DELETE FROM kit_working_flag
-                WHERE title = ? COLLATE NOCASE
-                  AND mark = ? COLLATE NOCASE
-                  AND transfer_name = ? COLLATE NOCASE
-                """,
-                (parsed_title, parsed_mark, folder),
+            return CatalogDatabase._upsert_annulled_flag_on(
+                connection,
+                parsed_title,
+                parsed_mark,
+                parsed_rev,
+                folder,
+                parsed_sequence,
+                stamped,
+                touch_existing=touch_existing,
             )
-            if existing is None:
-                cursor = connection.execute(
-                    """
-                    INSERT INTO kit_annulled_flag(
-                        title, mark, revision_text, transfer_name,
-                        sequence, decided_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        parsed_title,
-                        parsed_mark,
-                        parsed_rev,
-                        folder,
-                        parsed_sequence,
-                        stamped,
-                    ),
-                )
-                return int(cursor.lastrowid)
-            connection.execute(
+
+    @staticmethod
+    def _upsert_annulled_flag_on(
+        connection: sqlite3.Connection,
+        title: str,
+        mark: str,
+        revision_text: str,
+        transfer_name: str,
+        sequence: int | None,
+        decided_at: str,
+        *,
+        touch_existing: bool,
+    ) -> int:
+        existing = connection.execute(
+            """
+            SELECT id FROM kit_annulled_flag
+            WHERE title = ? COLLATE NOCASE
+              AND mark = ? COLLATE NOCASE
+              AND transfer_name = ? COLLATE NOCASE
+            """,
+            (title, mark, transfer_name),
+        ).fetchone()
+        connection.execute(
+            """
+            DELETE FROM kit_working_flag
+            WHERE title = ? COLLATE NOCASE
+              AND mark = ? COLLATE NOCASE
+              AND transfer_name = ? COLLATE NOCASE
+            """,
+            (title, mark, transfer_name),
+        )
+        if existing is None:
+            cursor = connection.execute(
                 """
-                UPDATE kit_annulled_flag
-                SET revision_text = ?, sequence = ?, decided_at = ?
-                WHERE id = ?
+                INSERT INTO kit_annulled_flag(
+                    title, mark, revision_text, transfer_name,
+                    sequence, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (parsed_rev, parsed_sequence, stamped, int(existing["id"])),
+                (
+                    title,
+                    mark,
+                    revision_text,
+                    transfer_name,
+                    sequence,
+                    decided_at,
+                ),
             )
+            return int(cursor.lastrowid)
+        if not touch_existing:
             return int(existing["id"])
+        connection.execute(
+            """
+            UPDATE kit_annulled_flag
+            SET revision_text = ?, sequence = ?, decided_at = ?
+            WHERE id = ?
+            """,
+            (revision_text, sequence, decided_at, int(existing["id"])),
+        )
+        return int(existing["id"])
 
     def delete_annulled_flag(
         self,
