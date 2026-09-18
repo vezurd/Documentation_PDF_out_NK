@@ -766,6 +766,38 @@ class Step4UnitsGateOrderSmokeTest(unittest.TestCase):
         self.assertEqual(ul_row.el[UNITS].value, "шт")
         self.assertIn("converted", str(ul_row.el[UNITS_CHECK_STATUS].value))
 
+    def test_empty_code_mto_rows_skipped_not_fatal(self) -> None:
+        matrix_path = Path(self.result_dir) / "matrix_empty_code.xlsx"
+        google = [_google_row("BCC0500", "шт")]
+        coded = _position_row(code="BCC0500", units="шт", qty=2)
+        empty = _position_row(code="", units="шт", qty=3)
+        whitespace = _position_row(code="   ", units="компл", qty=1)
+        result = run_units_gate(
+            rfp_rows=[],
+            mto_data={"8630-KSB3": [coded, empty, whitespace]},
+            packing_dataset=None,
+            google_rows=google,
+            matrix_path=matrix_path,
+        )
+        self.assertEqual(coded.el[VALUES].value, 2)
+        self.assertEqual(empty.el[VALUES].value, 3)
+        self.assertEqual(empty.el[UNITS].value, "шт")
+        self.assertIsNone(
+            empty.el[UNITS_CHECK_STATUS].value if UNITS_CHECK_STATUS in empty.el else None
+        )
+        self.assertEqual(whitespace.el[VALUES].value, 1)
+        self.assertEqual(whitespace.el[UNITS].value, "компл")
+        self.assertIn("MTO: проверено 1", result.summary)
+        plan, _, bindings = build_units_gate_plan(
+            rfp_rows=[],
+            mto_data={"8630-KSB3": [coded, empty, whitespace]},
+            packing_dataset=None,
+            google_rows=google,
+            matrix_path=matrix_path,
+        )
+        self.assertEqual([item.request_id for item in plan.actions], ["mto:1:values"])
+        self.assertEqual([item.request_id for item in bindings], ["mto:1:values"])
+
     def test_mto_request_ids_globally_unique(self) -> None:
         matrix_path = Path(self.result_dir) / "matrix_mto_ids.xlsx"
         google = [_google_row("BCC0400", "шт"), _google_row("BCC0401", "шт")]

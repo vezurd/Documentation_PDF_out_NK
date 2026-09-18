@@ -109,7 +109,7 @@ alwaysApply: false
 
 ## Ед. изм. и units gate
 
-- **До Step4** (в [agregate_tags.py](RFQ/tags_rfp_compare/agregate_tags.py)): один [units_gate.py](RFQ/tags_rfp_compare/units_gate.py) для raw RFP + MTO + активных строк УЛ (VO не участвует). Матрица: `paths.units_convert_matrix` / override; Google — strict index из одной загрузки `load_base()`.
+- **До Step4** (в [agregate_tags.py](RFQ/tags_rfp_compare/agregate_tags.py)): один [units_gate.py](RFQ/tags_rfp_compare/units_gate.py) для raw RFP + MTO + активных строк УЛ (VO не участвует). Матрица: `paths.units_convert_matrix` / override; Google — strict index из одной загрузки `load_base()`. Позиции **без нормализованного кода** (часто МТО вроде `8630-KSB3`) gate **пропускает**, не fatal: конвертировать нечего, строка идёт в Step4/матрицу BCC как empty-code. Пустая ЕИ при коде — по-прежнему fatal.
 - **Step4** получает уже сконвертированные строки; `packing_dataset` из оркестратора **не перечитывается** (`_resolve_packing_dataset_for_step4`); при прямом вызове step4 без dataset — fallback `load_packing_dataset()`.
 - MTO ед. изм. → `UNITS_MTO` через `copy_mto_units_fields`; matcher УЛ сравнивает RFP `UNITS` с УЛ.
 - **Collapse** (`_collapse_rfp_rows_before_export`): ключ включает `normalize(UNITS)`, `normalize(UNITS_MTO)` и `is_excluded_from_supply`; survivor суммирует qty и **`merge_units_status_trace`** из всех строк группы.
