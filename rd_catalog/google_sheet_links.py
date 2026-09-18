@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import subprocess
 import sys
 import webbrowser
@@ -172,10 +171,10 @@ def is_google_sheets_url(url: str) -> bool:
 def open_google_sheet_url(url: str) -> bool:
     """Open a Sheets URL in the default browser.
 
-    Windows ``os.startfile`` / unquoted ``start`` drop ``#range=`` or
-    split on ``&``, so the spreadsheet opens without selecting the cell.
-    Launch the HTTPS handler with the URL as one argv, else a quoted
-    ``start``.
+    Windows ShellExecute / HTTPS ProgId / ``start`` drop the ``#gid=&range=``
+    fragment, so Google rewrites the address to ``?gid=0#gid=0`` and never
+    selects the cell. Launch chrome/msedge with ``--new-window`` and the
+    URL as one argv. Fall back to an Internet Shortcut ``.url`` file.
 
     Args:
         url: Value from :func:`google_sheet_cell_url`.
@@ -193,8 +192,38 @@ def open_google_sheet_url(url: str) -> bool:
     return True
 
 
+def browser_launch_argv(executable: str, url: str) -> list[str]:
+    """Return chrome/msedge argv that keeps ``#gid=&range=``.
+
+    Args:
+        executable: Path to chrome.exe or msedge.exe.
+        url: HTTPS Sheets URL including the hash.
+
+    Returns:
+        Argument vector for :func:`subprocess.Popen` (no shell).
+    """
+
+    return [executable, "--new-window", "--", url]
+
+
+def windows_browser_argv(url: str) -> list[str] | None:
+    """Return a chrome/msedge argv when a browser executable exists.
+
+    Args:
+        url: HTTPS Sheets URL.
+
+    Returns:
+        Argv for Popen, or None when neither Chrome nor Edge is installed.
+    """
+
+    exe = _windows_browser_executable()
+    if exe is None:
+        return None
+    return browser_launch_argv(str(exe), url)
+
+
 def windows_start_command(url: str) -> str:
-    """Return a quoted ``start`` command that keeps ``#`` and ``&``.
+    """Return a quoted ``start`` command (last resort; may drop ``#``).
 
     Args:
         url: HTTPS Sheets URL.
@@ -208,74 +237,16 @@ def windows_start_command(url: str) -> str:
 
 
 def _open_url_windows(url: str) -> None:
-    argv = _windows_https_argv(url)
+    argv = windows_browser_argv(url)
     if argv:
         subprocess.Popen(argv, close_fds=True)
+        return
+    if _open_url_via_internet_shortcut(url):
         return
     subprocess.Popen(windows_start_command(url), shell=True)
 
 
-def _windows_https_argv(url: str) -> list[str] | None:
-    command = _windows_https_open_command()
-    if not command:
-        return _windows_known_browser_argv(url)
-    try:
-        parts = shlex.split(command, posix=False)
-    except ValueError:
-        return _windows_known_browser_argv(url)
-    if not parts:
-        return _windows_known_browser_argv(url)
-    exe = parts[0].strip('"')
-    if not Path(exe).is_file():
-        return _windows_known_browser_argv(url)
-    lowered = command.casefold()
-    if "rundll32" in exe.casefold() or "url.dll" in lowered:
-        return _windows_known_browser_argv(url)
-    args = [exe]
-    replaced = False
-    for part in parts[1:]:
-        token = part.strip('"')
-        if token in {"%1", "%~1"}:
-            args.append(url)
-            replaced = True
-        elif "%1" in token:
-            args.append(token.replace("%1", url))
-            replaced = True
-        else:
-            args.append(token)
-    if not replaced:
-        args.append(url)
-    return args
-
-
-def _windows_https_open_command() -> str:
-    try:
-        import winreg
-    except ImportError:
-        return ""
-    progid = ""
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\Shell\Associations"
-            r"\UrlAssociations\https\UserChoice",
-        ) as key:
-            progid = str(winreg.QueryValueEx(key, "ProgId")[0] or "")
-    except OSError:
-        progid = ""
-    if not progid:
-        return ""
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CLASSES_ROOT,
-            rf"{progid}\shell\open\command",
-        ) as key:
-            return str(winreg.QueryValueEx(key, None)[0] or "")
-    except OSError:
-        return ""
-
-
-def _windows_known_browser_argv(url: str) -> list[str] | None:
+def _windows_browser_executable() -> Path | None:
     candidates = (
         Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
         / "Google"
@@ -300,8 +271,25 @@ def _windows_known_browser_argv(url: str) -> list[str] | None:
     )
     for exe in candidates:
         if exe and exe.is_file():
-            return [str(exe), url]
+            return exe
     return None
+
+
+def _open_url_via_internet_shortcut(url: str) -> bool:
+    """Write a ``.url`` shortcut so Explorer keeps the hash, then open it."""
+
+    cleaned = (url or "").replace("\r", "").replace("\n", "")
+    if not cleaned:
+        return False
+    directory = Path(os.environ.get("TEMP") or os.environ.get("TMP") or ".")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "rd_catalog_google_cell.url"
+        path.write_text(f"[InternetShortcut]\nURL={cleaned}\n", encoding="ascii")
+        os.startfile(path)  # type: ignore[attr-defined]
+    except OSError:
+        return False
+    return True
 
 
 def save_kits_sheet_pin(

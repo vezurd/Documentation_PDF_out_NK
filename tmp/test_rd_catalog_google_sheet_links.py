@@ -18,6 +18,7 @@ from rd_catalog.google_sheet_links import (
     KITS_SHEET_TITLE_FALLBACK,
     SheetLinkContext,
     a1_cell,
+    browser_launch_argv,
     gid_from_google_url,
     google_sheet_cell_url,
     is_google_sheets_url,
@@ -119,6 +120,11 @@ def main() -> None:
     assert started.endswith('"')
     assert "&range=F12" in started
     assert started.count('"') >= 2
+    launched = browser_launch_argv(r"C:\chrome.exe", with_gid)
+    assert launched[:2] == [r"C:\chrome.exe", "--new-window"]
+    assert launched[-1] == with_gid
+    assert "&range=F12" in launched[-1]
+    assert "--" in launched
     assert is_google_sheets_url(with_gid)
     assert not is_google_sheets_url("https://example.com/")
     assert google_sheet_cell_url("", "F12") == ""
