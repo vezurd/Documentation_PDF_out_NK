@@ -340,6 +340,43 @@ def main() -> None:
         "09.10.2023 прошла вх контр рев. 0 AGCC.287-BCC-NPG-TRM-003144 auto"
     )
 
+    quoted_cover_table = parse_approval_mail_text(
+        subject="RE: Сопроводительное письмо AGCC.287-BCC-PGS-TRM-000707",
+        body=(
+            "Документация на рассмотрении AGCC.287-PGS-PGS-TRM-21617\n\n"
+            "1.\tДанная ревизия АН загружена, необходимо повысить до 01-AN02\n\n"
+            "From: x\n"
+            "Please find attached transmittals AGCC.287-BCC-PGS-TRM-000707\n"
+            "Owner Document Number Revision Document Name\n"
+            "1\n"
+            "AGCC.287-8950-SOO3.OD-0001\n"
+            "01-AN01\n"
+            "Общие данные\n"
+            "2\n"
+            "AGCC.287-8950-SOO3.MTO-0001\n"
+            "01-AN01\n"
+            "Спецификация материалов\n"
+        ),
+        sent_at=datetime(2026, 1, 27, 21, 35, tzinfo=_TZ),
+    )
+    assert quoted_cover_table.error == ""
+    assert quoted_cover_table.kind == "tdo_reply"
+    assert quoted_cover_table.stage == "incoming_passed"
+    assert quoted_cover_table.title == "8950"
+    assert quoted_cover_table.mark == "SOO3"
+    assert quoted_cover_table.od_revision == "01-AN01"
+    assert quoted_cover_table.incoming_transmittal.endswith("TRM-21617")
+    assert quoted_cover_table.f_line == (
+        "27.01.2026 прошла вх контр рев. 01-AN01 "
+        "AGCC.287-PGS-PGS-TRM-21617 MTO 01-AN01 auto"
+    )
+    table_event = parse_history_line(quoted_cover_table.f_line)
+    assert table_event.revision == "01"
+    assert table_event.appendix == "01"
+    assert table_event.mto_revision == "01"
+    assert table_event.mto_appendix == "01"
+    assert "01-AN02" not in quoted_cover_table.f_line
+
     hinted = parse_approval_mail_text(
         subject="RE: Сопроводительное письмо AGCC.287-BCC-NPG-TRM-003496",
         body="Документы загружены и направлены на рассмотрение\nAGCC.287-PGS-PGS-TRM-17769\n\nFrom: x\n",

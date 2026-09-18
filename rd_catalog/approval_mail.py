@@ -5,7 +5,8 @@ Qt-free. Understands Capital Projects «Notification of Transmittal» bodies
 outgoing BCC «Сопроводительное письмо» document tables, and the top of
 ``RE: Сопроводительное письмо …`` replies (including older threads whose
 kit/revision sit in prose such as ``по титулу 6816 марка KSB рев.0`` or
-in AGCC stems with a ``_0_RU`` tail and no extension). File IO uses
+in AGCC stems with a ``_0_RU`` tail and no extension, or a quoted cover
+table ``OD-0001`` / ``01-AN01``). File IO uses
 ``extract_msg`` when opening ``.msg``; tests may call
 :func:`parse_approval_mail_text` with already extracted subject/body.
 """
@@ -471,6 +472,8 @@ def _parse_tdo_reply(
         if len(thread_kits) == 1:
             documents = thread_docs
             kits = thread_kits
+    documents = _fill_revisions_from_cover_table(documents, body)
+    kits = _unique_kits(documents)
     prose = _pick_kit_prose(body)
     error = ""
     title = ""
@@ -563,6 +566,45 @@ def _parse_cover_documents(body: str) -> list[MailDocument]:
         doc = _mail_document_from_filename(filename, revision=revision)
         if doc is not None:
             documents.append(doc)
+    return documents
+
+
+def _fill_revisions_from_cover_table(
+    documents: list[MailDocument],
+    body: str,
+) -> list[MailDocument]:
+    """Copy Owner Document Number revisions onto quoted AGCC stems.
+
+    A TDO reply often cites the cover table as ``OD-0001`` then ``01-AN01``
+    on the next line. Stem search sees the filename without a ``_rev`` tail.
+
+    Args:
+        documents: Documents already found from AGCC stems.
+        body: Full thread, including the quoted cover letter.
+
+    Returns:
+        ``documents`` with revisions filled from the quoted cover table.
+        Unchanged when stems already have a revision or there are no stems.
+    """
+
+    if any(item.revision for item in documents):
+        return documents
+    cover = _parse_cover_documents(body)
+    if not cover or not documents:
+        return documents
+    by_name = {
+        item.filename.casefold(): item.revision
+        for item in cover
+        if item.revision
+    }
+    filled = [
+        replace(item, revision=by_name[item.filename.casefold()])
+        if not item.revision and item.filename.casefold() in by_name
+        else item
+        for item in documents
+    ]
+    if any(item.revision for item in filled):
+        return filled
     return documents
 
 
