@@ -854,6 +854,8 @@ class MonitorViewsTests(unittest.TestCase):
         self.assertIn("Shift+клик", trm.tooltip)
         send = painted.cells["Выдача · TRM отпр."]
         self.assertIn("B40", send.href)
+        self.assertNotIn("'", send.href)
+        self.assertNotIn("!", send.href)
         self.assertEqual(painted.cells["Титул"].href, "")
 
     def test_journal_trm_href(self) -> None:
@@ -902,6 +904,8 @@ class MonitorViewsTests(unittest.TestCase):
             sheet_links=links,
         )
         self.assertIn("B40", painted.cells["TRM"].href)
+        self.assertNotIn("'", painted.cells["TRM"].href)
+        self.assertNotIn("!", painted.cells["TRM"].href)
         self.assertIn("Shift+клик", painted.cells["TRM"].tooltip)
         self.assertEqual(painted.cells["Титул"].href, "")
 

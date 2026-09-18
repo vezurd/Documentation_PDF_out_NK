@@ -18,10 +18,12 @@ from rd_catalog.google_sheet_links import (
     KITS_SHEET_TITLE_FALLBACK,
     SheetLinkContext,
     a1_cell,
+    gid_from_google_url,
     google_sheet_cell_url,
     is_google_sheets_url,
     journal_cell_href,
     kits_google_hrefs,
+    save_issuance_sheet_pin,
     save_kits_sheet_pin,
     sheet_link_context_from_config,
     windows_start_command,
@@ -101,9 +103,17 @@ def main() -> None:
         "abc", "B40", sheet_title="Выдача РД ПД"
     )
     assert named == (
-        "https://docs.google.com/spreadsheets/d/abc/"
-        "edit#range='Выдача РД ПД'!B40"
+        "https://docs.google.com/spreadsheets/d/abc/edit#range=B40"
     ), named
+    assert "'" not in named
+    assert "!" not in named
+    assert gid_from_google_url(
+        "https://docs.google.com/spreadsheets/d/abc/export?format=csv&gid=42"
+    ) == 42
+    assert gid_from_google_url(
+        "https://docs.google.com/spreadsheets/d/abc/edit?gid=0#gid=0"
+    ) == 0
+    assert gid_from_google_url("https://docs.google.com/spreadsheets/d/abc/export") is None
     started = windows_start_command(with_gid)
     assert started.startswith('start "" "')
     assert started.endswith('"')
@@ -117,7 +127,9 @@ def main() -> None:
     hrefs = kits_google_hrefs(google=_google(), issuance=_issuance(), links=links)
     assert hrefs["Google · TRM F"].endswith("#gid=77&range=F12")
     assert "?gid=77#" in hrefs["Google · TRM F"]
-    assert "B40" in hrefs["Выдача · TRM отпр."]
+    assert hrefs["Выдача · TRM отпр."].endswith("#range=B40")
+    assert "'" not in hrefs["Выдача · TRM отпр."]
+    assert "!" not in hrefs["Выдача · TRM отпр."]
     assert "Q40" in hrefs["Выдача · TRM подтв."]
     for header in KITS_GOOGLE_COLUMNS:
         assert header in hrefs, header
@@ -130,6 +142,8 @@ def main() -> None:
 
     trm = journal_cell_href("TRM", 40, links)
     assert "B40" in trm
+    assert "'" not in trm
+    assert "!" not in trm
     assert journal_cell_href("Титул", 40, links) == ""
     assert journal_cell_href("TRM", 0, links) == ""
     assert set(JOURNAL_ISSUANCE_COLUMNS) >= {"TRM", "TRM подтв."}
@@ -162,6 +176,37 @@ def main() -> None:
         assert ctx.issuance_sheet_title == "Выдача РД ПД"
         payload = json.loads((root / "google_sheet_pins.json").read_text(encoding="utf-8"))
         assert payload["kits"]["sheet_id"] == 9
+        assert save_issuance_sheet_pin(
+            root,
+            spreadsheet_id="iss-id",
+            sheet_id=0,
+            title="Выдача РД ПД",
+        )
+        with_iss = sheet_link_context_from_config(config)
+        assert with_iss.issuance_sheet_id == 0
+        pinned_iss = google_sheet_cell_url(
+            "iss-id",
+            "D597",
+            sheet_id=with_iss.issuance_sheet_id,
+            sheet_title=with_iss.issuance_sheet_title,
+        )
+        assert pinned_iss.endswith("#gid=0&range=D597")
+        assert "'" not in pinned_iss
+        pins_kits_only = {
+            "kits": json.loads(
+                (root / "google_sheet_pins.json").read_text(encoding="utf-8")
+            )["kits"]
+        }
+        (root / "google_sheet_pins.json").write_text(
+            json.dumps(pins_kits_only, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (root / "google_issuance_meta.json").write_text(
+            json.dumps({"sheet_id": 314, "spreadsheet_id": "iss-id"}),
+            encoding="utf-8",
+        )
+        from_meta = sheet_link_context_from_config(config)
+        assert from_meta.issuance_sheet_id == 314
 
         other = CatalogConfig(
             rd_root=root,

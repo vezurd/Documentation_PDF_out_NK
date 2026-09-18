@@ -25,9 +25,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from rd_catalog.config import CatalogConfig
+from rd_catalog.google_sheet_links import (
+    gid_from_google_url,
+    save_issuance_sheet_pin,
+)
 from rd_catalog.kits import (
     GoogleKit,
     GoogleParseStats,
@@ -129,9 +133,27 @@ def _http_headers() -> dict[str, str]:
     }
 
 
-def _opener() -> urllib.request.OpenerDirector:
+class _GidCaptureRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow redirects and keep the last ``gid=`` seen in the chain."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sheet_id: int | None = None
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        for candidate in (headers.get("Location") or "", str(newurl or "")):
+            gid = gid_from_google_url(candidate)
+            if gid is not None:
+                self.sheet_id = gid
+                break
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _opener(
+    *extra: urllib.request.BaseHandler,
+) -> urllib.request.OpenerDirector:
     proxies = urllib.request.getproxies()
-    handlers: list[Any] = [urllib.request.ProxyHandler(proxies)]
+    handlers: list[Any] = [urllib.request.ProxyHandler(proxies), *extra]
     if kits_tls_relaxed():
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
@@ -140,15 +162,22 @@ def _opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(*handlers)
 
 
-def _http_request(url: str, *, method: str, timeout: float) -> tuple[bytes, dict[str, str]]:
+def _http_request(
+    url: str, *, method: str, timeout: float
+) -> tuple[bytes, dict[str, str], str, int | None]:
     request = urllib.request.Request(url, method=method, headers=_http_headers())
-    with _opener().open(request, timeout=timeout) as response:
+    redirect = _GidCaptureRedirectHandler()
+    with _opener(redirect).open(request, timeout=timeout) as response:
         body = response.read()
         headers = {key.lower(): value for key, value in response.headers.items()}
-    return body, headers
+        final_url = str(response.geturl() or url)
+        captured = redirect.sheet_id
+    return body, headers, final_url, captured
 
 
-def _http_request_resilient(url: str, *, method: str, timeout: float) -> tuple[bytes, dict[str, str]]:
+def _http_request_resilient(
+    url: str, *, method: str, timeout: float
+) -> tuple[bytes, dict[str, str], str, int | None]:
     attempts = 1 + _retries()
     last_timeout: TimeoutError | None = None
     for index in range(attempts):
@@ -209,6 +238,8 @@ def _write_cache(
     meta_path: Path,
     rows: list[list[str]],
     headers: dict[str, str],
+    *,
+    sheet_id: int | None = None,
 ) -> None:
     data_path.parent.mkdir(parents=True, exist_ok=True)
     last_mod = headers.get("last-modified") or ""
@@ -216,12 +247,17 @@ def _write_cache(
         json.dumps({"rows": rows}, ensure_ascii=False),
         encoding="utf-8",
     )
-    meta = {
+    meta: dict[str, Any] = {
         "modified_time": _meta_timestamp(last_mod),
         "export_last_modified": last_mod,
         "source": "export_csv",
         "row_count": len(rows),
     }
+    if sheet_id is not None:
+        meta["sheet_id"] = int(sheet_id)
+    sid = (headers.get("x-rd-spreadsheet-id") or "").strip()
+    if sid:
+        meta["spreadsheet_id"] = sid
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=0), encoding="utf-8")
 
 
@@ -246,6 +282,71 @@ def _read_meta_time(meta_path: Path) -> str:
         return str(meta.get("modified_time") or "")
     except (OSError, json.JSONDecodeError):
         return ""
+
+
+def _read_meta_sheet_id(
+    meta_path: Path, *, spreadsheet_id: str = ""
+) -> int | None:
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    sid = str(meta.get("spreadsheet_id") or "").strip()
+    expected = (spreadsheet_id or "").strip()
+    if expected and sid and sid != expected:
+        return None
+    raw = meta.get("sheet_id")
+    try:
+        if raw is None:
+            return None
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _gid_from_export_response(headers: Mapping[str, str], final_url: str) -> int | None:
+    for candidate in (
+        final_url,
+        headers.get("content-location") or "",
+        headers.get("location") or "",
+    ):
+        gid = gid_from_google_url(candidate)
+        if gid is not None:
+            return gid
+    return None
+
+
+def _remember_issuance_pin(
+    config: CatalogConfig,
+    *,
+    sheet_id: int | None = None,
+    meta_path: Path | None = None,
+) -> None:
+    runtime = Path(config.runtime_dir)
+    if not runtime.is_dir():
+        return
+    gid = sheet_id
+    if gid is None and meta_path is not None:
+        gid = _read_meta_sheet_id(
+            meta_path,
+            spreadsheet_id=config.google_issuance_spreadsheet_id,
+        )
+    if gid is None:
+        return
+    title = (
+        (config.google_issuance_sheet_name or "").strip()
+        or DEFAULT_ISSUANCE_SHEET_NAME
+    )
+    save_issuance_sheet_pin(
+        runtime,
+        spreadsheet_id=config.google_issuance_spreadsheet_id,
+        sheet_id=gid,
+        title=title,
+    )
 
 
 def _empty_stats() -> GoogleParseStats:
@@ -277,14 +378,19 @@ def _export_one_sheet(
     meta_path: Path,
 ) -> tuple[list[list[str]], dict[str, str]]:
     url = _export_csv_url(spreadsheet_id, sheet_name)
-    body, headers = _http_request_resilient(
+    body, headers, final_url, captured_gid = _http_request_resilient(
         url, method="GET", timeout=_timeout_sec()
     )
     hint = _export_error_hint(body)
     if hint:
         raise ValueError(hint)
     rows = _parse_csv(body)
-    _write_cache(data_path, meta_path, rows, headers)
+    sheet_id = captured_gid
+    if sheet_id is None:
+        sheet_id = _gid_from_export_response(headers, final_url)
+    headers = dict(headers)
+    headers["x-rd-spreadsheet-id"] = spreadsheet_id
+    _write_cache(data_path, meta_path, rows, headers, sheet_id=sheet_id)
     return rows, headers
 
 
@@ -346,6 +452,10 @@ def fetch_google_kits(
     if cache_only:
         cached = load_cached_google_kits(config.runtime_dir)
         if cached is not None:
+            _remember_issuance_pin(
+                config,
+                meta_path=issuance_cache_paths(config.runtime_dir)[1],
+            )
             return cached
         return GoogleKitsLoadResult(
             kits=(),
@@ -462,6 +572,7 @@ def fetch_google_kits(
         )
 
     source = "+".join(sources) if sources else "partial"
+    _remember_issuance_pin(config, meta_path=iss_meta)
     return GoogleKitsLoadResult(
         kits=kits,
         issuance_kits=issuance,

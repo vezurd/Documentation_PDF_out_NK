@@ -16,6 +16,7 @@ import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import parse_qs, urlparse
 
 from rd_catalog.config import CatalogConfig
 from rd_catalog.kits import GoogleKit, IssuanceKit
@@ -27,6 +28,7 @@ GOOGLE_HREF_TIP = (
 )
 KITS_SHEET_TITLE_FALLBACK = "Контроль выдачи"
 _SHEETS_PREFIX = "https://docs.google.com/spreadsheets/d/"
+_ISSUANCE_EXPORT_META = "google_issuance_meta.json"
 
 # КСБ ИД: A=title, B=mark, D=rev, E=status, F=journal (TRM lives in F).
 KITS_GOOGLE_COLUMNS: dict[str, str] = {
@@ -107,19 +109,22 @@ def google_sheet_cell_url(
 
     Google's «Get link to this cell» shape puts ``range`` in the
     **fragment** (``#gid=…&range=F12``). ``range`` in the query string is
-    ignored. When ``sheet_id`` is unknown, the fragment uses
-    ``'Title'!A1`` (trailing spaces in the title are significant).
+    ignored. Never emit ``'Title'!A1``: quotes and ``!`` break Windows
+    ``start`` (the URL becomes ``http://"https//…%22``). Without a gid
+    the fragment is only ``#range=F12`` — the spreadsheet id already
+    selects the workbook.
 
     Args:
         spreadsheet_id: Spreadsheet id from catalog config.
         a1: Cell such as ``F12``.
         sheet_id: Worksheet gid, or None.
-        sheet_title: Live worksheet title (trailing space is significant).
+        sheet_title: Unused in the URL; kept for callers that pass a pin.
 
     Returns:
         HTTPS edit URL, or ``""`` when the target is incomplete.
     """
 
+    del sheet_title  # URL must not include 'Title'!A1 — Windows breaks on quotes/`!`.
     sid = (spreadsheet_id or "").strip()
     cell = (a1 or "").strip()
     if not sid or not cell:
@@ -129,13 +134,32 @@ def google_sheet_cell_url(
         return (
             f"{_SHEETS_PREFIX}{sid}/edit?gid={gid}#gid={gid}&range={cell}"
         )
-    title = sheet_title or ""
-    if title:
-        escaped = title.replace("'", "''")
-        range_body = f"'{escaped}'!{cell}"
-    else:
-        range_body = cell
-    return f"{_SHEETS_PREFIX}{sid}/edit#range={range_body}"
+    return f"{_SHEETS_PREFIX}{sid}/edit#range={cell}"
+
+
+def gid_from_google_url(url: str) -> int | None:
+    """Return a worksheet gid from a Sheets URL query or fragment.
+
+    Args:
+        url: Export, edit, or redirect URL that may contain ``gid=``.
+
+    Returns:
+        Integer gid (including ``0``), or ``None``.
+    """
+
+    text = (url or "").strip()
+    if not text:
+        return None
+    parsed = urlparse(text)
+    for part in (parsed.query, parsed.fragment):
+        if not part:
+            continue
+        for raw in parse_qs(part, keep_blank_values=True).get("gid") or []:
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                continue
+    return None
 
 
 def is_google_sheets_url(url: str) -> bool:
@@ -179,7 +203,7 @@ def windows_start_command(url: str) -> str:
         ``cmd`` ``start`` line with the URL in double quotes.
     """
 
-    cleaned = (url or "").replace('"', "")
+    cleaned = (url or "").replace('"', "").replace("'", "")
     return f'start "" "{cleaned}"'
 
 
@@ -299,15 +323,81 @@ def save_kits_sheet_pin(
         True when the JSON was written.
     """
 
+    return save_sheet_pin(
+        runtime_dir,
+        kind="kits",
+        spreadsheet_id=spreadsheet_id,
+        sheet_id=sheet_id,
+        title=title,
+    )
+
+
+def save_issuance_sheet_pin(
+    runtime_dir: str | Path,
+    *,
+    spreadsheet_id: str,
+    sheet_id: int,
+    title: str,
+) -> bool:
+    """Persist the «Выдача РД ПД» worksheet gid.
+
+    Args:
+        runtime_dir: Catalog runtime directory.
+        spreadsheet_id: Spreadsheet id of the pin.
+        sheet_id: Worksheet gid (``0`` is valid).
+        title: Tab title from config or the live sheet.
+
+    Returns:
+        True when the JSON was written.
+    """
+
+    return save_sheet_pin(
+        runtime_dir,
+        kind="issuance",
+        spreadsheet_id=spreadsheet_id,
+        sheet_id=sheet_id,
+        title=title,
+    )
+
+
+def save_sheet_pin(
+    runtime_dir: str | Path,
+    *,
+    kind: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    title: str,
+) -> bool:
+    """Persist one worksheet pin into ``google_sheet_pins.json``.
+
+    Args:
+        runtime_dir: Catalog runtime directory.
+        kind: ``kits`` or ``issuance``.
+        spreadsheet_id: Spreadsheet id of the pin.
+        sheet_id: Worksheet gid (``0`` is valid).
+        title: Live or configured tab title.
+
+    Returns:
+        True when the JSON was written.
+    """
+
+    if kind not in {"kits", "issuance"}:
+        return False
     sid = (spreadsheet_id or "").strip()
     name = title or ""
-    if not sid or not name.strip():
+    if not sid:
+        return False
+    if kind == "kits" and not name.strip():
+        return False
+    try:
+        gid = int(sheet_id)
+    except (TypeError, ValueError):
         return False
     path = pins_path(runtime_dir)
     payload = _read_pins_payload(path)
-    payload["kits"] = {
+    payload[kind] = {
         "spreadsheet_id": sid,
-        "sheet_id": int(sheet_id),
+        "sheet_id": gid,
         "title": name,
     }
     try:
@@ -350,6 +440,11 @@ def sheet_link_context_from_config(config: CatalogConfig) -> SheetLinkContext:
         config_title=config.google_issuance_sheet_name,
         fallback_title="Выдача РД ПД",
     )
+    if issuance_gid is None:
+        issuance_gid = _sheet_id_from_meta(
+            Path(config.runtime_dir) / _ISSUANCE_EXPORT_META,
+            spreadsheet_id=issuance_id,
+        )
     return SheetLinkContext(
         kits_spreadsheet_id=kits_id,
         kits_sheet_title=kits_title,
@@ -435,6 +530,28 @@ def _read_pins_payload(path: Path) -> dict[str, Any]:
     except (OSError, ValueError, TypeError):
         return {}
     return raw if isinstance(raw, dict) else {}
+
+
+def _sheet_id_from_meta(
+    path: Path, *, spreadsheet_id: str = ""
+) -> int | None:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    sid = str(raw.get("spreadsheet_id") or "").strip()
+    expected = (spreadsheet_id or "").strip()
+    if expected and sid and sid != expected:
+        return None
+    value = raw.get("sheet_id")
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _pin_or_config(
