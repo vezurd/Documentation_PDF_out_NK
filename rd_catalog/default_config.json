@@ -2,7 +2,7 @@
   "rd_root": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\РД",
   "sq_root": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\РД\\Ответы на SQ запросы",
   "robot_root": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_ГОТОВЫЕ_ДЛЯ_РОБОТА",
-  "an_root": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\АН_RFQ\\_АН",
+  "an_root": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\АН_RFQ",
   "runtime_dir": "%LOCALAPPDATA%\\Documentation_PDF_out_NK\\rd_catalog",
   "db_path": "%LOCALAPPDATA%\\Documentation_PDF_out_NK\\rd_catalog\\rd_catalog.sqlite",
   "robot_flat_structure": false,
