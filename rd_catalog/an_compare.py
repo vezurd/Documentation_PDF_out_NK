@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rd_catalog.an_index import AnAgreedScore
+from rd_catalog.an_index import AnAgreedScore, KIND_HEADER
 from rd_catalog.customer_pi_auto_mto import (
     MtoPairCompareResult,
     compare_document_to_path,
@@ -30,6 +30,7 @@ AN_AGREED_ROW_HEADERS = (
     "Титул",
     "Марка",
     "Ревизия АН",
+    KIND_HEADER,
     AN_AGREED_HEADER,
     "Имя",
     "Дата",
@@ -40,6 +41,7 @@ AN_HEADERS = (
     "Титул",
     "Марка",
     "Ревизия АН",
+    KIND_HEADER,
     AN_AGREED_HEADER,
     "vs Авто МТО",
     "vs MTO РД",

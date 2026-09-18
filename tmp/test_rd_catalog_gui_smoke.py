@@ -1235,6 +1235,7 @@ def main() -> None:
             "Титул",
             "Марка",
             "Ревизия АН",
+            "Вид",
             "К согл. передаче",
             "vs Авто МТО",
             "vs MTO РД",
@@ -1402,7 +1403,8 @@ def main() -> None:
         assert "window/kits_header_v8" not in header_keys
         assert "window/kits_header_v7" not in header_keys
         assert "window/kits_header_v6" not in header_keys
-        assert "window/an_tab_header_v2" in header_keys
+        assert "window/an_tab_header_v3" in header_keys
+        assert "window/an_tab_header_v2" not in header_keys
         assert "window/an_tab_header_v1" not in header_keys
         assert "window/history_header_v8" in header_keys
         assert "window/history_header_v7" not in header_keys

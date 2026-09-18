@@ -1,4 +1,4 @@
-"""AN dump finder tab: one row per AN MTO workbook.
+"""AN dump finder tab: one row per AN MTO xlsx or OD doc/docx.
 
 Qt monitor only. Matching stays in ``an_index``; this widget does not walk UNC.
 """
@@ -56,7 +56,11 @@ from rd_catalog.an_index import (
     AnAgreedScore,
     AnKitHit,
     AnMtoFile,
+    KIND_HEADER,
+    KIND_OD,
     KitAnTargets,
+    an_file_kind,
+    an_is_od,
     match_an_to_kit,
     score_an_files_for_agreed,
 )
@@ -74,6 +78,8 @@ _COL_VS_AUTO = AN_HEADERS.index("vs Авто МТО")
 _COL_VS_RD = AN_HEADERS.index("vs MTO РД")
 _COL_DATE = AN_HEADERS.index("Дата")
 _COL_AGREED = AN_HEADERS.index(AN_AGREED_HEADER)
+_COL_KIND = AN_HEADERS.index(KIND_HEADER)
+_KIND_HEADER_TIP = "MTO — xlsx; OD — ведомость документов (.doc / .docx)."
 _VS_AUTO_HEADER_TIP = (
     "Ревизия в имени (да/нет) и сверка содержимого с файлом Авто МТО из ПИ."
 )
@@ -121,7 +127,7 @@ class _SortItem(QTableWidgetItem):
 
 
 class AnTab(QWidget):
-    """Filterable AN MTO file list with kit jump and a scan button."""
+    """Filterable AN MTO/OD file list with kit jump and a scan button."""
 
     kit_activated = Signal(str, str)
     prepare_context_menu = Signal(QMenu)
@@ -383,6 +389,9 @@ class AnTab(QWidget):
                     settings, "window/an_tab_not_in_kits", False
                 )
             )
+            self._only_od.setChecked(
+                _settings_bool(settings, "window/an_tab_only_od", False)
+            )
         finally:
             self._filter.blockSignals(False)
             for box in boxes:
@@ -405,6 +414,7 @@ class AnTab(QWidget):
         settings.setValue(
             "window/an_tab_not_in_kits", self._not_in_kits.isChecked()
         )
+        settings.setValue("window/an_tab_only_od", self._only_od.isChecked())
 
     def showEvent(self, event) -> None:
         """Start pending content compares when the tab becomes visible."""
@@ -427,6 +437,8 @@ class AnTab(QWidget):
         added = 0
         for row in self._rows:
             if self._kit_is_hidden(row.file.title, row.file.mark):
+                continue
+            if an_is_od(row.file):
                 continue
             auto_path = str(row.targets.auto_mto_path or "").strip()
             rd_path = str(row.targets.rd_mto_path or "").strip()
@@ -595,15 +607,21 @@ class AnTab(QWidget):
 
         filters = QHBoxLayout()
         self._scan_button = QPushButton("Сканировать АН", self)
+        self._scan_button.setToolTip(
+            "Обойти дерево АН и собрать AGCC MTO xlsx и OD doc/docx. "
+            "Skip-папки как у каталога. В file_entry / «Все документы» не пишет."
+        )
         self._scan_button.clicked.connect(self.scan_requested.emit)
         filters.addWidget(self._scan_button)
         filters.addWidget(QLabel("Фильтр:"))
         self._filter = QLineEdit(self)
         self._filter.setPlaceholderText(
-            "Титул, марка, ревизия, путь…"
+            "Титул, марка, ревизия, вид, путь…"
         )
         self._filter.textChanged.connect(self._apply_row_visibility)
         filters.addWidget(self._filter, 1)
+        self._only_od = QCheckBox("только OD", self)
+        self._only_od.setToolTip("Только ведомость документов (.doc / .docx).")
         self._closes = QCheckBox("закрывают Авто МТО", self)
         self._closes.setToolTip(
             "Комплекты, где файлы АН закрывают расхождение Авто МТО с MTO РД."
@@ -612,7 +630,7 @@ class AnTab(QWidget):
             "есть в АН, нет совпадения с MTO РД", self
         )
         self._not_in_kits = QCheckBox("нет в Комплектах", self)
-        for box in (self._closes, self._no_rd_match, self._not_in_kits):
+        for box in (self._only_od, self._closes, self._no_rd_match, self._not_in_kits):
             box.toggled.connect(self._apply_row_visibility)
             filters.addWidget(box)
         layout.addLayout(filters)
@@ -628,6 +646,9 @@ class AnTab(QWidget):
         agreed_header = self._table.horizontalHeaderItem(_COL_AGREED)
         if agreed_header is not None:
             agreed_header.setToolTip(AN_AGREED_HEADER_TIP)
+        kind_header = self._table.horizontalHeaderItem(_COL_KIND)
+        if kind_header is not None:
+            kind_header.setToolTip(_KIND_HEADER_TIP)
         self._table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -657,7 +678,7 @@ class AnTab(QWidget):
         layout.addWidget(self._table, 1)
 
     def _filter_checkboxes(self) -> tuple[QCheckBox, ...]:
-        return (self._closes, self._no_rd_match, self._not_in_kits)
+        return (self._only_od, self._closes, self._no_rd_match, self._not_in_kits)
 
     def _kit_is_hidden(self, title: str, mark: str) -> bool:
         return self._is_banned(title, mark)
@@ -681,10 +702,12 @@ class AnTab(QWidget):
         targets = row.targets
         vs_auto, vs_rd = self._vs_cell_texts(row)
         agreed_text = format_an_agreed_cell(row.agreed_score)
+        kind_text = an_file_kind(file)
         values = {
             "Титул": file.title,
             "Марка": file.mark,
             "Ревизия АН": file.revision_text or "—",
+            KIND_HEADER: kind_text,
             AN_AGREED_HEADER: agreed_text,
             "vs Авто МТО": vs_auto,
             "vs MTO РД": vs_rd,
@@ -721,6 +744,9 @@ class AnTab(QWidget):
                 item.setData(
                     _ROLE_SORT, percent if percent is not None else -1
                 )
+            elif column == _COL_KIND:
+                item = _SortItem(text)
+                item.setData(_ROLE_SORT, 0 if kind_text == KIND_OD else 1)
             else:
                 item = QTableWidgetItem(text)
             item.setData(_ROLE_ROW, row)
@@ -732,15 +758,16 @@ class AnTab(QWidget):
         file = row.file
         targets = row.targets
         pair = self._content_by_key.get(file.path_key)
+        compare_content = not an_is_od(file)
         vs_auto = format_an_vs_cell(
             revision_texts_match(file.revision_text, targets.auto_mto),
             pair.vs_auto if pair is not None else None,
-            has_counterpart=bool(targets.auto_mto_path),
+            has_counterpart=compare_content and bool(targets.auto_mto_path),
         )
         vs_rd = format_an_vs_cell(
             revision_texts_match(file.revision_text, targets.rd_mto),
             pair.vs_rd if pair is not None else None,
-            has_counterpart=bool(targets.rd_mto_path),
+            has_counterpart=compare_content and bool(targets.rd_mto_path),
         )
         return vs_auto, vs_rd
 
@@ -829,6 +856,7 @@ class AnTab(QWidget):
             file.title,
             file.mark,
             file.revision_text,
+            an_file_kind(file),
             format_an_agreed_cell(row.agreed_score),
             vs_auto,
             vs_rd,
@@ -841,10 +869,15 @@ class AnTab(QWidget):
         return needle in " ".join(chunks).casefold()
 
     def _row_matches_filters(self, row: _AnTabRow) -> bool:
-        if self._closes.isChecked() and not row.hit.closes_auto_mto:
+        if self._only_od.isChecked() and not an_is_od(row.file):
             return False
-        if self._no_rd_match.isChecked() and not (
-            row.hit.files and row.hit.match_rd_mto is not True
+        if self._closes.isChecked() and (
+            an_is_od(row.file) or not row.hit.closes_auto_mto
+        ):
+            return False
+        if self._no_rd_match.isChecked() and (
+            an_is_od(row.file)
+            or not (row.hit.files and row.hit.match_rd_mto is not True)
         ):
             return False
         if self._not_in_kits.isChecked():

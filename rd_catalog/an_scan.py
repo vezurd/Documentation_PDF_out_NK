@@ -1,4 +1,4 @@
-"""Read-only AN dump walker. Persists ``an_mto_file`` only (Qt-free)."""
+"""Read-only AN dump walker (MTO xlsx + OD doc/docx). Persists ``an_mto_file`` only (Qt-free)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from rd_catalog.an_index import AnMtoFile, parse_an_mto_file
+from rd_catalog.an_index import AnMtoFile, parse_an_dump_file
 from rd_catalog.config import CatalogConfig
 from rd_catalog.db import CatalogDatabase
 from rd_catalog.perf_log import perf_span
@@ -29,9 +29,10 @@ class AnScanProgress:
 class AnScanOutcome:
     """Result of one AN dump walk.
 
-    ``files_seen`` counts non-lock ``.xlsx`` candidates. ``accepted`` is the
-    number of names that ``parse_an_mto_file`` kept. ``skipped`` is
-    ``files_seen - accepted`` (junk workbooks and stat failures).
+    ``files_seen`` counts non-lock ``.xlsx`` / ``.doc`` / ``.docx``
+    candidates. ``accepted`` is the number of names that
+    ``parse_an_dump_file`` kept. ``skipped`` is ``files_seen - accepted``
+    (junk names and stat failures).
     """
 
     files: tuple[AnMtoFile, ...]
@@ -56,8 +57,11 @@ def _is_excel_lock_name(name: str) -> bool:
     return Path(name).name.startswith("~$")
 
 
-def _is_xlsx_name(name: str) -> bool:
-    return Path(name).suffix.casefold() == ".xlsx"
+_DUMP_SUFFIXES = frozenset({".xlsx", ".doc", ".docx"})
+
+
+def _is_dump_candidate_name(name: str) -> bool:
+    return Path(name).suffix.casefold() in _DUMP_SUFFIXES
 
 
 def _an_root_disabled(root: Path) -> bool:
@@ -189,7 +193,7 @@ def scan_an_dump(
         config: Resolved catalog configuration (``an_root``, ``skip_dirs``,
             ``db_path``).
         persist: When true, replace the snapshot after a complete walk.
-        progress: Optional per-xlsx-candidate callback.
+        progress: Optional per-candidate callback.
         is_cancelled: Cooperative cancellation predicate.
         log: Optional human-readable status lines.
 
@@ -221,7 +225,7 @@ def scan_an_dump(
             emit(failure)
             return _outcome(failure=failure, scanned_at=scanned_at)
 
-        emit(f"Scanning AN dump: {root_text}")
+        emit(f"Scanning AN dump (xlsx/doc): {root_text}")
         accepted: list[AnMtoFile] = []
         errors: list[str] = []
         files_seen = 0
@@ -245,7 +249,7 @@ def scan_an_dump(
                 if _is_cancelled(is_cancelled):
                     cancelled = True
                     break
-                if _is_excel_lock_name(name) or not _is_xlsx_name(name):
+                if _is_excel_lock_name(name) or not _is_dump_candidate_name(name):
                     continue
                 files_seen += 1
                 path = os.path.join(current_root, name)
@@ -256,7 +260,7 @@ def scan_an_dump(
                     skipped += 1
                     report(path, files_seen)
                     continue
-                parsed = parse_an_mto_file(
+                parsed = parse_an_dump_file(
                     path,
                     size=stat.st_size,
                     mtime_ns=stat.st_mtime_ns,

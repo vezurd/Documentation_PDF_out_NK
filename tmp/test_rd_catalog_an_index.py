@@ -13,7 +13,10 @@ from rd_catalog.an_index import (
     KitAnTargets,
     agreed_revision_target,
     an_cell_text,
+    an_file_kind,
+    an_is_od,
     match_an_to_kit,
+    parse_an_dump_file,
     parse_an_mto_file,
     score_an_files_for_agreed,
 )
@@ -74,6 +77,21 @@ def main() -> None:
     assert painted_auto.fill == REV_DIFF_FILL
     assert painted_auto.bold is False
     assert "MTO · рев." in painted_auto.tooltip
+    assert "Файлы АН:" in painted_auto.tooltip
+    identity_lines = [
+        line
+        for line in painted_auto.tooltip.splitlines()
+        if "AGCC.287-1600-POS.MTO-0001_02-AN01_RU.xlsx" in line
+    ]
+    path_lines = [
+        line
+        for line in painted_auto.tooltip.splitlines()
+        if line.strip().startswith("C:\\")
+    ]
+    assert identity_lines
+    assert path_lines
+    assert all("C:\\an" not in line for line in identity_lines)
+    assert closing.parent_dir in path_lines[0]
 
     only_rd = _an_file(
         path=r"C:\an\AGCC.287-1600-POS.MTO-0001_02_RU.xlsx",
@@ -145,6 +163,26 @@ def main() -> None:
         )
         for name in rejects:
             assert _parse_named(root, name) is None, name
+
+        od_ok = parse_an_dump_file(
+            root / "AGCC.287-1600-POS.OD-0001_02-AN01_RU.docx",
+            size=1,
+            mtime_ns=1,
+        )
+        assert od_ok is not None
+        assert an_is_od(od_ok)
+        assert an_file_kind(od_ok) == "OD"
+        assert od_ok.revision_text == "02-AN01"
+        assert parse_an_dump_file(
+            root / "~$AGCC.287-1600-POS.OD-0001_02_RU.docx",
+            size=1,
+            mtime_ns=1,
+        ) is None
+        assert parse_an_dump_file(
+            root / "AGCC.287-1600-POS.OD-0001_02_RU.pdf",
+            size=1,
+            mtime_ns=1,
+        ) is None
 
         db_path = root / "catalog.sqlite"
         database = CatalogDatabase(db_path)
@@ -295,6 +333,64 @@ def main() -> None:
     empty_target = score_an_files_for_agreed((agreed_pack,), KitAnTargets())
     assert empty_target[agreed_pack.path_key].percent is None
     assert empty_target[agreed_pack.path_key].is_best is False
+
+    od_only = _an_file(
+        path=r"\\bcc\an\8260\SKUD_01_рев.AN02\АН\AGCC.287-8260-SKUD.OD-0001_01-AN02_RU.docx",
+        title="8260",
+        mark="SKUD",
+        revision_text="01-AN02",
+        core_stem="AGCC.287-8260-SKUD.OD-0001",
+        discipline_block="OD-0001",
+        name="AGCC.287-8260-SKUD.OD-0001_01-AN02_RU.docx",
+        parent_dir=r"\\bcc\an\8260\SKUD_01_рев.AN02\АН",
+        mtime_ns=1747825200_000_000_000,
+    )
+    lagged_mto = _an_file(
+        path=r"\\bcc\an\8260\SKUD_01_рев.AN02\АН\AGCC.287-8260-SKUD.MTO-0001_01-AN01_RU.xlsx",
+        title="8260",
+        mark="SKUD",
+        revision_text="01-AN01",
+        name="AGCC.287-8260-SKUD.MTO-0001_01-AN01_RU.xlsx",
+        parent_dir=r"\\bcc\an\8260\SKUD_01_рев.AN02\АН",
+        mtime_ns=1747825200_000_000_000,
+    )
+    other_folder_mto = _an_file(
+        path=r"\\bcc\an\8260\SKUD_01_рев.AN01\АН\AGCC.287-8260-SKUD.MTO-0001_01-AN01_RU.xlsx",
+        title="8260",
+        mark="SKUD",
+        revision_text="01-AN01",
+        name="AGCC.287-8260-SKUD.MTO-0001_01-AN01_RU.xlsx",
+        parent_dir=r"\\bcc\an\8260\SKUD_01_рев.AN01\АН",
+        mtime_ns=1758121200_000_000_000,
+    )
+    od_targets = KitAnTargets(
+        auto_mto="01-AN01",
+        issuance="01-AN02",
+        google_f="01-AN02",
+        agreed="01-AN02",
+        agreed_date="14.08.2025",
+    )
+    od_scores = score_an_files_for_agreed(
+        (od_only, lagged_mto, other_folder_mto),
+        od_targets,
+    )
+    assert od_scores[od_only.path_key].is_best is True
+    assert (od_scores[od_only.path_key].percent or 0) > (
+        od_scores[other_folder_mto.path_key].percent or 0
+    )
+    assert (od_scores[lagged_mto.path_key].percent or 0) > (
+        od_scores[other_folder_mto.path_key].percent or 0
+    )
+    assert any(
+        "OD согласованной" in reason
+        for reason in od_scores[lagged_mto.path_key].reasons
+    )
+    hit_od_kit = match_an_to_kit((od_only, lagged_mto), od_targets)
+    assert hit_od_kit.shown_file is lagged_mto
+    assert hit_od_kit.closes_auto_mto is True
+    hit_od_only = match_an_to_kit((od_only,), od_targets)
+    assert hit_od_only.shown_file is od_only
+    assert hit_od_only.closes_auto_mto is False
 
     print("RD catalog AN index: OK")
 

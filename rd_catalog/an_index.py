@@ -1,4 +1,4 @@
-"""AN MTO filename index and kit-revision matching (Qt-free)."""
+"""AN dump filename index (MTO xlsx + OD doc/docx) and kit matching (Qt-free)."""
 
 from __future__ import annotations
 
@@ -26,11 +26,15 @@ from rd_catalog.parse import (
 )
 
 _STEM_MISMATCH_NOTE = "ствол не совпал"
+KIND_MTO = "MTO"
+KIND_OD = "OD"
+KIND_HEADER = "Вид"
+_OD_SUFFIXES = frozenset({".doc", ".docx"})
 
 
 @dataclass(frozen=True, slots=True)
 class AnMtoFile:
-    """One accepted AN MTO workbook, identified from the file name."""
+    """One accepted AN dump file (MTO xlsx or OD Word), from the file name."""
 
     path: str
     path_key: str
@@ -76,7 +80,9 @@ class AnAgreedScore:
     ``percent`` is ``None`` when the kit has no agreed revision (no code A
     and no pipeline status ``agreed``). ``is_best`` prefers an exact
     filename-revision match closest to the letter-A date; folder-name
-    bonuses must not beat a later transfer of the same rev.
+    bonuses must not beat a later transfer of the same rev. An OD in the
+    folder that matches the agreed rev is an extra folder signal (kits
+    may ship without MTO; OD carries the RD revision).
     """
 
     percent: int | None
@@ -176,6 +182,121 @@ def parse_an_mto_file(
     )
 
 
+def parse_an_od_file(
+    path: str | Path,
+    *,
+    size: int,
+    mtime_ns: int,
+) -> AnMtoFile | None:
+    """Parse one AN OD Word file from its name and stats.
+
+    Accepts AGCC ``.doc`` / ``.docx`` whose discipline starts with ``od``.
+    The file body is not opened. Junk names return ``None``.
+
+    Args:
+        path: Local or UNC file path.
+        size: File size from ``stat``.
+        mtime_ns: Nanosecond modification time from ``stat``.
+
+    Returns:
+        A typed dump file, or ``None`` when the name is rejected.
+    """
+
+    original_path = str(path)
+    original_name = Path(original_path).name
+    normalized_name = normalize_unicode_dashes(original_name)
+    if original_name.startswith("~$") or normalized_name.startswith("~$"):
+        return None
+    if Path(normalized_name).suffix.casefold() not in _OD_SUFFIXES:
+        return None
+    if not matches_agcc_filename(normalized_name):
+        return None
+    parts = _agcc_filename_parts(normalized_name)
+    if parts is None or "-" not in parts.title_system:
+        return None
+    if not parts.discipline_block.casefold().startswith("od"):
+        return None
+
+    title, mark = parts.title_system.split("-", 1)
+    tail = AgccFilenamePatterns.split_revision_tail(parts.revision_tail)
+    revision: str | None = None
+    appendix: str | None = None
+    if tail:
+        revision = tail.rev_sheet.split("-", 1)[0]
+        appendix = tail.an
+
+    return AnMtoFile(
+        path=original_path,
+        path_key=make_path_key(original_path),
+        title=title,
+        mark=mark,
+        revision_text=format_revision(revision, appendix),
+        core_stem=parts.core_stem,
+        discipline_block=parts.discipline_block,
+        name=original_name,
+        parent_dir=str(Path(original_path).parent),
+        mtime_ns=int(mtime_ns),
+        size=int(size),
+    )
+
+
+def parse_an_dump_file(
+    path: str | Path,
+    *,
+    size: int,
+    mtime_ns: int,
+) -> AnMtoFile | None:
+    """Parse one AN dump candidate: MTO ``.xlsx`` or OD ``.doc`` / ``.docx``.
+
+    Args:
+        path: Local or UNC file path.
+        size: File size from ``stat``.
+        mtime_ns: Nanosecond modification time from ``stat``.
+
+    Returns:
+        A typed dump file, or ``None`` when the name is rejected.
+    """
+
+    suffix = Path(normalize_unicode_dashes(Path(path).name)).suffix.casefold()
+    if suffix == ".xlsx":
+        return parse_an_mto_file(path, size=size, mtime_ns=mtime_ns)
+    if suffix in _OD_SUFFIXES:
+        return parse_an_od_file(path, size=size, mtime_ns=mtime_ns)
+    return None
+
+
+def an_file_kind(file: AnMtoFile) -> str:
+    """Return ``OD`` or ``MTO`` for a dump row.
+
+    Args:
+        file: Parsed dump record.
+
+    Returns:
+        ``OD`` when the discipline block starts with ``od``, else ``MTO``.
+    """
+
+    if (file.discipline_block or "").casefold().startswith("od"):
+        return KIND_OD
+    return KIND_MTO
+
+
+def an_is_od(file: AnMtoFile) -> bool:
+    """Return whether this dump row is an OD Word file.
+
+    Args:
+        file: Parsed dump record.
+
+    Returns:
+        True when :func:`an_file_kind` is ``OD``.
+    """
+
+    return an_file_kind(file) == KIND_OD
+
+
+def _mto_files(files: Sequence[AnMtoFile]) -> tuple[AnMtoFile, ...]:
+    return tuple(file for file in files if not an_is_od(file))
+
+
 def an_cell_text(hit: AnKitHit) -> str:
     """Return the compact AN cell label for a kit hit.
 
@@ -202,10 +323,12 @@ def match_an_to_kit(
     """Rank AN MTO files of one kit against other-source revision targets.
 
     Caller passes only the files that belong to the kit. Revisions are
-    compared with :func:`revision_texts_match`.
+    compared with :func:`revision_texts_match`. The shown file and
+    ``closes_auto_mto`` prefer MTO workbooks; OD-only kits still get a
+    shown OD (the filename rev of the ведомость).
 
     Args:
-        files: AN MTO files for one kit, used as-is.
+        files: AN dump files for one kit (MTO and/or OD), used as-is.
         targets: Filename revisions from Auto MTO, RD, robot, issuance, F, SQ.
 
     Returns:
@@ -213,14 +336,15 @@ def match_an_to_kit(
     """
 
     ordered = tuple(files)
-    shown = _pick_shown_file(ordered, targets)
+    mto = _mto_files(ordered)
+    shown = _pick_shown_file(mto or ordered, targets)
     shown_revision = shown.revision_text if shown is not None else ""
     stem_matched, stem_note = _stem_fields(shown, targets)
     return AnKitHit(
         files=ordered,
         shown_revision=shown_revision,
         shown_file=shown,
-        closes_auto_mto=_closes_auto_mto(ordered, targets),
+        closes_auto_mto=_closes_auto_mto(mto, targets),
         match_auto_mto=_match_revision(shown_revision, targets.auto_mto),
         match_rd_mto=_match_revision(shown_revision, targets.rd_mto),
         match_robot=_match_revision(shown_revision, targets.robot),
@@ -368,7 +492,7 @@ def score_an_files_for_agreed(
     """Score AN files of one kit against the last agreed transfer.
 
     Args:
-        files: AN MTO files for one title–mark.
+        files: AN dump files for one title–mark (MTO xlsx and/or OD).
         targets: Catalog revisions, including ``agreed`` / ``agreed_date``.
 
     Returns:
@@ -387,9 +511,20 @@ def score_an_files_for_agreed(
             )
             for file in files
         }
+    od_folders = {
+        make_path_key(file.parent_dir)
+        for file in files
+        if an_is_od(file)
+        and revision_texts_match(file.revision_text, agreed) is True
+    }
     raw: list[tuple[AnMtoFile, int, tuple[str, ...]]] = []
     for file in files:
-        points, reasons = _score_an_file_for_agreed(file, targets, agreed)
+        points, reasons = _score_an_file_for_agreed(
+            file,
+            targets,
+            agreed,
+            folder_has_agreed_od=make_path_key(file.parent_dir) in od_folders,
+        )
         raw.append((file, max(0, min(100, points)), reasons))
     best_key = _pick_best_agreed_path(raw, targets, agreed)
     return {
@@ -432,11 +567,12 @@ def _pick_best_agreed_path(
 
     def sort_key(
         item: tuple[AnMtoFile, int, tuple[str, ...]],
-    ) -> tuple[int, int, int, str]:
+    ) -> tuple[int, int, int, int, str]:
         file, percent, _reasons = item
         delta = _date_delta_days(file, targets.agreed_date)
         date_key = delta if delta is not None else 10_000
-        return (date_key, -percent, -file.mtime_ns, file.path_key)
+        od_rank = 0 if an_is_od(file) else 1
+        return (date_key, -percent, od_rank, -file.mtime_ns, file.path_key)
 
     chosen = min(viable, key=sort_key)
     return chosen[0].path_key
@@ -446,6 +582,8 @@ def _score_an_file_for_agreed(
     file: AnMtoFile,
     targets: KitAnTargets,
     agreed: str,
+    *,
+    folder_has_agreed_od: bool = False,
 ) -> tuple[int, tuple[str, ...]]:
     points = 0
     reasons: list[str] = [f"цель: согласованная рев. {agreed}"]
@@ -495,6 +633,9 @@ def _score_an_file_for_agreed(
     if _SQ_ANSWER_RE.search(haystack):
         points -= 14
         reasons.append("похоже на ответ по SQ, не на передачу")
+    if folder_has_agreed_od:
+        points += 12
+        reasons.append("в папке OD согласованной рев. (рев. РД)")
     if _is_later_working_copy(file, targets, agreed):
         points -= 16
         reasons.append("совпала с рабочей/роботом новее согласованной")

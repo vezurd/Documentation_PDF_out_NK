@@ -32,7 +32,7 @@ Chat manual for catalog features. Overlay / scan / MTO compare stay in `AI_rd_ca
 | `build_*_monitor` / `load_catalog_monitor` | Cell join (text/fill/tooltip) for **Qt and WEB** | [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py) — see [AI_rd_catalog_web.mdc](.cursor/rules/AI_rd_catalog_web.mdc) |
 | `list_issuance_journal` | Journal rows (sheet + reviews + orphans) | [`rd_catalog/issuance_review.py`](rd_catalog/issuance_review.py) |
 | `apply_journal_decision` | Persist a journal decision (not `issuance_send`) | [`rd_catalog/issuance_review.py`](rd_catalog/issuance_review.py) |
-| `match_an_to_kit` / `parse_an_mto_file` | AN dump parse + kit match | [`rd_catalog/an_index.py`](rd_catalog/an_index.py) |
+| `match_an_to_kit` / `parse_an_mto_file` / `parse_an_dump_file` | AN dump parse (MTO xlsx + OD doc/docx) + kit match | [`rd_catalog/an_index.py`](rd_catalog/an_index.py) |
 | `replace_an_snapshot` / `list_an_mto_files` / `list_an_files_by_kit` | AN dump snapshot only | `db.py` |
 | `replace_rd_dump_snapshot` / `list_rd_dump_mto_files` | RD-tree MTO dump snapshot only | `db.py` |
 | `_refresh_*` / `_paint_*` | Qt **bind** only (setText / QColor from DTO) | `window.py`, `*_tab.py` |

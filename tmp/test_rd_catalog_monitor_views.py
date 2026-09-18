@@ -772,8 +772,9 @@ class MonitorViewsTests(unittest.TestCase):
         )
 
     def test_an_headers_include_agreed_column(self) -> None:
-        self.assertEqual(AN_HEADERS[3], AN_AGREED_HEADER)
-        self.assertEqual(AN_HEADERS[3], "К согл. передаче")
+        self.assertEqual(AN_HEADERS[3], "Вид")
+        self.assertEqual(AN_HEADERS[4], AN_AGREED_HEADER)
+        self.assertEqual(AN_HEADERS[4], "К согл. передаче")
         row = KitMatrixRow(
             title="2230",
             mark="KSB",

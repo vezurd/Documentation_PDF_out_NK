@@ -72,6 +72,7 @@ from rd_catalog.an_index import (
     AnKitHit,
     AnMtoFile,
     KitAnTargets,
+    an_file_kind,
     match_an_to_kit,
 )
 from rd_catalog.an_scan import AnScanProgress, _an_root_disabled
@@ -2090,7 +2091,7 @@ class CatalogWindow(QMainWindow):
             # v4: «Сверка Авто МТО» after pin; do not restore v3.
             ("window/mto_worklist_header_v4", "_mto_worklist_table"),
             ("window/issuance_journal_header_v1", "_issuance_journal_table"),
-            ("window/an_tab_header_v2", "_an_table"),
+            ("window/an_tab_header_v3", "_an_table"),
             ("window/rd_dump_tab_header_v2", "_rd_dump_table"),
             ("window/handoff_export_header_v2", "_handoff_export_table"),
             # v10: «Ок» after «Марка»; do not restore v9.
@@ -7702,6 +7703,7 @@ class CatalogWindow(QMainWindow):
             ("Титул", payload.title),
             ("Марка", payload.mark),
             ("Ревизия АН", payload.revision_text or "—"),
+            ("Вид", an_file_kind(payload)),
             ("Имя", payload.name),
             ("Папка", payload.parent_dir),
             ("Путь", payload.path),
@@ -9267,8 +9269,8 @@ class CatalogWindow(QMainWindow):
         self._set_workers_enabled(False)
         self._cancel_action.setEnabled(True)
         self._progress.setRange(0, 0)
-        self._append_log("Скан АН…")
-        self.statusBar().showMessage("Сканирование АН…")
+        self._append_log("Скан АН (xlsx/doc)…")
+        self.statusBar().showMessage("Сканирование АН (xlsx/doc)…")
         self._update_action_states()
         thread.start()
 

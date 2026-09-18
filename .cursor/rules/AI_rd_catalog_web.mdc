@@ -63,7 +63,7 @@ Heatmap: universe = present + canonical layout + не skip + не ban (как `_
 
 Перечень: Google `нет комплекта` / `нет статуса` / `есть`; связь `F✓/✗ · РД✓/✗ · MTO✓/✗` — функции в `monitor_views`, не в `mto_worklist_tab.py`.
 
-АН: `format_an_vs_cell` + кэш `an_content_compare_cache.json`. Колонка «К согл. передаче» и подсветка лучшей папки — `score_an_files_for_agreed` / `AN_HEADERS` в join, не в JS. WEB не ставит очередь сверки.
+АН: `format_an_vs_cell` + кэш `an_content_compare_cache.json`. Колонка «К согл. передаче» и подсветка лучшей папки — `score_an_files_for_agreed` / `AN_HEADERS` в join (включая **Вид** MTO/OD), не в JS. WEB не ставит очередь сверки. OD vs-* — только ревизия.
 
 Журнал: строки `list_issuance_journal` + display cells; haystack includes ``титул-марка``; `paints_kits_issuance` marks the row behind Комплекты «Выдача · рев.» (JS only reads the flag). WEB **без** `apply_journal_decision`.
 

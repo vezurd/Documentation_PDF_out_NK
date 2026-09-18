@@ -17,6 +17,8 @@ from rd_catalog.kits import kit_identity_key
 
 _VALID_NAME = "AGCC.287-1600-POS.MTO-0001_02-AN01_RU.xlsx"
 _HIDDEN_VALID_NAME = "AGCC.287-1600-POS.MTO-0001_02_RU.xlsx"
+_OD_NAME = "AGCC.287-1600-POS.OD-0001_02-AN01_RU.docx"
+_OD_LOCK_NAME = "~$AGCC.287-1600-POS.OD-0001_02_RU.docx"
 _LOCK_NAME = "~$AGCC.287-1600-POS.MTO-0001_02_RU.xlsx"
 _FORBIDDEN_NAMES = (
     "scan_catalog",
@@ -83,8 +85,11 @@ def main() -> None:
         db_path = root / "catalog.sqlite"
 
         _write(an_root / _VALID_NAME)
+        _write(an_root / _OD_NAME)
         _write(an_root / "notes.xlsx")
+        _write(an_root / "notes.docx")
         _write(an_root / _LOCK_NAME)
+        _write(an_root / _OD_LOCK_NAME)
         _write(an_root / "ignore.pdf", b"%PDF")
         _write(an_root / "old" / _HIDDEN_VALID_NAME)
         _write(an_root / "архив" / _HIDDEN_VALID_NAME)
@@ -98,17 +103,20 @@ def main() -> None:
         assert isinstance(first, AnScanOutcome)
         assert first.failure is None, first.failure
         assert first.cancelled is False
-        assert first.accepted == 1, first
-        assert first.files_seen == 2, first  # valid + notes.xlsx; lock/pdf/skipped-dir excluded
-        assert first.skipped == 1
-        assert len(first.files) == 1
+        assert first.accepted == 2, first
+        assert first.files_seen == 4, first  # mto + od + notes.xlsx + notes.docx
+        assert first.skipped == 2
+        assert len(first.files) == 2
+        names = {item.name for item in first.files}
+        assert _VALID_NAME in names
+        assert _OD_NAME in names
         assert first.files[0].title == "1600"
         assert first.files[0].mark == "POS"
         assert first.scanned_at
         by_kit = database.list_an_files_by_kit()
         pos_files = by_kit[kit_identity_key("1600", "POS")]
-        assert len(pos_files) == 1
-        assert pos_files[0].name == _VALID_NAME
+        assert len(pos_files) == 2
+        assert {item.name for item in pos_files} == {_VALID_NAME, _OD_NAME}
         hidden_names = {Path(item.path).name for item in database.list_an_mto_files()}
         assert _HIDDEN_VALID_NAME not in hidden_names
 
@@ -119,21 +127,21 @@ def main() -> None:
         )
         assert cancelled.cancelled is True
         assert cancelled.failure is None
-        assert len(database.list_an_mto_files()) == 1
+        assert len(database.list_an_mto_files()) == 2
 
         empty_root = scan_an_dump(replace(config, an_root=Path("")), persist=True)
         assert empty_root.failure
         assert empty_root.accepted == 0
         kept = database.list_an_mto_files()
-        assert len(kept) == 1
-        assert kept[0].name == _VALID_NAME
+        assert len(kept) == 2
+        assert {item.name for item in kept} == {_VALID_NAME, _OD_NAME}
 
         missing_root = scan_an_dump(
             replace(config, an_root=root / "missing_an"),
             persist=True,
         )
         assert missing_root.failure
-        assert len(database.list_an_mto_files()) == 1
+        assert len(database.list_an_mto_files()) == 2
 
         junk = scan_an_dump(replace(config, an_root=junk_root), persist=True)
         assert junk.failure is None, junk.failure

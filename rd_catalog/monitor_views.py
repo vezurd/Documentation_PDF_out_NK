@@ -39,9 +39,13 @@ from rd_catalog.an_compare_cache import (
 from rd_catalog.an_index import (
     AnAgreedScore,
     AnMtoFile,
+    KIND_HEADER,
+    KIND_OD,
     KitAnTargets,
     agreed_revision_target,
     an_cell_text,
+    an_file_kind,
+    an_is_od,
     match_an_to_kit,
     score_an_files_for_agreed,
 )
@@ -5099,23 +5103,26 @@ def _build_an_row(
     vs_rd_content = an_result_from_entry(entry.get("vs_rd")) if entry else None
     auto_match = revision_texts_match(file.revision_text, targets.auto_mto)
     rd_match = revision_texts_match(file.revision_text, targets.rd_mto)
+    compare_content = not an_is_od(file)
     vs_auto = format_an_vs_cell(
         auto_match,
         vs_auto_content,
-        has_counterpart=bool(targets.auto_mto_path),
+        has_counterpart=compare_content and bool(targets.auto_mto_path),
     )
     vs_rd = format_an_vs_cell(
         rd_match,
         vs_rd_content,
-        has_counterpart=bool(targets.rd_mto_path),
+        has_counterpart=compare_content and bool(targets.rd_mto_path),
     )
     agreed_text = format_an_agreed_cell(agreed_score)
     agreed_fill = an_agreed_cell_fill(agreed_score)
     row_fill = an_agreed_row_fill(agreed_score)
+    kind_text = an_file_kind(file)
     cells = {
         "Титул": MonitorCell(text=file.title),
         "Марка": MonitorCell(text=file.mark),
         "Ревизия АН": MonitorCell(text=file.revision_text or "—"),
+        KIND_HEADER: MonitorCell(text=kind_text, sort_key=0 if kind_text == KIND_OD else 1),
         AN_AGREED_HEADER: MonitorCell(
             text=agreed_text,
             tooltip=an_agreed_cell_tooltip(agreed_score) or AN_AGREED_HEADER_TIP,
@@ -5190,6 +5197,7 @@ def _build_an_row(
         file.title,
         file.mark,
         file.revision_text,
+        kind_text,
         agreed_text,
         vs_auto,
         vs_rd,

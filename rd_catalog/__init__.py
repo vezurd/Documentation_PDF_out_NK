@@ -9,6 +9,7 @@ from rd_catalog.an_index import (
     an_cell_text,
     match_an_to_kit,
     parse_an_mto_file,
+    parse_an_dump_file,
 )
 from rd_catalog.an_scan import AnScanOutcome, AnScanProgress, scan_an_dump
 from rd_catalog.rd_dump_scan import (
@@ -374,6 +375,7 @@ __all__ = [
     "parse_google_matrix",
     "parse_catalog_file",
     "parse_an_mto_file",
+    "parse_an_dump_file",
     "pick_journal_row_for_issuance",
     "parse_transfer_folder",
     "path_is_as_build",

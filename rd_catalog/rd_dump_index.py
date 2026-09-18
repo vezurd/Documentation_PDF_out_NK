@@ -1,38 +1,33 @@
 """RD-tree dump index for MTO xlsx and OD doc/docx (Qt-free).
 
-MTO names reuse ``parse_an_mto_file``. OD uses the same AGCC mask with
-discipline ``od*`` and ``.doc`` / ``.docx``. Layout flags are lexical
-against ``rd_root`` and are not stored in SQLite.
+Parse reuses ``parse_an_dump_file``. Layout flags are lexical against
+``rd_root`` and are not stored in SQLite.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from utils.file_name_converts import AgccFilenamePatterns
-
 from rd_catalog.an_compare import AN_AGREED_HEADER
-from rd_catalog.an_index import AnMtoFile, parse_an_mto_file
-from rd_catalog.kits import format_revision
-from rd_catalog.models import make_path_key
+from rd_catalog.an_index import (
+    KIND_MTO,
+    KIND_OD,
+    AnMtoFile,
+    an_file_kind,
+    an_is_od,
+    parse_an_dump_file,
+)
 from rd_catalog.parse import (
-    _agcc_filename_parts,
     classify_rd_layout_reason,
     has_canonical_rd_issued_path,
     layout_reason_label,
-    matches_agcc_filename,
-    normalize_unicode_dashes,
 )
 
 KIND_HEADER = "Вид"
-KIND_MTO = "MTO"
-KIND_OD = "OD"
 CANON_HEADER = "Канон."
 LAYOUT_HEADER = "Раскладка"
 RD_DUMP_CANON_YES_FILL = "#E2F2E1"
 RD_DUMP_CANON_NO_FILL = "#F7E8BE"
-
-_OD_SUFFIXES = frozenset({".doc", ".docx"})
 
 _LAYOUT_SHORT: dict[str, str] = {
     "no_gate": "нет шлюза",
@@ -107,45 +102,7 @@ def parse_rd_dump_file(
         A typed dump file, or ``None`` when the name is rejected.
     """
 
-    original_path = str(path)
-    original_name = Path(original_path).name
-    normalized_name = normalize_unicode_dashes(original_name)
-    if original_name.startswith("~$") or normalized_name.startswith("~$"):
-        return None
-    suffix = Path(normalized_name).suffix.casefold()
-    if suffix == ".xlsx":
-        return parse_an_mto_file(path, size=size, mtime_ns=mtime_ns)
-    if suffix not in _OD_SUFFIXES:
-        return None
-    if not matches_agcc_filename(normalized_name):
-        return None
-    parts = _agcc_filename_parts(normalized_name)
-    if parts is None or "-" not in parts.title_system:
-        return None
-    if not parts.discipline_block.casefold().startswith("od"):
-        return None
-
-    title, mark = parts.title_system.split("-", 1)
-    tail = AgccFilenamePatterns.split_revision_tail(parts.revision_tail)
-    revision: str | None = None
-    appendix: str | None = None
-    if tail:
-        revision = tail.rev_sheet.split("-", 1)[0]
-        appendix = tail.an
-
-    return AnMtoFile(
-        path=original_path,
-        path_key=make_path_key(original_path),
-        title=title,
-        mark=mark,
-        revision_text=format_revision(revision, appendix),
-        core_stem=parts.core_stem,
-        discipline_block=parts.discipline_block,
-        name=original_name,
-        parent_dir=str(Path(original_path).parent),
-        mtime_ns=int(mtime_ns),
-        size=int(size),
-    )
+    return parse_an_dump_file(path, size=size, mtime_ns=mtime_ns)
 
 
 parse_rd_dump_mto_file = parse_rd_dump_file
@@ -161,9 +118,7 @@ def rd_dump_kind(file: AnMtoFile) -> str:
         ``OD`` when the discipline block starts with ``od``, else ``MTO``.
     """
 
-    if (file.discipline_block or "").casefold().startswith("od"):
-        return KIND_OD
-    return KIND_MTO
+    return an_file_kind(file)
 
 
 def rd_dump_is_od(file: AnMtoFile) -> bool:
@@ -176,7 +131,7 @@ def rd_dump_is_od(file: AnMtoFile) -> bool:
         True when :func:`rd_dump_kind` is ``OD``.
     """
 
-    return rd_dump_kind(file) == KIND_OD
+    return an_is_od(file)
 
 
 def rd_dump_is_canonical(path: str, rd_root: str | Path) -> bool:
