@@ -423,6 +423,31 @@ def main() -> None:
     assert cover_html_row.f_line.endswith("auto")
     assert parse_history_line(cover_html_row.f_line).mto_revision == "0"
 
+    cover_prose = parse_approval_mail_text(
+        subject="Сопроводительное письмо AGCC.287-BCC-PGS-TRM-000249",
+        body=(
+            "Добрый день!\n\n"
+            "Направляю на рассмотрение РД по титулу 8950 марка SOO2 рев.03.\n\n"
+            "Запись в Сapital Рroject: AGCC.287-BCC-PGS-TRM-000249\n"
+        ),
+        sent_at=datetime(2025, 2, 17, 13, 44, tzinfo=_TZ),
+    )
+    assert cover_prose.error == ""
+    assert cover_prose.kind == "cover_letter"
+    assert cover_prose.stage == "tdo_sent"
+    assert cover_prose.title == "8950"
+    assert cover_prose.mark == "SOO2"
+    assert cover_prose.od_revision == "03"
+    assert cover_prose.send_transmittal.endswith("TRM-000249")
+    assert cover_prose.f_line == (
+        "17.02.2025 отпр на ТДО рев. 03 AGCC.287-BCC-PGS-TRM-000249 MTO Нет auto"
+    )
+    cover_prose_event = parse_history_line(cover_prose.f_line)
+    assert cover_prose_event.revision == "03"
+    assert cover_prose_event.mto_absent is True
+    assert cover_prose_event.from_robot_auto is True
+    assert cover_prose.sheet_revision == "Рев. 03"
+
     cover_not_reply = parse_approval_mail_text(
         subject="RE: Сопроводительное письмо AGCC.287-BCC-PGS-TRM-000661 КСБ",
         body=_TDO_LOADED_INCOMING,

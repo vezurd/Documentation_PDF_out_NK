@@ -367,7 +367,11 @@ def _parse_cover_letter(
     kit_from_transmittal: KitLookup | None,
     kit_hint: tuple[str, str] | None = None,
 ) -> ApprovalMail:
-    """Parse an outgoing BCC cover letter into a ``tdo_sent`` journal event."""
+    """Parse an outgoing BCC cover letter into a ``tdo_sent`` journal event.
+
+    Prefers the Owner Document Number table, then AGCC stems. A letter
+    without filenames still takes ``по титулу 8950 марка SOO2 рев.03``.
+    """
 
     documents = _parse_cover_documents(body)
     if not documents:
@@ -375,6 +379,7 @@ def _parse_cover_letter(
     date = _format_sent_date(sent_at)
     trm = _first_trm(subject) or _first_trm(body)
     kits = _unique_kits(documents)
+    prose = _pick_kit_prose(body)
     error = ""
     title = ""
     mark = ""
@@ -387,6 +392,10 @@ def _parse_cover_letter(
         title, mark = kits[0]
         if not is_rd_kit_mark(mark):
             error = f"Марка {mark!r} не является комплектом РД."
+    elif prose is not None:
+        title, mark = prose[0], prose[1]
+        if not is_rd_kit_mark(mark):
+            error = f"Марка {mark!r} не является комплектом РД."
     else:
         title, mark, error = _resolve_tdo_kit(
             send_trm=trm,
@@ -395,6 +404,13 @@ def _parse_cover_letter(
         )
     od_docs = [item for item in documents if item.is_od]
     od_revision = od_docs[0].revision if od_docs else _highest_revision(documents)
+    if (
+        not od_revision
+        and prose is not None
+        and title
+        and kit_identity_key(title, mark) == kit_identity_key(prose[0], prose[1])
+    ):
+        od_revision = prose[2]
     stage = "tdo_sent"
     f_line = ""
     if not error and date and stage:
