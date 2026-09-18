@@ -1677,6 +1677,51 @@ class PipelineStatusTooltipTests(unittest.TestCase):
         self.assertIn("этого цикла", review.tooltip)
         self.assertIn("Статус рассмотрения", approval.tooltip)
 
+    def test_review_approval_append_auto_from_f_line(self) -> None:
+        google = _google_kit(
+            title="8950",
+            mark="SOT5",
+            sheet="02",
+            lines=(
+                "10.12.2025 код B рев. 02 TRM-OLD auto",
+                "20.08.2026 прошла ТДО рев. 02 TRM-8950 auto",
+            ),
+        )
+        pipeline = KitPipelineRow(
+            title="8950",
+            mark="SOT5",
+            status="tdo_review",
+            official_revision_text="02",
+            tdo_date="20.08.2026",
+            code="B",
+            code_stale=True,
+            code_revision_text="02",
+            code_date="10.12.2025",
+        )
+        row = KitMatrixRow(
+            title="8950",
+            mark="SOT5",
+            title_system="8950-SOT5",
+            rd=SourceKitSnapshot(present=True, revision_text="02"),
+            robot=SourceKitSnapshot(),
+            sq=SourceKitSnapshot(),
+            google=google,
+            issuance=None,
+            flags=(),
+            summary=KitSummary.ALIGNED,
+        )
+        painted = _paint_kits(row, pipeline)
+        review = painted.cells["Статус рассмотрения"]
+        approval = painted.cells["Статус согласования"]
+        self.assertTrue(review.text.endswith(" (auto)"))
+        self.assertTrue(approval.text.endswith(" (auto)"))
+        self.assertIn("прошлый цикл", approval.text)
+        self.assertIn("заканчивается на auto", review.tooltip)
+        self.assertIn("окончанием auto", approval.tooltip)
+        f_rev = painted.cells["Google · рев. F"]
+        self.assertNotIn("auto", f_rev.text.casefold())
+        self.assertIn("(auto)", painted.haystack)
+
     def test_v3_google_face_ahead_puts_b_on_review(self) -> None:
         google = _google_kit(
             title="6550",

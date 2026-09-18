@@ -7,7 +7,7 @@ alwaysApply: false
 # RD Catalog — WEB + dual GUI
 
 Алгоритмы и схема: [AI_rd_catalog.mdc](.cursor/rules/AI_rd_catalog.mdc), [AI_rd_catalog_db.mdc](.cursor/rules/AI_rd_catalog_db.mdc). Этот файл — **манифест двух клиентов** (Qt и браузер) над одним join-слоем.
-WEB биндит те же versioned `pipeline_review_label` / `pipeline_approval_label` и `pipeline_*_tooltip` из [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py) ([AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc); константа `PIPELINE_DISPLAY_VERSION` в [`rd_catalog/pipeline.py`](rd_catalog/pipeline.py), сейчас v3). Не дописывать ` · B` / `—` / stale-суффикс / `выдача` в JS. Ctrl+клик — только Qt, у WEB нет.
+WEB биндит те же versioned `pipeline_review_label` / `pipeline_approval_label` и `pipeline_*_tooltip` из [`rd_catalog/monitor_views.py`](rd_catalog/monitor_views.py) ([AI_rd_catalog_pipeline_status.mdc](.cursor/rules/AI_rd_catalog_pipeline_status.mdc); константа `PIPELINE_DISPLAY_VERSION` в [`rd_catalog/pipeline.py`](rd_catalog/pipeline.py), сейчас v3). Не дописывать ` · B` / `—` / stale-суффикс / `выдача` / ` (auto)` в JS. Ctrl+клик — только Qt, у WEB нет.
 
 ## 1. Слои (не смешивать)
 

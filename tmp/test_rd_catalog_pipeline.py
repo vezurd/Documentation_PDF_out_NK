@@ -56,6 +56,7 @@ from rd_catalog.pipeline import (
     APPROVAL_REL_PREVIOUS,
     PIPELINE_DISPLAY_V1,
     PIPELINE_DISPLAY_V2,
+    PIPELINE_F_AUTO_SUFFIX,
     pipeline_approval_label,
     pipeline_approval_relation,
     pipeline_review_label,
@@ -137,6 +138,7 @@ def _event(
     appendix: str | None = None,
     transmittals: tuple[str, ...] = (),
     raw: str | None = None,
+    from_robot_auto: bool = False,
 ) -> KitEvent:
     rev = format_revision(revision, appendix)
     default = f"{date} {stage_label}"
@@ -153,6 +155,7 @@ def _event(
         appendix=appendix,
         transmittals=transmittals,
         parsed=True,
+        from_robot_auto=from_robot_auto,
     )
 
 
@@ -2756,6 +2759,127 @@ def test_pipeline_display_v2_current_bc_on_review() -> None:
     assert pipeline_approval_label(agreed_a) == "—"
 
 
+def test_pipeline_labels_append_auto_from_f_line() -> None:
+    tdo_auto = _event(
+        date="20.08.2026",
+        stage="tdo_passed",
+        stage_label="прошла ТДО",
+        revision="02",
+        from_robot_auto=True,
+    )
+    tdo_row = KitPipelineRow(
+        title="8950",
+        mark="SOT5",
+        status=KitPipelineStatus.TDO_REVIEW.value,
+        official_revision_text="02",
+        tdo_date="20.08.2026",
+    )
+    assert pipeline_review_label(tdo_row, events=(tdo_auto,)).endswith(
+        PIPELINE_F_AUTO_SUFFIX
+    )
+    assert PIPELINE_F_AUTO_SUFFIX not in pipeline_review_label(tdo_row)
+
+    foreign_auto = _event(
+        date="01.01.2026",
+        stage="tdo_passed",
+        stage_label="прошла ТДО",
+        revision="01",
+        from_robot_auto=True,
+    )
+    tdo_human = _event(
+        date="20.08.2026",
+        stage="tdo_passed",
+        stage_label="прошла ТДО",
+        revision="02",
+    )
+    assert PIPELINE_F_AUTO_SUFFIX not in pipeline_review_label(
+        tdo_row, events=(foreign_auto, tdo_human)
+    )
+
+    letter_auto = _event(
+        date="10.12.2025",
+        stage="code_b",
+        stage_label="код B",
+        revision="02",
+        from_robot_auto=True,
+    )
+    stale = replace(
+        tdo_row,
+        code="B",
+        code_revision_text="02",
+        code_date="10.12.2025",
+        code_stale=True,
+    )
+    approval = pipeline_approval_label(stale, events=(letter_auto,))
+    assert approval.endswith(PIPELINE_F_AUTO_SUFFIX)
+    assert "прошлый цикл" in approval
+    assert pipeline_approval_label(stale) == (
+        "B · 02 · 10.12.2025 · прошлый цикл"
+    )
+
+    agreed = KitPipelineRow(
+        title="2000",
+        mark="KSB",
+        status=KitPipelineStatus.AGREED.value,
+        code="A",
+        code_revision_text="01-AN01",
+        code_date="21.11.2025",
+        official_revision_text="01-AN01",
+    )
+    code_a_auto = _event(
+        date="21.11.2025",
+        stage="code_a",
+        stage_label="код A",
+        revision="01",
+        appendix="01",
+        from_robot_auto=True,
+    )
+    assert pipeline_review_label(agreed, events=(code_a_auto,)).endswith(
+        PIPELINE_F_AUTO_SUFFIX
+    )
+    assert pipeline_approval_label(agreed, events=(code_a_auto,)) == "—"
+
+    current_b = KitPipelineRow(
+        title="7700",
+        mark="POS",
+        status=KitPipelineStatus.TDO_REVIEW.value,
+        code="B",
+        code_revision_text="01",
+        code_date="12.06.2026",
+        official_revision_text="01",
+        tdo_date="10.06.2026",
+    )
+    tdo_pass = _event(
+        date="10.06.2026",
+        stage="tdo_passed",
+        stage_label="прошла ТДО",
+        revision="01",
+    )
+    code_b_auto = _event(
+        date="12.06.2026",
+        stage="code_b",
+        stage_label="код B",
+        revision="01",
+        from_robot_auto=True,
+    )
+    review_b = pipeline_review_label(
+        current_b, events=(tdo_pass, code_b_auto)
+    )
+    assert " · B · " in review_b
+    assert review_b.endswith(PIPELINE_F_AUTO_SUFFIX)
+    assert pipeline_approval_label(
+        current_b, events=(tdo_pass, code_b_auto)
+    ) == "—"
+    v1_approval = pipeline_approval_label(
+        current_b, events=(tdo_pass, code_b_auto), version=PIPELINE_DISPLAY_V1
+    )
+    assert v1_approval.endswith(PIPELINE_F_AUTO_SUFFIX)
+
+    as_build = replace(tdo_row, review_as_build=True)
+    as_build_label = pipeline_review_label(as_build, events=(tdo_auto,))
+    assert as_build_label.endswith(f" (AB){PIPELINE_F_AUTO_SUFFIX}")
+
+
 def test_pipeline_review_label_agreed_date_not_send_date() -> None:
     row = KitPipelineRow(
         title="8950",
@@ -3625,6 +3749,7 @@ def main() -> None:
     test_review_label_appends_send_date_for_all_statuses()
     test_pipeline_approval_relation_suffix()
     test_pipeline_display_v2_current_bc_on_review()
+    test_pipeline_labels_append_auto_from_f_line()
     test_pipeline_review_label_agreed_date_not_send_date()
     test_pipeline_display_v3_google_face_ahead_of_disk()
     test_pipeline_display_v3_de_caption_does_not_force_agreed()

@@ -156,6 +156,7 @@ from rd_catalog.pipeline import (
     PIPELINE_DISPLAY_V2,
     PIPELINE_DISPLAY_V3,
     PIPELINE_DISPLAY_VERSION,
+    PIPELINE_F_AUTO_SUFFIX,
     PIPELINE_FACE_DE,
     PIPELINE_FACE_F,
     PIPELINE_FACE_ISSUANCE,
@@ -1851,8 +1852,8 @@ def format_kits_google_f_rev(event: KitEvent | None) -> str:
 
     OD revision stays the same as ``last_event_parts`` (still a 4-tuple).
     When the F line has an MTO suffix, append `` · MTO <rev>`` or
-    `` · MTO Нет``. The journal token ``auto`` stays only in Google
-    column F; this cell does not show it.
+    `` · MTO Нет``. The journal token ``auto`` is not shown here;
+    review/approval cells append `` (auto)`` instead.
 
     Args:
         event: Last Google F event, or ``None``.
@@ -3581,7 +3582,7 @@ def pipeline_review_tooltip(
         ]
         how_lines = [
             "Как читать подпись:",
-            "  статус [(дата ТДО или согласования)][ · B|C] · {выдача|D/E|F|РД} {рев.}[ · отпр. {дата}][ (AB)]",
+            "  статус [(дата ТДО или согласования)][ · B|C] · {выдача|D/E|F|РД} {рев.}[ · отпр. {дата}][ (AB)][ (auto)]",
             "выдача / D/E / F — рев. из таблиц. «РД» в подписи — только когда таблицы совпадают с папкой РД.",
             "Дата в скобках у «Прошел ТДО» — прохождение ТДО / вх.контроля этого табличного цикла.",
             "Дата в скобках у «Согласован» — код A или F «согласовано», не дата отправки.",
@@ -3605,7 +3606,7 @@ def pipeline_review_tooltip(
         ]
         how_lines = [
             "Как читать подпись:",
-            "  статус [(дата ТДО или согласования)][ · B|C] · РД {рев.}[ · отпр. {дата}][ (AB)]",
+            "  статус [(дата ТДО или согласования)][ · B|C] · РД {рев.}[ · отпр. {дата}][ (AB)][ (auto)]",
             "РД — актуальный пакет в папке РД, то же что «РД · рев.».",
             "Дата в скобках у «Прошел ТДО» — прохождение ТДО / вх.контроля этой РД-рев.",
             "Дата в скобках у «Согласован» — код A или F «согласовано», не дата отправки.",
@@ -3622,7 +3623,7 @@ def pipeline_review_tooltip(
         ]
         how_lines = [
             "Как читать подпись:",
-            "  статус [(дата ТДО или согласования)] · РД {рев.}[ · отпр. {дата}][ (AB)]",
+            "  статус [(дата ТДО или согласования)] · РД {рев.}[ · отпр. {дата}][ (AB)][ (auto)]",
             "РД — актуальный пакет в папке РД, то же что «РД · рев.».",
             "Дата в скобках у «Прошел ТДО» — прохождение ТДО / вх.контроля этой РД-рев.",
             "Дата в скобках у «Согласован» — код A или F «согласовано», не дата отправки.",
@@ -3630,6 +3631,11 @@ def pipeline_review_tooltip(
             f"РД рев.: {official or '—'}",
         ]
     lines = [label, "", *column_lines, "", *how_lines]
+    if view.from_robot_auto:
+        lines.append(
+            "хвост (auto) — опорная строка F этой колонки заканчивается на auto "
+            "(запись каталога)."
+        )
     cycle_letter = view.cycle_letter
     if cycle_letter:
         lines.append(
@@ -3790,6 +3796,11 @@ def pipeline_approval_tooltip(
         f"{ISSUANCE_SHEET_LABEL} букву A/B/C не задаёт.",
         f"{KITS_DE_SHEET_LABEL} на букву не влияют.",
     ]
+    if label.endswith(PIPELINE_F_AUTO_SUFFIX):
+        lines.append(
+            "хвост (auto) — письмо взято из строки F с окончанием auto "
+            "(запись каталога)."
+        )
     if not pipeline.code:
         lines.append("В столбце F нет кода A/B/C.")
         if google is not None and google.events:

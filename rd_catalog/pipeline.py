@@ -77,6 +77,8 @@ PIPELINE_DISPLAY_V3 = 3
 #     Когда табличная рев. = РД, подпись как v2 (``РД {рев.}``). Переключить:
 #     2 или 1, если v3 не зайдёт.
 PIPELINE_DISPLAY_VERSION = PIPELINE_DISPLAY_V3
+# Комплекты review/approval: F line ended with ``auto`` (catalog writer).
+PIPELINE_F_AUTO_SUFFIX = " (auto)"
 
 PIPELINE_FACE_RD = "rd"
 PIPELINE_FACE_ISSUANCE = "issuance"
@@ -403,6 +405,7 @@ class PipelineReviewDisplay:
     send_date: str
     cycle_letter: str
     agreed_date: str = ""
+    from_robot_auto: bool = False
 
 
 def _display_version(version: int | None) -> int:
@@ -724,6 +727,12 @@ def pipeline_review_display(
         send_date = _send_date_for_revision(
             face, events=resolved, issuance=issuance
         )
+        cycle_letter = _cycle_letter_for_display(
+            row,
+            version=ver,
+            uses_sheet_face=True,
+            face_revision=face,
+        )
         return PipelineReviewDisplay(
             status=status,
             face_revision=face,
@@ -731,12 +740,7 @@ def pipeline_review_display(
             uses_sheet_face=True,
             pass_date=pass_date,
             send_date=send_date,
-            cycle_letter=_cycle_letter_for_display(
-                row,
-                version=ver,
-                uses_sheet_face=True,
-                face_revision=face,
-            ),
+            cycle_letter=cycle_letter,
             agreed_date=_agreed_date_for_display(
                 row,
                 status=status,
@@ -744,9 +748,21 @@ def pipeline_review_display(
                 uses_sheet_face=True,
                 events=resolved,
             ),
+            from_robot_auto=_review_label_from_robot_auto(
+                status=status,
+                face_revision=face,
+                cycle_letter=cycle_letter,
+                events=resolved,
+            ),
         )
     official = (row.official_revision_text or "").strip()
     status = row.status
+    cycle_letter = _cycle_letter_for_display(
+        row,
+        version=ver,
+        uses_sheet_face=False,
+        face_revision=official,
+    )
     return PipelineReviewDisplay(
         status=status,
         face_revision=official,
@@ -758,17 +774,18 @@ def pipeline_review_display(
         send_date=_send_date_for_revision(
             official, events=resolved, issuance=issuance
         ),
-        cycle_letter=_cycle_letter_for_display(
-            row,
-            version=ver,
-            uses_sheet_face=False,
-            face_revision=official,
-        ),
+        cycle_letter=cycle_letter,
         agreed_date=_agreed_date_for_display(
             row,
             status=status,
             face_revision=official,
             uses_sheet_face=False,
+            events=resolved,
+        ),
+        from_robot_auto=_review_label_from_robot_auto(
+            status=status,
+            face_revision=official,
+            cycle_letter=cycle_letter,
             events=resolved,
         ),
     )
@@ -919,6 +936,76 @@ def pipeline_approval_shows_letter(
     return bool(row.code_stale)
 
 
+_REVIEW_F_STAGES: dict[str, frozenset[str]] = {
+    KitPipelineStatus.AGREED.value: frozenset({"code_a", "agreed"}),
+    KitPipelineStatus.TDO_REVIEW.value: frozenset({"tdo_passed", "incoming_passed"}),
+    KitPipelineStatus.SENT_TDO.value: frozenset(
+        {"tdo_sent", "incoming_sent", "sr_upload"}
+    ),
+}
+
+
+def _iter_events_on_face(
+    events: Sequence[KitEvent],
+    face_revision: str,
+) -> list[KitEvent]:
+    face = (face_revision or "").strip()
+    if not face:
+        return list(events)
+    numbered = list(enumerate(events, start=1))
+    return [event for _eid, event in _events_on_revision(numbered, face)]
+
+
+def _last_letter_event(events: Sequence[KitEvent]) -> KitEvent | None:
+    found: KitEvent | None = None
+    for event in events:
+        if event.stage in _CODE_STAGE_KEYS:
+            found = event
+    return found
+
+
+def _last_stage_event_on_face(
+    events: Sequence[KitEvent],
+    face_revision: str,
+    stages: Collection[str],
+) -> KitEvent | None:
+    found: KitEvent | None = None
+    for event in _iter_events_on_face(events, face_revision):
+        if event.stage in stages:
+            found = event
+    return found
+
+
+def _review_label_from_robot_auto(
+    *,
+    status: str,
+    face_revision: str,
+    cycle_letter: str,
+    events: Sequence[KitEvent],
+) -> bool:
+    """Return whether the review cell's F source line ended with ``auto``."""
+
+    if not events:
+        return False
+    stages = _REVIEW_F_STAGES.get(status)
+    if stages:
+        status_event = _last_stage_event_on_face(events, face_revision, stages)
+        if status_event is not None and status_event.from_robot_auto:
+            return True
+    if cycle_letter:
+        letter = _last_letter_event(events)
+        if letter is not None and letter.from_robot_auto:
+            return True
+    return False
+
+
+def _approval_label_from_robot_auto(events: Sequence[KitEvent]) -> bool:
+    """Return whether the shown approval letter's F line ended with ``auto``."""
+
+    letter = _last_letter_event(events)
+    return bool(letter is not None and letter.from_robot_auto)
+
+
 def _format_review_label(row: KitPipelineRow, view: PipelineReviewDisplay) -> str:
     label = pipeline_status_label(view.status)
     paren_date = view.pass_date or view.agreed_date
@@ -937,6 +1024,8 @@ def _format_review_label(row: KitPipelineRow, view: PipelineReviewDisplay) -> st
         label = f"{label} · отпр. {view.send_date}"
     if row.review_as_build:
         label = f"{label} (AB)"
+    if view.from_robot_auto:
+        label = f"{label}{PIPELINE_F_AUTO_SUFFIX}"
     return label
 
 
@@ -958,13 +1047,14 @@ def pipeline_review_label(
         version: Display version; ``None`` uses ``PIPELINE_DISPLAY_VERSION``.
 
     Returns:
-        ``{status}[(pass or agreed date)][ · B|C] · {РД|выдача|D/E|F} {rev}[ · отпр. {date}][ (AB)]``.
+        ``{status}[(pass or agreed date)][ · B|C] · {РД|выдача|D/E|F} {rev}[ · отпр. {date}][ (AB)][ (auto)]``.
         On v1/v2 and when Google matches disk, ``РД`` is the official
         package (same as «РД · рев.»). v3 with a different table cycle
         uses ``выдача`` / ``D/E`` / ``F`` and the table revision.
         B/C never make the status «Согласован». For ``agreed``, the
         parentheses date is the F code A / «согласовано» of this cycle,
-        not the send date.
+        not the send date. `` (auto)`` when the F line that feeds this
+        cell ends with ``auto``.
     """
 
     view = pipeline_review_display(
@@ -1063,7 +1153,8 @@ def pipeline_approval_label(
         review cycle (current A is «Согласован»; current B/C sit on
         review). Otherwise ``A · {rev} · {DD.MM.YYYY}``. A letter not of
         this cycle appends ``новее диска`` / ``прошлый цикл`` /
-        ``без рев. в F`` / ``не этого цикла``.
+        ``без рев. в F`` / ``не этого цикла``. `` (auto)`` when that
+        letter's F line ends with ``auto``.
     """
 
     if not pipeline_approval_shows_letter(
@@ -1083,7 +1174,11 @@ def pipeline_approval_label(
     relation = pipeline_approval_relation(row)
     if relation:
         parts.append(relation)
-    return " · ".join(parts)
+    label = " · ".join(parts)
+    resolved = _resolve_pipeline_events(google, events)
+    if _approval_label_from_robot_auto(resolved):
+        label = f"{label}{PIPELINE_F_AUTO_SUFFIX}"
+    return label
 
 
 def pipeline_approval_color_key(
