@@ -47,13 +47,15 @@ def main() -> int:
             "mto_run",
             "bbb",
             "mto_settings",
+            "vpn",
+            "cursor_vpn",
         ],
         help=(
             "Initial tab (default: misc / Прочее · Запуск). DS: run, mto_paths, "
             "settings, columns, packing/tsd, tsd_help/packing_help, upd/upd_load; RFP: rfp/rfp_run, "
             "rfp_settings, rfp_parts/parts, rfp_ds_id/ds_id/rfp_ul, "
             "rfp_ds_mp/ds_mp/rfp_mp/rfp_managers; leftover main.py: "
-            "misc/mto_run, bbb/mto_settings"
+            "misc/mto_run, bbb/mto_settings, vpn/cursor_vpn"
         ),
     )
     args = parser.parse_args()

@@ -1,0 +1,81 @@
+---
+description: "Cursor split-tunnel VPN: AmneziaWG CursorBind + 3proxy + ProxiFyre. Корп. LAN/UNC, почему не AllowedIPs, ловушки H10/метрик."
+globs: ds_compare_center/vpn_*.py
+alwaysApply: false
+---
+
+# Cursor VPN (split tunnel)
+
+> Подключай, когда чинят сеть Cursor, AmneziaWG, `Прочее · VPN`, UNC `\\bcc\eng`, 3proxy/ProxiFyre.
+> GUI-вкладка в центре ДС: кратко в `AI_ds_compare.mdc`. Это правило — **контекст для других чатов**.
+
+## Зачем
+
+Рабочее место: Ethernet `172.16.3.235`, шлюз `172.16.3.1`, сеть `172.16.0.0/16`. Большинство портов закрыто. Cursor (чат/агент) ходит на крутящиеся IP Cloudflare/AWS (`api2.cursor.sh` и др.) — нужен выход через Amnezia (NL, сервер S4 `31.58.51.36`).
+
+Нужно одновременно:
+
+- корпоративный LAN и UNC (`\\bcc\eng\PrDoc\...`) **всегда через Ethernet**;
+- интернет браузера / остального ПО — как обычно (Ethernet), не весь ПК в VPN;
+- только **`Cursor.exe`** (все helper-процессы с тем же путём) — в туннель.
+
+## Почему не список AllowedIPs
+
+Пробовали split `AllowedIPs = /32` под серверы Cursor. `api2` отдаёт новую восьмёрку AWS за минуты (`ec2-*`). Демон «подсмотрели соединение Cursor → дописали IP» **не работает**: нового IP нет в туннеле → сокет не устанавливается / идёт в Ethernet. sandspy — камера, не контроллер маршрутов.
+
+WireGuard понимает только CIDR, Cursor официально просит allowlist **доменов**.
+
+## Как устроено (вариант A)
+
+```
+Cursor.exe  →  ProxiFyre (process=cursor, bypassLan)
+            →  SOCKS 127.0.0.1:1080  (3proxy, outbound bind 10.95.175.58)
+            →  AmneziaWG «CursorBind»
+Остальное   →  Ethernet (172.16.3.1)
+SMB/UNC     →  редиректор Windows / LAN /16, не сокет Cursor
+python/git из терминала агента  →  Ethernet (не Cursor.exe) — так задумано
+```
+
+Туннель **CursorBind** (клон S4, обфускация Amnezia `Jc`/`I1` обязательна):
+
+| Поле | Значение | Смысл |
+|---|---|---|
+| `Address` | `10.95.175.58/32` | bind 3proxy |
+| `Table` | `off` | **не** ставить системный default |
+| `AllowedIPs` | `0.0.0.0/0` | любой dest **можно** отправить в туннель, если сокет привязан |
+| маршрут | `0.0.0.0/0` на CursorBind **metric 9999** | слабый default только для bind |
+| Ethernet default | `172.16.3.1` metric **5** | побеждает у обычных приложений |
+| LAN | `172.16.0.0/16 → 172.16.3.1` metric **1** | UNC/SMB |
+
+Профиль **H10** (`10.73.104.145`, `AllowedIPs=0.0.0.0/0` без Table=off) — **полный** VPN, default metric 0. Запасной «весь интернет в NL». **Не включать вместе с CursorBind.**
+
+## Условия «работает как задумано»
+
+- в AmneziaWG зелёный **только** CursorBind, рукопожатие есть;
+- `curl https://api.ipify.org` → офис (~`84.204…`), **не** `195.218.230.62` (это выход H10);
+- `curl --socks5-hostname 127.0.0.1:1080` → ~`31.58.51.202` (S4);
+- шара `\\bcc\eng\...` открывается;
+- слушает `127.0.0.1:1080`, живы `3proxy` и `ProxiFyre`.
+
+Проверка: вкладка **Прочее · VPN** (`python -m ds_compare_center --tab vpn`) или [vpn_status.py](ds_compare_center/vpn_status.py).
+
+## Узкие места
+
+| Симптом | Обычно |
+|---|---|
+| direct IP `195.218.230.62` | забыли выключить **H10** |
+| SOCKS тишина / log `8.6.112.0` / error 5 | нет маршрута metric **9999** на CursorBind (`Table=off` без него) |
+| Cursor мёртв после ребута | не запущен 3proxy / ProxiFyre / туннель; окна закрыли |
+| GUI «нет UNC» у агента в песочнице | нет SMB у чата; у пользователя в Explorer может быть ок |
+| Имена `bcc` не резолвятся через VPN DNS | суффиксы `int.bcc.ru` / `bcc.ru` — **не** гонять в `1.1.1.1`; LAN DIRECT |
+| Vanilla WireGuard не поднимает .conf | нужны поля Amnezia (`Jc`/`S*`/`H*`/`I1`) |
+| Ключ в чате/git | `PrivateKey` только в AmneziaWG, не в репозиторий |
+
+Не делать: дописывать сырые `ec2-*` в AllowedIPs; `0.0.0.0/0` на CursorBind **без** `Table=off`.
+
+## Артефакты (эта машина, не в git)
+
+- bat (UAC сам): `C:\YandexDisk\z_Docs\амнезия\start-cursor-vpn.bat`
+- 3proxy: `C:\YandexDisk\z_Docs\амнезия\3proxy\bin64\`
+- ProxiFyre: `C:\Program Files\ProxiFyre\` (`app-config.json`: `appNames: ["cursor"]`, `bypassLan: true`)
+- GUI: [vpn_panel.py](ds_compare_center/vpn_panel.py); смоук `tmp/test_vpn_panel_smoke.py`

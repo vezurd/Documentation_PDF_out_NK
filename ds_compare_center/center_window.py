@@ -68,6 +68,7 @@ from ds_compare_center.settings_panel import SettingsPanel
 from ds_compare_center.tsd_packing_help_panel import TsdPackingHelpPanel
 from ds_compare_center.tsd_packing_panel import TsdPackingPanel
 from ds_compare_center.upd_panel import UpdPanel
+from ds_compare_center.vpn_panel import VpnPanel
 from main_v2.function_runner import FunctionJobRunner
 from main_v2.help_dialog import show_help_dialog
 from main_v2.job_monitor import JobMonitorPanel
@@ -105,6 +106,7 @@ _TAB_INDEX_RFP_DS_MP = 12
 _TAB_INDEX_SEP_MISC = 13
 _TAB_INDEX_MISC_RUN = 14
 _TAB_INDEX_BBB_SETTINGS = 15
+_TAB_INDEX_VPN = 16
 _WINDOW_TITLE = "Центр ДС, RFP и MTO"
 _EXCEL_FILTER = "Excel files (*.xlsx *.xlsm *.xls);;All files (*.*)"
 # Vertical gaps (~15–20% tighter than original) so block 3 actions fit without scroll on open.
@@ -167,6 +169,8 @@ _TAB_BY_NAME = {
     "mto_run": _TAB_INDEX_MISC_RUN,
     "bbb": _TAB_INDEX_BBB_SETTINGS,
     "mto_settings": _TAB_INDEX_BBB_SETTINGS,
+    "vpn": _TAB_INDEX_VPN,
+    "cursor_vpn": _TAB_INDEX_VPN,
 }
 
 
@@ -244,6 +248,7 @@ class CenterWindow(QWidget):
             on_help=self._show_misc_help,
         )
         self._bbb_settings_panel = BbbSettingsPanel()
+        self._vpn_panel = VpnPanel()
 
         self._rfp_run_panel.monitor.stop_requested.connect(self._proc_runner.request_stop)
         self._rfp_parts_panel.monitor.stop_requested.connect(self._proc_runner.request_stop)
@@ -266,6 +271,7 @@ class CenterWindow(QWidget):
         self._tabs.setTabEnabled(sep_misc, False)
         self._tabs.addTab(self._misc_run_panel, "Прочее · Запуск")
         self._tabs.addTab(self._bbb_settings_panel, "MTO · Настройки")
+        self._tabs.addTab(self._vpn_panel, "Прочее · VPN")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)

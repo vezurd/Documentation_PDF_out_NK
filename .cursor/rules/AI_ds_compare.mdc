@@ -17,6 +17,7 @@ alwaysApply: false
 - grouped-режим (ключи группировки, пост-процесс MTO-only «Новая позиция»), Excel-колонки `ColumnDef`
 - отладка «пустой колонки шкафов», порядка расходования MTO-строк, кэша MTO
 - правки **`ds_compare_center/`** (GUI PySide6, вкладки, `gui_paths`, тема; `--tab` см. таблицу вкладок)
+- **Прочее · VPN** (вкладка GUI): `vpn_panel.py`, `vpn_status.py` — **контекст стека** → `.cursor/rules/AI_cursor_vpn.mdc`
 - **УПД (файлы закачки 1С):** `upd_load.py`, вкладка «ДС · УПД», свод `upd_summary_*`
 - **RFP · ДС ↔ УЛ:** покрытие файлов RFP vs папок УЛ по фактическому номеру (`rfp_ds_id` / `ds_id` / `rfp_ul`)
 - **RFP · ДС ↔ МП:** файлы RFP vs фамилии в `Список ДС - Фамилии МП.xlsx` (`rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers`)
@@ -24,7 +25,7 @@ alwaysApply: false
 - **RFQ TPK / этап 2:** `RFQTPK`, `load_rfq_tpk_data`, **`ds_rfq_grouped_compare.py`**, **`ds_units_normalize.py`**, RFQ-only строки, колонки RFQ в grouped Excel
 - **кэш grouped compare:** `grouped_compare_cache.py`, `cache_ds_mto_result`
 - **настройки колонок Excel:** вкладка «Столбцы Excel», `ds_vs_mto_output.columns` в JSON, `column_config_from_output_settings`
-- **Не это правило:** финальный xlsx **RFP · Запуск** (Step4 столбцы/цвета/УЛ) → `AI_rfp_step4_excel.mdc`
+- **Не это правило:** финальный xlsx **RFP · Запуск** (Step4 столбцы/цвета/УЛ) → `AI_rfp_step4_excel.mdc`; зачем/как VPN Cursor → `.cursor/rules/AI_cursor_vpn.mdc`
 
 ## Точки входа
 
@@ -52,7 +53,7 @@ alwaysApply: false
 > Ориентир по UX/запуску — `AI_v2_monitor.mdc` (отдельный процесс PySide6, не смешивать с CTk `main.py`).
 
 **Пакет:** `ds_compare_center/`  
-**Запуск:** `python -m ds_compare_center [--tab run|mto_paths|settings|columns|packing|tsd|tsd_help|upd|upd_load|rfp|rfp_settings|rfp_parts|rfp_ds_id|rfp_ds_mp|misc|mto_run|bbb|mto_settings]` (без `--tab` открывается **Прочее · Запуск**)  
+**Запуск:** `python -m ds_compare_center [--tab run|mto_paths|settings|columns|packing|tsd|tsd_help|upd|upd_load|rfp|rfp_settings|rfp_parts|rfp_ds_id|rfp_ds_mp|misc|mto_run|bbb|mto_settings|vpn|cursor_vpn]` (без `--tab` открывается **Прочее · Запуск**)  
 **Из `main.py`:** кнопка «Центр управления ДС vs MTO» → `subprocess.Popen([sys.executable, "-m", "ds_compare_center"])`.  
 **VS Code:** `.vscode/launch.json` — конфигурации `Python: ds_compare_center (...)`.
 
@@ -76,6 +77,8 @@ alwaysApply: false
 | `rfp_ds_mp_panel.py` | **RFP · ДС ↔ МП**: таблица файлов RFP vs фамилий МП (`run_ds_roster_compare_job`) |
 | `misc_run_panel.py` | **Прочее · Запуск**: оставшиеся кнопки `main.py` (PDF v2, MTO/BBB, КЖ, ревизии MTO, NanoCAD, ZIP) через `main_v2.legacy_actions` |
 | `bbb_settings_panel.py` | **MTO · Настройки**: native PySide6 клон CTk `bbb_settings_gui`; `bbb_analysis_config.json`, merge-on-save |
+| `vpn_status.py` | Опрос CursorBind / маршрутов / 3proxy / ProxiFyre / UNC; UAC-запуск bat |
+| `vpn_panel.py` | Вкладка **Прочее · VPN**: таблица статуса, curl IP, запуск bat от администратора |
 | `split_layout.py` | Общий горизонтальный макет (лево + Job monitor) |
 | `theme.py` | `light_high_contrast` через `main_v2.appearance.apply_theme` |
 
@@ -99,8 +102,14 @@ alwaysApply: false
 | **RFP · ДС ↔ МП** | `rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers` | файлы `RFP_Зиновьев` vs фамилии в `Список ДС - Фамилии МП.xlsx`; вердикт «ОК / надо дозаполнить / лишние / дубликаты»; на Лист2 справа столбцы Статус / Дубликат / Что делать (`Имя ДС` и `Фамилия` не меняет); [ds_manager_roster.py](RFQ/tags_rfp_compare/ds_manager_roster.py) |
 | **Прочее · Запуск** | `misc` / `mto_run` (default) | Кнопки `main.py`, которых нет во вкладках ДС/RFP: PDF v2 monitor, MTO DWG+BBB, открыть файлы, зачёркивания/1C, КЖ, MTO vs MTO, NanoCAD, ZIP. Лог справа, не на «ДС · Запуск». |
 | **MTO · Настройки** | `bbb` / `mto_settings` | Native чекбоксы 1:1 с CTk `show_bbb_settings`; тот же `bbb_analysis_config.json`; неизвестные JSON-ключи не затираются |
+| **Прочее · VPN** | `vpn` / `cursor_vpn` | Статус/запуск стека; **зачем и ловушки** → [AI_cursor_vpn](.cursor/rules/AI_cursor_vpn.mdc) |
 
 Не дублировать на «Прочее»: merge ДС, ДС vs MTO, grouped/RFQ-only, MTO vs ДС, УЛ, УПД, RFP/as-build. `main.py` и CTk-окна настроек не удаляются.
+
+### Прочее · VPN (вкладка)
+
+Не пайплайн ДС. GUI: статус стека, curl IP, UAC-запуск bat, открыть папку Amnezia. Смоук: `python tmp/test_vpn_panel_smoke.py`.  
+**Контекст (зачем, схема, H10, ловушки):** [AI_cursor_vpn](.cursor/rules/AI_cursor_vpn.mdc).
 
 ### RFP native settings и live progress (2026-07-29)
 
@@ -822,7 +831,7 @@ python -c "from RFQ.ds_compare.ds_packing_grouped_compare import compare_grouped
 python -c "from RFQ.ds_compare.support_finctions import load_rfq_tpk_data"
 python -c "from RFQ.ds_compare.grouped_compare_cache import load_grouped_compare_cache, save_grouped_compare_cache"
 python -c "from RFQ.ds_compare.ds_vs_mto_excel_columns import column_config_from_output_settings, merge_column_settings"
-python -c "from ds_compare_center.columns_panel import ColumnsPanel; from ds_compare_center.center_window import CenterWindow; from ds_compare_center.misc_run_panel import MiscRunPanel; from ds_compare_center.bbb_settings_panel import BbbSettingsPanel; print('ds_compare_center OK')"
+python -c "from ds_compare_center.columns_panel import ColumnsPanel; from ds_compare_center.center_window import CenterWindow; from ds_compare_center.misc_run_panel import MiscRunPanel; from ds_compare_center.bbb_settings_panel import BbbSettingsPanel; from ds_compare_center.vpn_panel import VpnPanel; print('ds_compare_center OK')"
 python tmp/test_rfp_checklist_updater_smoke.py
 python tmp/test_rfp_progress_markers_smoke.py
 python tmp/test_rfp_native_settings_smoke.py
@@ -832,10 +841,11 @@ python tmp/test_ds_packing_compare_smoke.py
 python tmp/test_ds_identity_smoke.py
 python tmp/test_rfp_ds_id_panel_smoke.py
 python tmp/test_rfp_ds_mp_panel_smoke.py
+python tmp/test_vpn_panel_smoke.py
 python tmp/test_rfp_run_progress_table_smoke.py
 python -c "from RFQ.rfp_parts.ds_id_coverage import check_ds_id_coverage; from ds_compare_center.rfp_ds_id_panel import RfpDsIdPanel; print('ds_id OK')"
 python -c "from RFQ.tags_rfp_compare.ds_manager_roster import run_ds_roster_compare_job; from ds_compare_center.rfp_ds_mp_panel import RfpDsMpPanel; print('ds_mp OK')"
-python -m py_compile RFQ/packing_list_provider.py RFQ/ds_compare/tsd_packing_load.py RFQ/ds_compare/upd_load.py RFQ/ds_compare/ds_packing_grouped_compare.py RFQ/ds_compare/ds_vs_mto_excel_columns.py ds_compare_center/columns_panel.py ds_compare_center/upd_panel.py ds_compare_center/misc_run_panel.py ds_compare_center/bbb_settings_panel.py ds_compare_center/center_window.py ds_compare_center/rfp_ds_id_panel.py ds_compare_center/rfp_ds_mp_panel.py RFQ/rfp_parts/ds_identity.py RFQ/rfp_parts/ds_id_coverage.py RFQ/tags_rfp_compare/ds_manager_roster.py RFQ/ds_compare/ds_grouped_compare.py RFQ/ds_compare/ds_rfq_grouped_compare.py RFQ/ds_compare/ds_units_normalize.py RFQ/ds_compare/grouped_compare_cache.py RFQ/ds_compare/ds_start_init.py RFQ/ds_compare/ds_compare_config.py RFQ/ds_compare/load_mto.py base/get_row_type_variants/rfq_tpk.py base/tables_columns.py
+python -m py_compile RFQ/packing_list_provider.py RFQ/ds_compare/tsd_packing_load.py RFQ/ds_compare/upd_load.py RFQ/ds_compare/ds_packing_grouped_compare.py RFQ/ds_compare/ds_vs_mto_excel_columns.py ds_compare_center/columns_panel.py ds_compare_center/upd_panel.py ds_compare_center/misc_run_panel.py ds_compare_center/bbb_settings_panel.py ds_compare_center/vpn_status.py ds_compare_center/vpn_panel.py ds_compare_center/center_window.py ds_compare_center/rfp_ds_id_panel.py ds_compare_center/rfp_ds_mp_panel.py RFQ/rfp_parts/ds_identity.py RFQ/rfp_parts/ds_id_coverage.py RFQ/tags_rfp_compare/ds_manager_roster.py RFQ/ds_compare/ds_grouped_compare.py RFQ/ds_compare/ds_rfq_grouped_compare.py RFQ/ds_compare/ds_units_normalize.py RFQ/ds_compare/grouped_compare_cache.py RFQ/ds_compare/ds_start_init.py RFQ/ds_compare/ds_compare_config.py RFQ/ds_compare/load_mto.py base/get_row_type_variants/rfq_tpk.py base/tables_columns.py
 ```
 
 Grouped smoke **с RFQ:** `python -m ds_compare_center` → «ДС vs MTO vs RFQ» → в папке RFQ файл `<RFQ>_ДС_МТО__<дата>.xlsx`; в консоли — счётчики RFQ match и units match/mismatch.
@@ -851,6 +861,7 @@ Grouped smoke **с RFQ:** `python -m ds_compare_center` → «ДС vs MTO vs RFQ
 
 ## История изменений
 
+- **21.09.2026 (Прочее · VPN):** вкладка статуса ([vpn_status.py](ds_compare_center/vpn_status.py), [vpn_panel.py](ds_compare_center/vpn_panel.py)); контекст стека — [AI_cursor_vpn](.cursor/rules/AI_cursor_vpn.mdc).
 - **14.09.2026 (ДС · УПД):** вкладка чтения файлов закачки 1С (`Реализация 2_0`): [upd_load.py](RFQ/ds_compare/upd_load.py), [upd_panel.py](ds_compare_center/upd_panel.py), `run_upd_load`; compact/wide, primary-вкладки без удвоения title-split; свод с именем файла и полным путём в `УПД сводный файл` (`--tab upd` / `upd_load`).
 - **03.09.2026 (RFP · ДС ↔ МП):** вкладка сверки файлов `RFP_Зиновьев` с фамилиями в `Список ДС - Фамилии МП.xlsx` ([ds_manager_roster.py](RFQ/tags_rfp_compare/ds_manager_roster.py), [rfp_ds_mp_panel.py](ds_compare_center/rfp_ds_mp_panel.py)); ручной запуск переписывает лист «Фактический и порядковый», Лист2 не трогает (`--tab rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers`).
 - **02.09.2026 (ключ посадки Step4):** `(actual, title, system, code)` (`rfp_packing_match_key`); столбец **Фактический ДС** (`DS_ACTUAL`); `DS_NAME` → «Порядковый ДС». Grouped matcher **пока** 3-tuple `packing_match_key`.
