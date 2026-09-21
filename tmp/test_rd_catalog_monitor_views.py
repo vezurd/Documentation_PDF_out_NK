@@ -1998,7 +1998,13 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         self.assertEqual(f_cell.fill, REV_MATCH_FILL)
         self.assertIn("F · рев. 04 совпала с РД · рев.", f_cell.tooltip)
         self.assertIn("F MTO 03 совпала с MTO · рев.", f_cell.tooltip)
+        self.assertIn("отстаёт от OD 04", f_cell.tooltip)
         self.assertIn("mto 03", painted.haystack)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.text, "03")
+        self.assertNotEqual(mto_cell.fill, REV_DIFF_FILL)
+        self.assertIn("F MTO 03 совпала", mto_cell.tooltip)
+        self.assertIn("отстаёт от OD 04", mto_cell.tooltip)
         mismatched_od = self._paint(
             line="09.09.2026 код А на рев. 04 AGCC-BCC-TRM-000999 MTO 03",
             rd_rev="01-AN01",
@@ -2161,8 +2167,9 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         mto_cell = painted.cells["MTO · рев."]
         self.assertEqual(mto_cell.text, "01-AN01")
         self.assertNotEqual(mto_cell.fill, REV_DIFF_FILL)
-        self.assertIn("F MTO совпала", mto_cell.tooltip)
+        self.assertIn("F MTO 01-AN01 совпала", mto_cell.tooltip)
         self.assertIn("28.05.2025", mto_cell.tooltip)
+        self.assertIn("отстаёт от OD 01-AN02", mto_cell.tooltip)
 
     def test_historical_f_mto_yellow_when_disk_differs(self) -> None:
         painted = self._paint(
@@ -2182,6 +2189,68 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         mto_cell = painted.cells["MTO · рев."]
         self.assertEqual(mto_cell.fill, REV_DIFF_FILL)
 
+    def test_historical_f_mto_when_last_line_has_no_suffix(self) -> None:
+        painted = self._paint(
+            lines=(
+                "05.12.2024 код А на рев. 03 AGCC-BCC-TRM-000100 MTO 03",
+                "24.12.2024 отпр на ТДО рев. 04 AGCC-BCC-TRM-000200",
+            ),
+            rd_rev="04",
+            disk_mto="03",
+        )
+        expected = f"04 · MTO 03 {F_MTO_HISTORICAL_MARK}"
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(f_cell.text, expected)
+        self.assertEqual(f_cell.fill, REV_MATCH_FILL)
+        self.assertIn("не указана", f_cell.tooltip)
+        self.assertIn("совпала с MTO · рев.", f_cell.tooltip)
+        self.assertIn("отстаёт от OD 04", f_cell.tooltip)
+        self.assertNotIn("MTO Нет", f_cell.tooltip)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.text, "03")
+        self.assertNotEqual(mto_cell.fill, REV_DIFF_FILL)
+        self.assertIn("F MTO 03 совпала", mto_cell.tooltip)
+        self.assertIn("отстаёт от OD 04", mto_cell.tooltip)
+        self.assertIn("не указана", mto_cell.tooltip)
+
+    def test_historical_f_mto_no_suffix_yellow_when_disk_differs(self) -> None:
+        painted = self._paint(
+            lines=(
+                "05.12.2024 код А на рев. 03 MTO 03",
+                "24.12.2024 отпр на ТДО рев. 04 AGCC-BCC-TRM-000200",
+            ),
+            rd_rev="04",
+            disk_mto="04",
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(
+            f_cell.text, f"04 · MTO 03 {F_MTO_HISTORICAL_MARK}"
+        )
+        self.assertEqual(f_cell.fill, REV_DIFF_FILL)
+        self.assertIn("расходится с MTO · рев. 04", f_cell.tooltip)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.fill, REV_DIFF_FILL)
+        self.assertIn("в F указано MTO 03", mto_cell.tooltip)
+
+    def test_last_explicit_f_mto_not_replaced_by_history(self) -> None:
+        painted = self._paint(
+            lines=(
+                "05.12.2024 код А на рев. 03 MTO 03",
+                "24.12.2024 код А на рев. 04 AGCC-BCC-TRM-000200 MTO 04",
+            ),
+            rd_rev="04",
+            disk_mto="03",
+        )
+        f_cell = painted.cells["Google · рев. F"]
+        self.assertEqual(f_cell.text, "04 · MTO 04")
+        self.assertNotIn(F_MTO_HISTORICAL_MARK, f_cell.text)
+        self.assertEqual(f_cell.fill, REV_DIFF_FILL)
+        self.assertIn("расходится с MTO · рев. 03", f_cell.tooltip)
+        mto_cell = painted.cells["MTO · рев."]
+        self.assertEqual(mto_cell.text, "03")
+        self.assertEqual(mto_cell.fill, REV_DIFF_FILL)
+        self.assertIn("в F указано MTO 04", mto_cell.tooltip)
+
     def test_f_history_line_keeps_mto_suffix(self) -> None:
         event = parse_history_line(
             "28.05.2025 код А на рев. 01-AN01 PGS-BCC-TRM-000091 "
@@ -2200,6 +2269,14 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         self.assertIn("auto", absent_text)
         hist = historical_f_mto_event((event, absent), absent)
         self.assertIs(hist, event)
+        silent = parse_history_line(
+            "24.12.2024 отпр на ТДО рев. 04 AGCC-BCC-TRM-000200"
+        )
+        self.assertIs(historical_f_mto_event((event, silent), silent), event)
+        named = parse_history_line(
+            "24.12.2024 код А на рев. 04 AGCC-BCC-TRM-000200 MTO 04"
+        )
+        self.assertIsNone(historical_f_mto_event((event, named), named))
 
 
 if __name__ == "__main__":
