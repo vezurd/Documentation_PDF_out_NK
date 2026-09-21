@@ -57,7 +57,7 @@ python/git из терминала агента  →  Ethernet (не Cursor.exe)
 - шара `\\bcc\eng\...` открывается;
 - слушает `127.0.0.1:1080`, живы `3proxy` и `ProxiFyre`.
 
-Проверка: вкладка **Прочее · VPN** (`python -m ds_compare_center --tab vpn`) или [vpn_status.py](ds_compare_center/vpn_status.py).
+Проверка: вкладка **Прочее · VPN** (`python -m ds_compare_center --tab vpn`) — живая схема маршрутов с лампочками + таблица; либо [vpn_status.py](ds_compare_center/vpn_status.py).
 
 ## Узкие места
 
@@ -78,4 +78,4 @@ python/git из терминала агента  →  Ethernet (не Cursor.exe)
 - bat (UAC сам): `C:\YandexDisk\z_Docs\амнезия\start-cursor-vpn.bat`
 - 3proxy: `C:\YandexDisk\z_Docs\амнезия\3proxy\bin64\`
 - ProxiFyre: `C:\Program Files\ProxiFyre\` (`app-config.json`: `appNames: ["cursor"]`, `bypassLan: true`)
-- GUI: [vpn_panel.py](ds_compare_center/vpn_panel.py); смоук `tmp/test_vpn_panel_smoke.py`
+- GUI: [vpn_panel.py](ds_compare_center/vpn_panel.py), схема [vpn_flow.py](ds_compare_center/vpn_flow.py); смоук `tmp/test_vpn_panel_smoke.py`

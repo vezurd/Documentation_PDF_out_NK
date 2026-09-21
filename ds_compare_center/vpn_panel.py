@@ -6,18 +6,21 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from ds_compare_center.vpn_flow import VpnFlowDiagram
 from ds_compare_center.vpn_status import (
     START_BAT,
     VPN_HOME,
@@ -45,13 +48,16 @@ class VpnPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._seen = False
+        self._last_snap = None
+        self._last_direct = ""
+        self._last_socks = ""
 
         intro = QLabel(
-            "Стек CursorBind: AmneziaWG (Table=off) → 3proxy :1080 → ProxiFyre "
-            "только для Cursor.exe. Браузер и UNC \\\\bcc\\eng остаются на Ethernet. "
-            "H10 (полный туннель) должен быть выключен."
+            "Только Cursor.exe уходит в Amnezia (NL). Браузер, python/git и UNC "
+            "\\\\bcc\\eng остаются на Ethernet. H10 (полный туннель) должен быть выключен."
         )
         intro.setWordWrap(True)
+        self._flow = VpnFlowDiagram()
 
         self._banner = QLabel("Нажмите «Проверить статус».")
         self._banner.setWordWrap(True)
@@ -62,6 +68,7 @@ class VpnPanel(QWidget):
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(True)
+        self._table.setMinimumHeight(140)
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -93,14 +100,21 @@ class VpnPanel(QWidget):
         box = QGroupBox("CursorBind / 3proxy / ProxiFyre")
         box_l = QVBoxLayout(box)
         box_l.addWidget(intro)
+        box_l.addWidget(self._flow, 0)
         box_l.addLayout(buttons)
         box_l.addLayout(launch)
         box_l.addWidget(self._banner)
         box_l.addWidget(self._table, 1)
         box_l.addWidget(paths)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(box)
+
         root = QVBoxLayout(self)
-        root.addWidget(box)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(scroll)
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -116,6 +130,8 @@ class VpnPanel(QWidget):
             self._banner.setText(f"Ошибка опроса: {exc}")
             self._banner.setStyleSheet(_BANNER_BAD)
             self._table.setRowCount(0)
+            self._last_snap = None
+            self._flow.apply(None)
             return
         self._apply_snapshot(snap)
 
@@ -126,6 +142,8 @@ class VpnPanel(QWidget):
         else:
             self._banner.setText("Есть замечания — см. таблицу. H10 должен быть выключен.")
             self._banner.setStyleSheet(_BANNER_BAD)
+        self._last_snap = snap
+        self._flow.apply(snap, direct=self._last_direct, socks=self._last_socks)
         self._table.setRowCount(len(snap.checks))
         for row, check in enumerate(snap.checks):
             status = "ОК" if check.ok else "нет"
@@ -171,6 +189,9 @@ class VpnPanel(QWidget):
             QMessageBox.warning(self, "VPN", str(exc))
             return
         ok, detail = ips_look_correct(direct, socks)
+        self._last_direct = direct
+        self._last_socks = socks
+        self._flow.apply(self._last_snap, direct=direct, socks=socks)
         QMessageBox.information(self, "IP", detail)
         if ok:
             self._banner.setText("IP split ок: " + detail)

@@ -78,7 +78,8 @@ alwaysApply: false
 | `misc_run_panel.py` | **Прочее · Запуск**: оставшиеся кнопки `main.py` (PDF v2, MTO/BBB, КЖ, ревизии MTO, NanoCAD, ZIP) через `main_v2.legacy_actions` |
 | `bbb_settings_panel.py` | **MTO · Настройки**: native PySide6 клон CTk `bbb_settings_gui`; `bbb_analysis_config.json`, merge-on-save |
 | `vpn_status.py` | Опрос CursorBind / маршрутов / 3proxy / ProxiFyre / UNC; UAC-запуск bat |
-| `vpn_panel.py` | Вкладка **Прочее · VPN**: таблица статуса, curl IP, запуск bat от администратора |
+| `vpn_flow.py` | Схема маршрутов вкладки VPN: три полосы + лампочки статуса |
+| `vpn_panel.py` | Вкладка **Прочее · VPN**: схема маршрутов с лампочками, таблица статуса, curl IP, запуск bat |
 | `split_layout.py` | Общий горизонтальный макет (лево + Job monitor) |
 | `theme.py` | `light_high_contrast` через `main_v2.appearance.apply_theme` |
 
@@ -108,7 +109,7 @@ alwaysApply: false
 
 ### Прочее · VPN (вкладка)
 
-Не пайплайн ДС. GUI: статус стека, curl IP, UAC-запуск bat, открыть папку Amnezia. Смоук: `python tmp/test_vpn_panel_smoke.py`.  
+Не пайплайн ДС. GUI: **схема маршрутов с лампочками** ([vpn_flow.py](ds_compare_center/vpn_flow.py)), статус стека, curl IP, UAC-запуск bat, открыть папку Amnezia. Смоук: `python tmp/test_vpn_panel_smoke.py`.  
 **Контекст (зачем, схема, H10, ловушки):** [AI_cursor_vpn](.cursor/rules/AI_cursor_vpn.mdc).
 
 ### RFP native settings и live progress (2026-07-29)
@@ -861,7 +862,7 @@ Grouped smoke **с RFQ:** `python -m ds_compare_center` → «ДС vs MTO vs RFQ
 
 ## История изменений
 
-- **21.09.2026 (Прочее · VPN):** вкладка статуса ([vpn_status.py](ds_compare_center/vpn_status.py), [vpn_panel.py](ds_compare_center/vpn_panel.py)); контекст стека — [AI_cursor_vpn](.cursor/rules/AI_cursor_vpn.mdc).
+- **21.09.2026 (Прочее · VPN):** вкладка статуса ([vpn_status.py](ds_compare_center/vpn_status.py), [vpn_panel.py](ds_compare_center/vpn_panel.py)); живая схема маршрутов с лампочками ([vpn_flow.py](ds_compare_center/vpn_flow.py)); контекст стека — [AI_cursor_vpn](.cursor/rules/AI_cursor_vpn.mdc).
 - **14.09.2026 (ДС · УПД):** вкладка чтения файлов закачки 1С (`Реализация 2_0`): [upd_load.py](RFQ/ds_compare/upd_load.py), [upd_panel.py](ds_compare_center/upd_panel.py), `run_upd_load`; compact/wide, primary-вкладки без удвоения title-split; свод с именем файла и полным путём в `УПД сводный файл` (`--tab upd` / `upd_load`).
 - **03.09.2026 (RFP · ДС ↔ МП):** вкладка сверки файлов `RFP_Зиновьев` с фамилиями в `Список ДС - Фамилии МП.xlsx` ([ds_manager_roster.py](RFQ/tags_rfp_compare/ds_manager_roster.py), [rfp_ds_mp_panel.py](ds_compare_center/rfp_ds_mp_panel.py)); ручной запуск переписывает лист «Фактический и порядковый», Лист2 не трогает (`--tab rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers`).
 - **02.09.2026 (ключ посадки Step4):** `(actual, title, system, code)` (`rfp_packing_match_key`); столбец **Фактический ДС** (`DS_ACTUAL`); `DS_NAME` → «Порядковый ДС». Grouped matcher **пока** 3-tuple `packing_match_key`.

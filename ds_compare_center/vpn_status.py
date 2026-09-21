@@ -38,6 +38,7 @@ class VpnCheck:
     ok: bool
     detail: str
     required: bool = True
+    key: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,14 @@ class VpnSnapshot:
     checks: tuple[VpnCheck, ...]
     overall_ok: bool
     raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class FlowLamp:
+    """One schematic node: lamp colour and a one-line live status."""
+
+    ok: bool | None
+    status: str
 
 
 def _run_hidden(argv: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
@@ -167,6 +176,21 @@ def evaluate_vpn_raw(raw: dict[str, Any]) -> VpnSnapshot:
             lan_ok_row = f"{alias} {hop} metric={row.get('RouteMetric')}"
             break
 
+    cb_default_row = None
+    cb_metric: int | None = None
+    for row in defaults:
+        if str(row.get("InterfaceAlias") or "") != CURSORBIND_ALIAS:
+            continue
+        hop = str(row.get("NextHop") or "")
+        metric = row.get("RouteMetric")
+        try:
+            cb_metric = int(metric) if metric is not None else None
+        except (TypeError, ValueError):
+            cb_metric = None
+        cb_default_row = f"{hop} metric={metric}"
+        break
+    cb_default_ok = cb_metric is not None and cb_metric >= 100
+
     unc_ok = unc is True
     if unc is None:
         unc_detail = f"таймаут {UNC_SAMPLE}"
@@ -180,38 +204,164 @@ def evaluate_vpn_raw(raw: dict[str, Any]) -> VpnSnapshot:
             "Файл start-cursor-vpn.bat",
             bat_ok,
             str(START_BAT) if bat_ok else f"нет файла: {START_BAT}",
+            key="bat",
         ),
         VpnCheck(
             "Туннель CursorBind",
             CURSORBIND_IP in cursor_ips,
             ", ".join(cursor_ips) or "адаптер выключен",
+            key="cursorbind",
+        ),
+        VpnCheck(
+            "Слабый default CursorBind",
+            cb_default_ok,
+            cb_default_row or "нет 0.0.0.0/0 на CursorBind (metric 9999)",
+            key="cb_default",
         ),
         VpnCheck(
             "H10 выключен",
             not h10_ips and h10_default is None,
             f"IP {', '.join(h10_ips) or '—'}; default {h10_default or 'нет'}",
+            key="h10_off",
         ),
         VpnCheck(
             "Default через Ethernet",
             eth_default is not None and h10_default is None,
             eth_default or "нет маршрута 0.0.0.0/0 на Ethernet",
+            key="eth_default",
         ),
         VpnCheck(
             f"LAN {LAN_PREFIX}",
             lan_ok_row is not None,
             lan_ok_row or "нет маршрута на Ethernet",
+            key="lan",
         ),
         VpnCheck(
             f"SOCKS {SOCKS_HOST}:{SOCKS_PORT}",
             socks_ok,
             "слушает" if socks_ok else "не слушает (3proxy?)",
+            key="socks",
         ),
-        VpnCheck("Процесс 3proxy", p3, "запущен" if p3 else "не найден"),
-        VpnCheck("Процесс ProxiFyre", pf, "запущен" if pf else "не найден"),
-        VpnCheck("UNC шара", unc_ok, unc_detail, required=True),
+        VpnCheck("Процесс 3proxy", p3, "запущен" if p3 else "не найден", key="proc3proxy"),
+        VpnCheck("Процесс ProxiFyre", pf, "запущен" if pf else "не найден", key="proxifyre"),
+        VpnCheck("UNC шара", unc_ok, unc_detail, required=True, key="unc"),
     )
     overall = all(item.ok for item in checks if item.required)
     return VpnSnapshot(checks=checks, overall_ok=overall, raw=raw)
+
+
+def _check_by_key(snap: VpnSnapshot, key: str) -> VpnCheck | None:
+    for item in snap.checks:
+        if item.key == key:
+            return item
+    return None
+
+
+def _lamp_from_check(snap: VpnSnapshot, key: str) -> FlowLamp:
+    item = _check_by_key(snap, key)
+    if item is None:
+        return FlowLamp(None, "нет данных")
+    return FlowLamp(item.ok, item.detail)
+
+
+def exit_lamps(direct: str, socks: str) -> tuple[FlowLamp, FlowLamp]:
+    """Office (direct) and NL (SOCKS) lamps from curl ipify strings.
+
+    Args:
+        direct: Public IP without proxy.
+        socks: Public IP via SOCKS.
+
+    Returns:
+        ``(office_exit, socks_exit)``.
+    """
+    if direct:
+        if direct == H10_EXIT_IP:
+            office = FlowLamp(False, f"{direct} это выход H10")
+        else:
+            office = FlowLamp(True, f"{direct} (офис)")
+    else:
+        office = FlowLamp(None, "нажмите «Проверить IP»")
+    if socks:
+        if socks.startswith(SOCKS_EXIT_PREFIX):
+            nl = FlowLamp(True, f"{socks} (S4)")
+        else:
+            nl = FlowLamp(False, f"{socks} ожидали префикс {SOCKS_EXIT_PREFIX}")
+    else:
+        nl = FlowLamp(None, "нажмите «Проверить IP»")
+    return office, nl
+
+
+def flow_lamps(
+    snap: VpnSnapshot,
+    *,
+    direct: str = "",
+    socks: str = "",
+) -> dict[str, FlowLamp]:
+    """Map a snapshot (+ optional curl IPs) onto schematic node lamps.
+
+    Args:
+        snap: Evaluated adapter/process snapshot.
+        direct: Public IP without proxy (empty until curl).
+        socks: Public IP via SOCKS (empty until curl).
+
+    Returns:
+        Node key → lamp. ``ok is None`` means not probed / not applicable.
+    """
+    socks_chk = _check_by_key(snap, "socks")
+    p3_chk = _check_by_key(snap, "proc3proxy")
+    if socks_chk is None and p3_chk is None:
+        socks_lamp = FlowLamp(None, "нет данных")
+    else:
+        socks_ok = bool(socks_chk and socks_chk.ok and p3_chk and p3_chk.ok)
+        if socks_ok:
+            socks_lamp = FlowLamp(True, "слушает 127.0.0.1:1080")
+        elif socks_chk and socks_chk.ok:
+            socks_lamp = FlowLamp(False, "порт есть, процесс 3proxy не найден")
+        else:
+            socks_lamp = FlowLamp(False, "не слушает :1080")
+
+    h10 = _lamp_from_check(snap, "h10_off")
+    eth = _lamp_from_check(snap, "eth_default")
+    if h10.ok is False:
+        other = FlowLamp(False, "H10 забрал default — браузер тоже в NL")
+    else:
+        other = FlowLamp(eth.ok, "не Cursor.exe, идут на Ethernet")
+
+    office, nl = exit_lamps(direct, socks)
+
+    cb = _lamp_from_check(snap, "cursorbind")
+    cbd = _lamp_from_check(snap, "cb_default")
+    if cb.ok is False:
+        tunnel = FlowLamp(False, cb.status)
+    elif cbd.ok is False:
+        tunnel = FlowLamp(False, "туннель есть, нет metric 9999 — SOCKS не выйдет")
+    elif cb.ok and cbd.ok:
+        tunnel = FlowLamp(True, f"{cb.status}; {cbd.status}")
+    else:
+        tunnel = cb
+
+    lan = _lamp_from_check(snap, "lan")
+    return {
+        "cursor": FlowLamp(None, "не опрашивается"),
+        "proxifyre": _lamp_from_check(snap, "proxifyre"),
+        "socks": socks_lamp,
+        "cursorbind": tunnel,
+        "cb_default": cbd,
+        "socks_exit": nl,
+        "other_apps": other,
+        "eth_default": eth,
+        "office_exit": office,
+        "unc": _lamp_from_check(snap, "unc"),
+        "lan": lan,
+        "lan_gw": FlowLamp(lan.ok, LAN_GATEWAY),
+        "h10_off": (
+            FlowLamp(True, "выключен — так и надо")
+            if h10.ok
+            else FlowLamp(False, "включён — выключить, иначе заберёт интернет")
+            if h10.ok is False
+            else h10
+        ),
+    }
 
 
 def collect_vpn_raw() -> dict[str, Any]:
