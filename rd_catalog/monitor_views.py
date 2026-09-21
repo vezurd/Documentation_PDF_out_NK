@@ -76,6 +76,7 @@ from rd_catalog.db import (
     KitPackageRow,
     KitPipelineRow,
     KitRevisionRow,
+    RobotMtoAcceptRow,
 )
 from rd_catalog.google_kits import load_cached_google_kits
 from rd_catalog.google_sheet_links import (
@@ -132,6 +133,15 @@ from rd_catalog.overlay import revision_rank
 from rd_catalog.parse import record_has_canonical_layout
 from rd_catalog.path_actions import path_is_under
 from rd_catalog.perf_log import perf_span
+from rd_catalog.robot_mto_accept import (
+    ACCEPT_LIVE,
+    ROBOT_MTO_ACCEPT_FOREGROUND,
+    accepts_by_kit,
+    mto_xlsx_record,
+    robot_mto_accept_paints_blue,
+    robot_mto_accept_state,
+    robot_mto_accept_tooltip,
+)
 from rd_catalog.transfer_review_compare import path_pair_labels_from_cache
 from rd_catalog.pipeline import (
     KitCard,
@@ -1136,6 +1146,9 @@ def kits_paint_legend(
                 "(не «РД · рев.» / OD). "
                 "Жирный — содержимое совпало с MTO РД, даже если "
                 "ревизия другая. Красная заливка — не копия. "
+                "Синий текст — ручное подтверждение правок робота "
+                "относительно текущего MTO официальной папки "
+                "(не origin-зелёный). "
                 "Это важнее бледной зелёной / жёлтой сверки ревизий."
             ),
             samples=(
@@ -1178,6 +1191,16 @@ def kits_paint_legend(
                     "0-AN01",
                     "Файл робота не совпал ни с РД, ни с SQ.",
                     fill=ROBOT_ORPHAN_FILL,
+                ),
+                sample(
+                    "Робот МТО · рев.",
+                    "01-AN01",
+                    "Правки робота подтверждены вручную относительно "
+                    "текущего MTO официальной папки РД. Синий текст; "
+                    "заливка origin не меняется. Не ставить, если "
+                    "содержимое уже совпало (жирный).",
+                    fill=ROBOT_ORIGIN_FILL,
+                    foreground=ROBOT_MTO_ACCEPT_FOREGROUND,
                 ),
                 sample(
                     "Робот МТО · рев.",
@@ -1838,6 +1861,25 @@ def current_ifc_revision_map(
             continue
         mapping[kit_identity_key(row.title, row.mark)] = text
     return mapping
+
+
+def _official_rd_mto_record(
+    row: KitMatrixRow,
+    *,
+    overlay_mto: Mapping[tuple[str, str], tuple[str, str]],
+    records_by_path_key: Mapping[str, FileRecord] | None,
+) -> FileRecord | None:
+    if not records_by_path_key:
+        return None
+    key = kit_identity_key(row.title, row.mark)
+    overlay = overlay_mto.get(key)
+    paths: list[str] = []
+    if overlay is not None:
+        path = str(overlay[0] or "").strip()
+        if path:
+            paths.append(path)
+    paths.extend(row.rd.paths)
+    return mto_xlsx_record(paths, records_by_path_key)
 
 
 def kits_official_folder_mto_text(
@@ -3050,6 +3092,8 @@ def load_catalog_monitor(
         excluded_sends = _excluded_issuance_sends(database)
         an_cache = load_an_content_compare_cache(config.runtime_dir)
         sheet_links = sheet_link_context_from_config(config)
+        records_by_path_key = {record.path_key: record for record in records}
+        accept_by_kit = accepts_by_kit(database.list_robot_mto_accepts())
 
         kits: list[KitsMonitorRow] = []
         for row in kit_rows:
@@ -3072,6 +3116,8 @@ def load_catalog_monitor(
                     ifc_by_kit=ifc_by_kit,
                     excluded_sends=excluded_sends.get(key, ()),
                     sheet_links=sheet_links,
+                    robot_mto_accept=accept_by_kit.get(key),
+                    records_by_path_key=records_by_path_key,
                 )
             )
 
@@ -4328,6 +4374,8 @@ def build_kits_monitor_row(
     ifc_by_kit: Mapping[tuple[str, str], str],
     excluded_sends: Sequence[Any],
     sheet_links: SheetLinkContext | None = None,
+    robot_mto_accept: RobotMtoAcceptRow | None = None,
+    records_by_path_key: Mapping[str, FileRecord] | None = None,
 ) -> KitsMonitorRow:
     key = kit_identity_key(row.title, row.mark)
     google = row.google
@@ -4470,6 +4518,25 @@ def build_kits_monitor_row(
     }
     match_flags = kit_revision_match_flags(row)
     origin = kit_robot_origin(row, rd_content_equal=mto_content_equal)
+    rd_mto_record = _official_rd_mto_record(
+        row,
+        overlay_mto=overlay_mto,
+        records_by_path_key=records_by_path_key,
+    )
+    robot_mto_record = (
+        mto_xlsx_record(row.robot.paths, records_by_path_key)
+        if records_by_path_key
+        else None
+    )
+    accept_state = robot_mto_accept_state(
+        robot_mto_accept,
+        rd=rd_mto_record,
+        robot=robot_mto_record,
+    )
+    accept_paints_blue = robot_mto_accept_paints_blue(
+        accept_state,
+        content_equal=mto_content_equal is True or origin.content_equal,
+    )
     code_a = bool(
         pipeline is not None
         and pipeline_display_code_a(
@@ -4616,6 +4683,17 @@ def build_kits_monitor_row(
                 cell = replace(cell, bold=True)
             if row.robot.present and mto_content_equal is None:
                 cell = _append_tooltip(cell, _MTO_COMPARE_PENDING_TIP)
+            if accept_paints_blue and robot_mto_accept is not None:
+                cell = replace(
+                    cell,
+                    foreground=ROBOT_MTO_ACCEPT_FOREGROUND,
+                )
+                cell = _append_tooltip(
+                    cell,
+                    robot_mto_accept_tooltip(
+                        robot_mto_accept, rd=rd_mto_record
+                    ),
+                )
         if origin.matched is True:
             if (
                 header == "РД · рев."
@@ -4746,6 +4824,10 @@ def build_kits_monitor_row(
         mto_rev_text,
         ok_cell.text,
         "хороший" if kit_ok else None,
+        "правки робота" if accept_state else None,
+        "актуально" if accept_state == ACCEPT_LIVE else None,
+        "устарело" if accept_state == "stale" else None,
+        accept_state or None,
     ).casefold()
     kit_tdo = review_status in KITS_TDO_STATUSES
     as_build = bool(

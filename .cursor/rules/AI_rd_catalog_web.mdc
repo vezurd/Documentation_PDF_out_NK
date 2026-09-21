@@ -48,6 +48,7 @@ WEB **не** писатель. Пустой `kit_pipeline` → пустые ли
 - match `#E2F2E1`, mismatch `#F7E8BE`
 - Комплекты «Авто МТО» ahead of official «РД · рев.» `#F0D0EA` (`AUTO_MTO_AHEAD_FILL`); heatmap Auto MTO stays green/yellow vs export
 - robot origin `#C5E8C4` only when robot rev matches «MTO · рев.» of the official folder / SQ; orphan `#F3C2C2`; robot **bold** when RD↔robot content equal (MTO rev may differ)
+- robot accept text `#1A4FBF` (`ROBOT_MTO_ACCEPT_FOREGROUND`) when `robot_mto_accept` is live and content is not equal; origin fill unchanged
 - mixed titles (`mixed_titles`) `#F3C2C2` on Комплекты «РД · рев.»; Сводка «Смешанные титулы» (чужой титул **или** чужая марка: `SOT` в `SOS`)
 - «РД · рев.» yellow (`REV_DIFF_FILL`) when disk lags letter A/B/C or last F TDO/incoming pass; robot-origin green loses; grey `rd_missing_transfer` still wins
 - АН vs-*: [`rd_catalog/an_compare.py`](rd_catalog/an_compare.py) (`AN_VS_*_FILL`)

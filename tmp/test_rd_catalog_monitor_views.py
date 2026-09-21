@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rd_catalog.config import load_config
-from rd_catalog.db import CatalogDatabase, KitPipelineRow
+from rd_catalog.db import CatalogDatabase, KitPipelineRow, RobotMtoAcceptRow
 from rd_catalog.google_sheet_links import SheetLinkContext
 from rd_catalog.issuance_review import IssuanceJournalRow, send_identity_fingerprint
 from rd_catalog.customer_pi_auto_mto import AutoMtoFile
@@ -86,6 +86,8 @@ from rd_catalog.monitor_views import (
     _heatmap_rd_rev_cell,
 )
 from rd_catalog.pipeline import MtoWorklistRow
+from rd_catalog.models import FileKind, FileRecord, ReviewState, SourceKind, make_path_key
+from rd_catalog.robot_mto_accept import ROBOT_MTO_ACCEPT_FOREGROUND
 from rd_catalog.status_colors import color_for, default_palette
 
 
@@ -2277,6 +2279,118 @@ class GoogleFMtoPaintTests(unittest.TestCase):
             "24.12.2024 код А на рев. 04 AGCC-BCC-TRM-000200 MTO 04"
         )
         self.assertIsNone(historical_f_mto_event((event, named), named))
+
+    def test_robot_mto_accept_paints_blue_text(self) -> None:
+        rd_path = r"C:\rd\AGCC.287-2210-KSB.MTO-0001_01-AN01_RU.xlsx"
+        robot_path = r"C:\robot\AGCC.287-2210-KSB.MTO-0001_01-AN01_RU.xlsx"
+        rd_rec = FileRecord(
+            id=1,
+            path=rd_path,
+            path_key=make_path_key(rd_path),
+            source=SourceKind.RD,
+            present=True,
+            review_state=ReviewState.PENDING,
+            first_seen_run_id=1,
+            last_seen_run_id=1,
+            data={
+                "file_kind": FileKind.MTO_XLSX.value,
+                "size": 200,
+                "mtime_ns": 20,
+                "disk_mtime_ns": 20,
+                "revision": "01",
+                "appendix": "01",
+            },
+        )
+        robot_rec = FileRecord(
+            id=2,
+            path=robot_path,
+            path_key=make_path_key(robot_path),
+            source=SourceKind.ROBOT,
+            present=True,
+            review_state=ReviewState.PENDING,
+            first_seen_run_id=1,
+            last_seen_run_id=1,
+            data={
+                "file_kind": FileKind.MTO_XLSX.value,
+                "size": 180,
+                "mtime_ns": 30,
+                "disk_mtime_ns": 30,
+                "revision": "01",
+                "appendix": "01",
+            },
+        )
+        stored = RobotMtoAcceptRow(
+            title="2210",
+            mark="KSB",
+            robot_path=robot_path,
+            robot_path_key=robot_rec.path_key,
+            robot_size=180,
+            robot_mtime_ns=30,
+            robot_revision_text="01-AN01",
+            rd_path=rd_path,
+            rd_path_key=rd_rec.path_key,
+            rd_size=200,
+            rd_mtime_ns=20,
+            rd_revision_text="01-AN01",
+        )
+        row = _ok_kit_row(
+            rd=replace(_rd_snap(), paths=(rd_path,)),
+            robot=replace(_src_snap(), paths=(robot_path,)),
+        )
+        records = {rd_rec.path_key: rd_rec, robot_rec.path_key: robot_rec}
+        overlay = {kit_identity_key("2210", "KSB"): (rd_path, "01-AN01")}
+        painted = _paint_kits(
+            row,
+            _ok_pipeline(),
+            robot_mto_accept=stored,
+            records_by_path_key=records,
+            overlay_mto=overlay,
+            mto_content_equal=False,
+        )
+        cell = painted.cells["Робот МТО · рев."]
+        self.assertEqual(cell.foreground, ROBOT_MTO_ACCEPT_FOREGROUND)
+        self.assertIn("подтверждён вручную", cell.tooltip)
+        self.assertIn("правки робота", painted.haystack)
+        equal = _paint_kits(
+            row,
+            _ok_pipeline(),
+            robot_mto_accept=stored,
+            records_by_path_key=records,
+            overlay_mto=overlay,
+            mto_content_equal=True,
+        )
+        self.assertNotEqual(
+            equal.cells["Робот МТО · рев."].foreground,
+            ROBOT_MTO_ACCEPT_FOREGROUND,
+        )
+        stale_rd = replace(rd_rec, data={**rd_rec.data, "mtime_ns": 99, "disk_mtime_ns": 99})
+        stale = _paint_kits(
+            row,
+            _ok_pipeline(),
+            robot_mto_accept=stored,
+            records_by_path_key={
+                stale_rd.path_key: stale_rd,
+                robot_rec.path_key: robot_rec,
+            },
+            overlay_mto=overlay,
+            mto_content_equal=False,
+        )
+        self.assertNotEqual(
+            stale.cells["Робот МТО · рев."].foreground,
+            ROBOT_MTO_ACCEPT_FOREGROUND,
+        )
+
+    def test_legend_includes_robot_accept_blue(self) -> None:
+        sections = kits_paint_legend()
+        samples = [item for section in sections for item in section.samples]
+        blue = [
+            item
+            for item in samples
+            if item.column == "Робот МТО · рев."
+            and item.foreground == ROBOT_MTO_ACCEPT_FOREGROUND
+        ]
+        self.assertTrue(blue)
+        self.assertEqual(blue[0].fill, ROBOT_ORIGIN_FILL)
 
 
 if __name__ == "__main__":

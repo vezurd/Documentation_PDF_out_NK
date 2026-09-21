@@ -684,7 +684,7 @@ def test_schema_5_migrates_keeping_mto_comparison(temp: Path) -> None:
     database = CatalogDatabase(path)
     database.initialize()
     assert database.schema_version() == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 13
+    assert SCHEMA_VERSION == 14
     version_after, mto_after, has_pair_after, pair_n = _sqlite_counts(path)
     assert version_after == SCHEMA_VERSION
     assert mto_after == mto_before == 1

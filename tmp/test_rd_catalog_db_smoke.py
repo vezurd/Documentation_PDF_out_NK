@@ -15,6 +15,8 @@ from rd_catalog.issuance_review import send_identity_fingerprint
 from rd_catalog.kits import GoogleKit, IssuanceKit, KitEvent, kit_identity_key
 from rd_catalog.models import (
     CollisionKind,
+    FileKind,
+    FileRecord,
     OverlayCollision,
     ReviewState,
     ScanRunStatus,
@@ -112,7 +114,7 @@ def _sample_issuance_send(*, row_index: int, transmittal: str, send_date: str) -
 def main() -> None:
     """Verify reopen, schema, review history, and comparison cache."""
 
-    assert SCHEMA_VERSION == 13
+    assert SCHEMA_VERSION == 14
     with tempfile.TemporaryDirectory(prefix="rd_catalog_db_") as temp:
         legacy_path = Path(temp, "legacy_v1.sqlite")
         connection = sqlite3.connect(legacy_path)
@@ -141,6 +143,7 @@ def main() -> None:
         assert "kit_working_flag" in tables
         assert "kit_annulled_flag" in tables
         assert "file_mtime_override" in tables
+        assert "robot_mto_accept" in tables
         connection = sqlite3.connect(legacy_path)
         try:
             assert connection.execute(
@@ -189,6 +192,7 @@ def main() -> None:
         assert "kit_working_flag" in v4_tables
         assert "kit_annulled_flag" in v4_tables
         assert "file_mtime_override" in v4_tables
+        assert "robot_mto_accept" in v4_tables
         for table_name in _V4_TABLES:
             assert table_name in v4_tables
         reviews = v3_db.list_liquidity_reviews("9110", "KSB1")
@@ -590,6 +594,58 @@ def main() -> None:
         assert reopened.list_an_mto_files()[0].path == an_file.path
         assert "an_mto_file" in _table_names(db_path)
         assert "rd_dump_mto_file" in _table_names(db_path)
+        robot = FileRecord(
+            id=11,
+            path=r"C:\robot\AGCC.287-1600-POS.MTO-0001_02-AN01_RU.xlsx",
+            path_key=r"c:\robot\agcc.287-1600-pos.mto-0001_02-an01_ru.xlsx",
+            source=SourceKind.ROBOT,
+            present=True,
+            review_state=ReviewState.PENDING,
+            first_seen_run_id=1,
+            last_seen_run_id=1,
+            data={
+                "file_kind": FileKind.MTO_XLSX.value,
+                "size": 100,
+                "mtime_ns": 10,
+                "disk_mtime_ns": 10,
+                "revision": "02",
+                "appendix": "01",
+            },
+        )
+        rd = FileRecord(
+            id=12,
+            path=r"C:\rd\AGCC.287-1600-POS.MTO-0001_02-AN01_RU.xlsx",
+            path_key=r"c:\rd\agcc.287-1600-pos.mto-0001_02-an01_ru.xlsx",
+            source=SourceKind.RD,
+            present=True,
+            review_state=ReviewState.PENDING,
+            first_seen_run_id=1,
+            last_seen_run_id=1,
+            data={
+                "file_kind": FileKind.MTO_XLSX.value,
+                "size": 200,
+                "mtime_ns": 20,
+                "disk_mtime_ns": 20,
+                "revision": "02",
+                "appendix": "01",
+            },
+        )
+        stored_accept = reopened.upsert_robot_mto_accept(
+            "1600", "POS", robot=robot, rd=rd, comment="keep"
+        )
+        assert stored_accept.comment == "keep"
+        reopened.replace_google_snapshot(
+            (),
+            (),
+            loaded_at="2026-09-17T01:00:00+00:00",
+            source="test-keep-robot-accept",
+        )
+        reopened.replace_kit_derived((), (), ())
+        kept_accept = reopened.get_robot_mto_accept("1600", "POS")
+        assert kept_accept is not None
+        assert kept_accept.robot_path_key == robot.path_key
+        assert kept_accept.rd_size == 200
+        assert "robot_mto_accept" in _table_names(db_path)
     test_purge_noncanonical_rd_keeps_canonical_missing()
     print("RD catalog DB smoke: OK")
 

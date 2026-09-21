@@ -1564,7 +1564,7 @@ def rebuild_pipeline(
     """Rebuild ``kit_package`` / ``kit_cycle`` / ``kit_pipeline`` / heatmap.
 
     Does not delete ``kit_liquidity_review``, ``kit_working_flag``,
-    ``kit_annulled_flag``, or ``file_mtime_override``. Google and issuance
+    ``kit_annulled_flag``, ``file_mtime_override``, or ``robot_mto_accept``. Google and issuance
     rows must already be in SQLite (typically via
     :func:`ingest_google_snapshot`).
     After :meth:`CatalogDatabase.replace_kit_derived`, calls

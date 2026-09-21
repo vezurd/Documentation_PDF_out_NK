@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from rd_catalog.mto_diff import MtoComparisonResult, RowLoader
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 _FILE_ID_CHUNK = 400
 _OVERRIDE_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
 FILE_MTIME_OVERRIDE_REASONS = frozenset(
@@ -312,6 +312,33 @@ class FileMtimeOverrideRow:
 
 
 @dataclass(frozen=True, slots=True)
+class RobotMtoAcceptRow:
+    """User mark that the robot MTO matches the official RD MTO for a kit.
+
+    Identity is ``(title, mark)``. Survives scan and Google rebuilds.
+    Live/stale is computed in ``rd_catalog.robot_mto_accept`` against the
+    current robot ``path_key`` and official RD MTO ``path_key`` + size +
+    disk mtime. Robot size/mtime are stored for display only.
+    """
+
+    title: str
+    mark: str
+    robot_path: str
+    robot_path_key: str
+    robot_size: int
+    robot_mtime_ns: int
+    robot_revision_text: str
+    rd_path: str
+    rd_path_key: str
+    rd_size: int
+    rd_mtime_ns: int
+    rd_revision_text: str
+    comment: str = ""
+    decided_at: str = ""
+    id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class KitWorkingFlagRow:
     """User mark that one issued folder is working, not official.
 
@@ -518,6 +545,33 @@ def _mtime_override_from_row(row: sqlite3.Row) -> FileMtimeOverrideRow:
     )
 
 
+def _robot_accept_from_row(row: sqlite3.Row) -> RobotMtoAcceptRow:
+    return RobotMtoAcceptRow(
+        title=str(row["title"] or ""),
+        mark=str(row["mark"] or ""),
+        robot_path=str(row["robot_path"] or ""),
+        robot_path_key=str(row["robot_path_key"] or ""),
+        robot_size=int(row["robot_size"] or 0),
+        robot_mtime_ns=int(row["robot_mtime_ns"] or 0),
+        robot_revision_text=str(row["robot_revision_text"] or ""),
+        rd_path=str(row["rd_path"] or ""),
+        rd_path_key=str(row["rd_path_key"] or ""),
+        rd_size=int(row["rd_size"] or 0),
+        rd_mtime_ns=int(row["rd_mtime_ns"] or 0),
+        rd_revision_text=str(row["rd_revision_text"] or ""),
+        comment=str(row["comment"] or ""),
+        decided_at=str(row["decided_at"] or ""),
+        id=int(row["id"]) if row["id"] is not None else None,
+    )
+
+
+def _mto_revision_text(record: FileRecord) -> str:
+    return format_revision(
+        record.data.get("revision"),
+        record.data.get("appendix"),
+    )
+
+
 class CatalogDatabase:
     """Short-connection SQLite repository under an injected local path.
 
@@ -610,6 +664,9 @@ class CatalogDatabase:
                 version = 12
             if version < 13:
                 self._migrate_12_to_13(connection)
+                version = 13
+            if version < 14:
+                self._migrate_13_to_14(connection)
             self._ensure_kit_pipeline_columns(connection)
 
     @staticmethod
@@ -1285,6 +1342,43 @@ class CatalogDatabase:
             "INSERT OR REPLACE INTO schema_meta(key, value) VALUES"
             " ('schema_version', ?)",
             ("13",),
+        )
+
+    @staticmethod
+    def _migrate_13_to_14(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE robot_mto_accept (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                mark TEXT NOT NULL,
+                robot_path TEXT NOT NULL DEFAULT '',
+                robot_path_key TEXT NOT NULL COLLATE NOCASE,
+                robot_size INTEGER NOT NULL DEFAULT 0,
+                robot_mtime_ns INTEGER NOT NULL DEFAULT 0,
+                robot_revision_text TEXT NOT NULL DEFAULT '',
+                rd_path TEXT NOT NULL DEFAULT '',
+                rd_path_key TEXT NOT NULL COLLATE NOCASE,
+                rd_size INTEGER NOT NULL DEFAULT 0,
+                rd_mtime_ns INTEGER NOT NULL DEFAULT 0,
+                rd_revision_text TEXT NOT NULL DEFAULT '',
+                comment TEXT NOT NULL DEFAULT '',
+                decided_at TEXT NOT NULL DEFAULT '',
+                UNIQUE (
+                    title COLLATE NOCASE,
+                    mark COLLATE NOCASE
+                )
+            );
+            CREATE INDEX robot_mto_accept_kit_idx
+                ON robot_mto_accept(
+                    title COLLATE NOCASE, mark COLLATE NOCASE
+                );
+            """
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES"
+            " ('schema_version', ?)",
+            ("14",),
         )
 
     def schema_version(self) -> int:
@@ -3391,6 +3485,7 @@ class CatalogDatabase:
 
         Does not delete ``kit_liquidity_review``, ``issuance_review``,
         ``kit_working_flag``, ``kit_annulled_flag``, ``file_mtime_override``,
+        ``robot_mto_accept``,
         ``kit_package``,
         ``kit_pipeline``, ``kit_cycle``, ``file_entry``,
         ``an_mto_file``, or ``rd_dump_mto_file``.
@@ -3708,6 +3803,7 @@ class CatalogDatabase:
 
         Does not touch ``kit_liquidity_review``, ``issuance_review``,
         ``kit_working_flag``, ``kit_annulled_flag``, ``file_mtime_override``,
+        ``robot_mto_accept``,
         Google snapshot
         tables, ``file_entry``, ``kit_revision_cell``, ``an_mto_file``,
         or ``rd_dump_mto_file``.
@@ -4635,6 +4731,190 @@ class CatalogDatabase:
                 "SELECT * FROM file_mtime_override ORDER BY path_key, id"
             ).fetchall()
         return [_mtime_override_from_row(row) for row in rows]
+
+    def upsert_robot_mto_accept(
+        self,
+        title: str,
+        mark: str,
+        *,
+        robot: FileRecord,
+        rd: FileRecord,
+        comment: str = "",
+        decided_at: str | None = None,
+    ) -> RobotMtoAcceptRow:
+        """Store that the robot MTO is accepted vs the official RD MTO.
+
+        Scan, Google ingest, and derived rebuilds must not delete the row.
+        Live/stale uses the current robot ``path_key`` and the official RD
+        MTO ``path_key`` + size + disk mtime.
+
+        Args:
+            title: Four-digit title.
+            mark: Latin AGCC mark.
+            robot: Present robot MTO xlsx.
+            rd: Official-folder RD MTO xlsx.
+            comment: Optional operator note.
+            decided_at: ISO UTC timestamp; default now.
+
+        Returns:
+            Persisted accept row.
+
+        Raises:
+            ValueError: Missing identity, or a file is not an MTO xlsx.
+        """
+
+        parsed_title = str(title or "").strip()
+        parsed_mark = str(mark or "").strip()
+        if not parsed_title or not parsed_mark:
+            raise ValueError("Robot MTO accept needs title and mark")
+        robot_kind = str(robot.data.get("file_kind") or "")
+        rd_kind = str(rd.data.get("file_kind") or "")
+        if robot_kind != FileKind.MTO_XLSX.value:
+            raise ValueError("Robot accept needs a robot MTO xlsx")
+        if rd_kind != FileKind.MTO_XLSX.value:
+            raise ValueError("Robot accept needs an official RD MTO xlsx")
+        robot_sig = mto_file_stat_signature(robot)
+        rd_sig = mto_file_stat_signature(rd)
+        stamped = decided_at or _utc_now()
+        note = str(comment or "").strip()
+        robot_rev = _mto_revision_text(robot)
+        rd_rev = _mto_revision_text(rd)
+        with self._connection() as connection, connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM robot_mto_accept
+                WHERE title = ? COLLATE NOCASE
+                  AND mark = ? COLLATE NOCASE
+                """,
+                (parsed_title, parsed_mark),
+            ).fetchone()
+            values = (
+                parsed_title,
+                parsed_mark,
+                robot.path,
+                str(robot_sig.get("path_key") or robot.path_key),
+                int(robot_sig.get("size") or 0),
+                int(robot_sig.get("mtime_ns") or 0),
+                robot_rev,
+                rd.path,
+                str(rd_sig.get("path_key") or rd.path_key),
+                int(rd_sig.get("size") or 0),
+                int(rd_sig.get("mtime_ns") or 0),
+                rd_rev,
+                note,
+                stamped,
+            )
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO robot_mto_accept(
+                        title, mark,
+                        robot_path, robot_path_key, robot_size,
+                        robot_mtime_ns, robot_revision_text,
+                        rd_path, rd_path_key, rd_size,
+                        rd_mtime_ns, rd_revision_text,
+                        comment, decided_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE robot_mto_accept
+                    SET robot_path = ?, robot_path_key = ?, robot_size = ?,
+                        robot_mtime_ns = ?, robot_revision_text = ?,
+                        rd_path = ?, rd_path_key = ?, rd_size = ?,
+                        rd_mtime_ns = ?, rd_revision_text = ?,
+                        comment = ?, decided_at = ?
+                    WHERE id = ?
+                    """,
+                    values[2:] + (int(existing["id"]),),
+                )
+        stored = self.get_robot_mto_accept(parsed_title, parsed_mark)
+        if stored is None:
+            raise RuntimeError("Failed to persist robot_mto_accept")
+        return stored
+
+    def delete_robot_mto_accept(self, title: str, mark: str) -> bool:
+        """Remove a robot-MTO accept for one kit.
+
+        Args:
+            title: Four-digit title.
+            mark: Latin AGCC mark.
+
+        Returns:
+            ``True`` when a row was deleted.
+        """
+
+        parsed_title = str(title or "").strip()
+        parsed_mark = str(mark or "").strip()
+        if not parsed_title or not parsed_mark:
+            return False
+        with self._connection() as connection, connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM robot_mto_accept
+                WHERE title = ? COLLATE NOCASE
+                  AND mark = ? COLLATE NOCASE
+                """,
+                (parsed_title, parsed_mark),
+            )
+            return cursor.rowcount > 0
+
+    def get_robot_mto_accept(
+        self, title: str, mark: str
+    ) -> RobotMtoAcceptRow | None:
+        """Return the accept for one kit, or ``None``.
+
+        Args:
+            title: Four-digit title.
+            mark: Latin AGCC mark.
+        """
+
+        parsed_title = str(title or "").strip()
+        parsed_mark = str(mark or "").strip()
+        if not parsed_title or not parsed_mark:
+            return None
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM robot_mto_accept
+                WHERE title = ? COLLATE NOCASE
+                  AND mark = ? COLLATE NOCASE
+                """,
+                (parsed_title, parsed_mark),
+            ).fetchone()
+        if row is None:
+            return None
+        return _robot_accept_from_row(row)
+
+    def list_robot_mto_accepts(
+        self,
+        title: str | None = None,
+        mark: str | None = None,
+    ) -> list[RobotMtoAcceptRow]:
+        """Return stored robot-MTO accepts.
+
+        Args:
+            title: Optional kit title filter.
+            mark: Optional kit mark filter.
+
+        Returns:
+            Rows ordered by title, mark, and id.
+        """
+
+        where, params = self._kit_filter_sql(title, mark)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM robot_mto_accept
+                {where}
+                ORDER BY title, mark, id
+                """,
+                params,
+            ).fetchall()
+        return [_robot_accept_from_row(row) for row in rows]
 
     def upsert_issuance_review(
         self,

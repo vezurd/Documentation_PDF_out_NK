@@ -119,6 +119,7 @@ from rd_catalog.db import (
     CatalogDatabase,
     KitPackageRow,
     KitPipelineRow,
+    RobotMtoAcceptRow,
     apply_mtime_override_to_data,
     parse_override_date,
 )
@@ -364,6 +365,17 @@ from rd_catalog.robot_handoff import (
     format_robot_handoff,
     node_kind_label,
     yes_no,
+)
+from rd_catalog.robot_mto_accept import (
+    ACCEPT_LIVE,
+    accepts_by_kit,
+    build_robot_mto_accept_view,
+    mto_xlsx_record,
+    robot_mto_accept_state,
+)
+from rd_catalog.robot_mto_accept_tab import (
+    RobotMtoAcceptDialog,
+    RobotMtoAcceptTab,
 )
 from rd_catalog.robot_mto_dialog import RobotMtoSyncDialog
 from rd_catalog.robot_mto_sync import (
@@ -657,6 +669,7 @@ _DEFERRED_TREE = "tree"
 _DEFERRED_AN = "an"
 _DEFERRED_RD_DUMP = "rd_dump"
 _DEFERRED_HANDOFF = "handoff"
+_DEFERRED_ROBOT_ACCEPT = "robot_mto_accept"
 _DEFERRED_ALL = frozenset(
     {
         _DEFERRED_HEATMAP,
@@ -667,6 +680,7 @@ _DEFERRED_ALL = frozenset(
         _DEFERRED_AN,
         _DEFERRED_RD_DUMP,
         _DEFERRED_HANDOFF,
+        _DEFERRED_ROBOT_ACCEPT,
         _DEFERRED_APPROVAL,
         _DEFERRED_TREE,
     }
@@ -1225,6 +1239,7 @@ class CatalogWindow(QMainWindow):
         self._auto_mto_by_kit: dict[tuple[str, str], tuple[AutoMtoFile, ...]] = {}
         self._an_files_by_kit: dict[tuple[str, str], tuple[AnMtoFile, ...]] = {}
         self._rd_dump_files: tuple[AnMtoFile, ...] = ()
+        self._robot_mto_accepts: dict[tuple[str, str], RobotMtoAcceptRow] = {}
         self._catalog_monitor: CatalogMonitor | None = None
         self._customer_pi_dialog: CustomerPiDialog | None = None
         self._startup_load_pending = False
@@ -1290,6 +1305,13 @@ class CatalogWindow(QMainWindow):
         self._tabs.addTab(self._rd_dump_tab, "РД")
         self._mto_readiness_tab = self._build_mto_tab()
         self._tabs.addTab(self._mto_readiness_tab, "MTO · Готовность робота")
+        self._robot_mto_accept_tab = RobotMtoAcceptTab(self)
+        self._robot_mto_accept_tab.kit_activated.connect(self._on_revision_matrix_kit)
+        self._robot_mto_accept_tab.unmark_requested.connect(
+            self._unmark_robot_mto_accept
+        )
+        self._robot_mto_accept_table = self._robot_mto_accept_tab.table()
+        self._tabs.addTab(self._robot_mto_accept_tab, "MTO · Правки робота")
         self._handoff_export_tab = HandoffExportTab(self)
         self._handoff_export_tab.configure(self.config.runtime_dir)
         self._handoff_export_tab.kit_activated.connect(self._on_revision_matrix_kit)
@@ -2095,6 +2117,7 @@ class CatalogWindow(QMainWindow):
             ("window/issuance_journal_header_v1", "_issuance_journal_table"),
             ("window/an_tab_header_v3", "_an_table"),
             ("window/rd_dump_tab_header_v2", "_rd_dump_table"),
+            ("window/robot_mto_accept_header_v1", "_robot_mto_accept_table"),
             ("window/handoff_export_header_v2", "_handoff_export_table"),
             # v10: «Ок» after «Марка»; do not restore v9.
             ("window/kits_header_v10", "_kits_table"),
@@ -2823,6 +2846,7 @@ class CatalogWindow(QMainWindow):
             self._auto_mto_by_kit = snapshot.auto_mto_by_kit
             self._an_files_by_kit = snapshot.an_by_kit
             self._rd_dump_files = snapshot.rd_dump_files
+            self._robot_mto_accepts = dict(snapshot.robot_mto_accepts)
             self._mto_content_by_kit = snapshot.mto_content_by_kit
             self._export_pins_by_key = snapshot.export_pins
             self._set_mto_worklist_rows(snapshot.worklist_rows)
@@ -2874,6 +2898,8 @@ class CatalogWindow(QMainWindow):
             self._refresh_an_tab()
         elif key == _DEFERRED_RD_DUMP:
             self._refresh_rd_dump_tab()
+        elif key == _DEFERRED_ROBOT_ACCEPT:
+            self._refresh_robot_mto_accept_tab()
         elif key == _DEFERRED_HANDOFF:
             self._refresh_handoff_export_tab()
         self._deferred_widgets.discard(key)
@@ -2903,6 +2929,12 @@ class CatalogWindow(QMainWindow):
                 self._ensure_deferred_widget(_DEFERRED_RD_DUMP)
             elif self._rd_dump_tab.table().rowCount() == 0:
                 self._refresh_rd_dump_tab()
+            return
+        if widget is getattr(self, "_robot_mto_accept_tab", None):
+            if _DEFERRED_ROBOT_ACCEPT in self._deferred_widgets:
+                self._ensure_deferred_widget(_DEFERRED_ROBOT_ACCEPT)
+            elif self._robot_mto_accept_tab.table().rowCount() == 0:
+                self._refresh_robot_mto_accept_tab()
             return
         if widget is getattr(self, "_an_tab", None):
             if _DEFERRED_AN in self._deferred_widgets:
@@ -3014,6 +3046,7 @@ class CatalogWindow(QMainWindow):
                 self._refresh_mto_table()
             if not defer_secondary:
                 self._refresh_mto_worklist(reload=False)
+                self._refresh_robot_mto_accept_tab()
                 self._refresh_issuance_journal()
                 self._refresh_collision_table()
                 self._sync_approval_mail_lookups()
@@ -3781,6 +3814,8 @@ class CatalogWindow(QMainWindow):
             else self._current_ifc_revision_map(),
             excluded_sends=excluded_sends,
             sheet_links=self._sheet_link_context(),
+            robot_mto_accept=self._robot_mto_accepts.get(key),
+            records_by_path_key=self._records_by_path_key,
         )
 
     def _sheet_link_context(self) -> SheetLinkContext:
@@ -3813,6 +3848,7 @@ class CatalogWindow(QMainWindow):
             rebuild_rows=rebuild_rows,
             kits=len(kit_keys) if kit_keys is not None else "all",
         ):
+            self._reload_robot_mto_accepts()
             if kit_keys is not None and self._kit_rows:
                 self._rebuild_kit_rows_for_keys(kit_keys)
                 self._paint_kits_table(kit_keys=kit_keys)
@@ -5051,6 +5087,144 @@ class CatalogWindow(QMainWindow):
                 allowed_kits=known,
             )
 
+    def _reload_robot_mto_accepts(self) -> None:
+        """Reload robot-MTO accepts from SQLite. Does not rebuild pipeline."""
+
+        with perf_span("gui.reload_robot_mto_accepts"):
+            try:
+                self._robot_mto_accepts = accepts_by_kit(
+                    self.database.list_robot_mto_accepts()
+                )
+            except Exception as exc:
+                self._robot_mto_accepts = {}
+                self._append_log(f"Правки робота: {type(exc).__name__}: {exc}")
+
+    def _kit_official_rd_mto_record(
+        self, row: KitMatrixRow
+    ) -> FileRecord | None:
+        """Return the official-folder RD MTO xlsx for a kit, if present."""
+
+        overlay = self._rd_mto_overlay_by_kit().get(
+            kit_identity_key(row.title, row.mark)
+        )
+        paths: list[str] = []
+        if overlay is not None:
+            path = str(overlay[0] or "").strip()
+            if path:
+                paths.append(path)
+        paths.extend(row.rd.paths)
+        return mto_xlsx_record(paths, self._records_by_path_key)
+
+    def _kit_robot_mto_record(self, row: KitMatrixRow) -> FileRecord | None:
+        """Return the current robot MTO xlsx for a kit, if present."""
+
+        return mto_xlsx_record(row.robot.paths, self._records_by_path_key)
+
+    def _robot_mto_accept_views(self):
+        """Join stored accepts with current official/robot MTO files."""
+
+        by_kit = {
+            kit_identity_key(row.title, row.mark): row for row in self._kit_rows
+        }
+        views = []
+        for stored in self._robot_mto_accepts.values():
+            key = kit_identity_key(stored.title, stored.mark)
+            matrix = by_kit.get(key)
+            if matrix is not None:
+                rd = self._kit_official_rd_mto_record(matrix)
+                robot = self._kit_robot_mto_record(matrix)
+            else:
+                rd = self._records_by_path_key.get(stored.rd_path_key)
+                robot = self._records_by_path_key.get(stored.robot_path_key)
+            views.append(
+                build_robot_mto_accept_view(stored, rd=rd, robot=robot)
+            )
+        return views
+
+    def _refresh_robot_mto_accept_tab(self) -> None:
+        """Push stored robot-MTO accepts into the listing tab."""
+
+        if not hasattr(self, "_robot_mto_accept_tab"):
+            return
+        self._deferred_widgets.discard(_DEFERRED_ROBOT_ACCEPT)
+        with perf_span("gui.refresh_robot_mto_accept"):
+            self._reload_robot_mto_accepts()
+            self._robot_mto_accept_tab.set_rows(
+                self._robot_mto_accept_views(),
+                is_banned=lambda title, mark: self._is_banned_pair(title, mark),
+            )
+
+    def _confirm_robot_mto_accept(self, row: KitMatrixRow) -> None:
+        """Persist that the robot MTO is accepted vs the official RD MTO."""
+
+        if self._busy():
+            QMessageBox.information(
+                self,
+                "MTO робота",
+                "Дождитесь завершения текущей загрузки или сканирования.",
+            )
+            return
+        robot = self._kit_robot_mto_record(row)
+        rd = self._kit_official_rd_mto_record(row)
+        if robot is None or rd is None:
+            QMessageBox.warning(
+                self,
+                "MTO робота",
+                "Нужны файл MTO робота и MTO в официальной папке РД "
+                "(не ОД и не рабочая папка).",
+            )
+            return
+        dialog = RobotMtoAcceptDialog(
+            title=row.title,
+            mark=row.mark,
+            robot=robot,
+            rd=rd,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.database.upsert_robot_mto_accept(
+                row.title,
+                row.mark,
+                robot=robot,
+                rd=rd,
+                comment=dialog.comment(),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "MTO робота", str(exc))
+            return
+        key = kit_identity_key(row.title, row.mark)
+        self._refresh_kits_table(rebuild_rows=False, kit_keys={key})
+        if _DEFERRED_ROBOT_ACCEPT not in self._deferred_widgets:
+            self._refresh_robot_mto_accept_tab()
+        self.statusBar().showMessage(
+            f"MTO робота {row.title}-{row.mark} подтверждён как актуальный",
+            8_000,
+        )
+
+    @Slot(str, str)
+    def _unmark_robot_mto_accept(self, title: str, mark: str) -> None:
+        """Delete a stored robot-MTO accept and repaint."""
+
+        if self._busy():
+            QMessageBox.information(
+                self,
+                "MTO робота",
+                "Дождитесь завершения текущей загрузки или сканирования.",
+            )
+            return
+        if not self.database.delete_robot_mto_accept(title, mark):
+            return
+        key = kit_identity_key(title, mark)
+        self._refresh_kits_table(rebuild_rows=False, kit_keys={key})
+        if _DEFERRED_ROBOT_ACCEPT not in self._deferred_widgets:
+            self._refresh_robot_mto_accept_tab()
+        self.statusBar().showMessage(
+            f"Подтверждение MTO робота {title}-{mark} снято",
+            8_000,
+        )
+
     def _refresh_handoff_export_tab(self) -> None:
         """Push official-kit dump rows into the manager export tab."""
 
@@ -5451,6 +5625,8 @@ class CatalogWindow(QMainWindow):
                 self._refresh_rd_dump_tab()
             if _DEFERRED_HANDOFF not in self._deferred_widgets:
                 self._refresh_handoff_export_tab()
+            if _DEFERRED_ROBOT_ACCEPT not in self._deferred_widgets:
+                self._refresh_robot_mto_accept_tab()
             self._update_ban_action_label()
             self._update_kits_tab_label()
 
@@ -5745,6 +5921,8 @@ class CatalogWindow(QMainWindow):
         rescan_action = ctx["rescan_action"]
         mixed_open_action = ctx["mixed_open_action"]
         sync_action = ctx["sync_action"]
+        confirm_robot_action = ctx["confirm_robot_action"]
+        unmark_robot_action = ctx["unmark_robot_action"]
         compare_auto = ctx["compare_auto"]
         sq_to_rd_action = ctx["sq_to_rd_action"]
         ban_action = ctx["ban_action"]
@@ -5811,6 +5989,12 @@ class CatalogWindow(QMainWindow):
             return
         if chosen == sync_action:
             self._confirm_robot_mto_sync(row)
+            return
+        if chosen == confirm_robot_action:
+            self._confirm_robot_mto_accept(row)
+            return
+        if chosen == unmark_robot_action:
+            self._unmark_robot_mto_accept(row.title, row.mark)
             return
         if chosen == compare_auto:
             self._start_kit_auto_mto_compare(row)
@@ -5952,6 +6136,27 @@ class CatalogWindow(QMainWindow):
                 "Нет файлов комплекта в папке другого титула."
             )
         sync_action = menu.addAction("Обновить MTO у робота")
+        confirm_robot_action = menu.addAction(
+            "Подтвердить MTO робота как актуальное"
+        )
+        unmark_robot_action = menu.addAction("Снять подтверждение")
+        robot_mto = self._kit_robot_mto_record(row)
+        official_mto = self._kit_official_rd_mto_record(row)
+        confirm_robot_action.setEnabled(
+            robot_mto is not None
+            and official_mto is not None
+            and not self._busy()
+        )
+        confirm_robot_action.setToolTip(
+            "Синий текст в «Робот МТО · рев.»: файл робота принят "
+            "относительно MTO официальной папки РД. Не пишет UNC."
+            if confirm_robot_action.isEnabled()
+            else "Нужны MTO робота и MTO в официальной папке РД."
+        )
+        unmark_robot_action.setEnabled(
+            kit_identity_key(row.title, row.mark) in self._robot_mto_accepts
+            and not self._busy()
+        )
         compare_auto = menu.addAction("Сверить Авто МТО с MTO РД…")
         compare_auto.setEnabled(
             bool(rd_mto_path)
@@ -5987,6 +6192,8 @@ class CatalogWindow(QMainWindow):
             "rescan_action": rescan_action,
             "mixed_open_action": mixed_open_action,
             "sync_action": sync_action,
+            "confirm_robot_action": confirm_robot_action,
+            "unmark_robot_action": unmark_robot_action,
             "compare_auto": compare_auto,
             "sq_to_rd_action": sq_to_rd_action,
             "ban_action": ban_action,
@@ -9961,6 +10168,23 @@ class CatalogWindow(QMainWindow):
                 "Дождитесь завершения текущей загрузки или сканирования.",
             )
             return
+        key = kit_identity_key(row.title, row.mark)
+        stored = self._robot_mto_accepts.get(key)
+        robot = self._kit_robot_mto_record(row)
+        rd = self._kit_official_rd_mto_record(row)
+        if robot_mto_accept_state(stored, rd=rd, robot=robot) == ACCEPT_LIVE:
+            warn = QMessageBox.warning(
+                self,
+                "MTO робота",
+                "Этот файл робота подтверждён как актуальный с правками "
+                "(коды закупки, теги). «Обновить MTO у робота» перенесёт "
+                "его в папку _old_… и заменит копией MTO РД. "
+                "Продолжить?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if warn != QMessageBox.StandardButton.Yes:
+                return
         with perf_span("gui.plan_robot_mto", title=row.title, mark=row.mark):
             try:
                 plan = plan_robot_mto_sync(
@@ -10616,6 +10840,8 @@ class CatalogWindow(QMainWindow):
             self._an_tab.restore_filters(self._settings)
         if hasattr(self, "_rd_dump_tab"):
             self._rd_dump_tab.restore_filters(self._settings)
+        if hasattr(self, "_robot_mto_accept_tab"):
+            self._robot_mto_accept_tab.restore_filters(self._settings)
         if hasattr(self, "_handoff_export_tab"):
             self._handoff_export_tab.restore_filters(self._settings)
         if hasattr(self, "_approval_mail_tab"):
@@ -10997,6 +11223,8 @@ class CatalogWindow(QMainWindow):
             self._an_tab.save_filters(self._settings)
         if hasattr(self, "_rd_dump_tab"):
             self._rd_dump_tab.save_filters(self._settings)
+        if hasattr(self, "_robot_mto_accept_tab"):
+            self._robot_mto_accept_tab.save_filters(self._settings)
         if hasattr(self, "_handoff_export_tab"):
             self._handoff_export_tab.save_filters(self._settings)
         if hasattr(self, "_approval_mail_tab"):

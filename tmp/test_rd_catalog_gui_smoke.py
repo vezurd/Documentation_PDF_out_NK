@@ -1158,13 +1158,16 @@ def main() -> None:
         assert window._tabs.indexOf(window._approval_mail_tab) == (
             window._tabs.indexOf(window._documents_tab) - 1
         )
+        accept_index = window._tabs.indexOf(window._robot_mto_accept_tab)
+        assert window._tabs.tabText(accept_index) == "MTO · Правки робота"
+        assert accept_index == window._tabs.indexOf(window._mto_readiness_tab) + 1
         journal_index = window._tabs.indexOf(window._issuance_journal_tab)
         assert window._tabs.tabText(journal_index) == "Выдача · Журнал"
         handoff_index = window._tabs.indexOf(window._handoff_export_tab)
         assert window._tabs.tabText(handoff_index) == "Выгрузка комплектов"
-        assert handoff_index == window._tabs.indexOf(window._mto_readiness_tab) + 1
+        assert handoff_index == window._tabs.indexOf(window._mto_readiness_tab) + 2
         assert journal_index == handoff_index + 1
-        assert journal_index == window._tabs.indexOf(window._mto_readiness_tab) + 2
+        assert journal_index == window._tabs.indexOf(window._mto_readiness_tab) + 3
         assert journal_index == window._tabs.indexOf(window._approval_mail_tab) - 1
         handoff_headers = [
             window._handoff_export_table.horizontalHeaderItem(index).text()
@@ -1408,10 +1411,28 @@ def main() -> None:
         assert "window/an_tab_header_v1" not in header_keys
         assert "window/history_header_v8" in header_keys
         assert "window/history_header_v7" not in header_keys
+        assert "window/robot_mto_accept_header_v1" in header_keys
+        accept_headers = [
+            window._robot_mto_accept_table.horizontalHeaderItem(index).text()
+            for index in range(window._robot_mto_accept_table.columnCount())
+        ]
+        assert accept_headers == [
+            "Титул",
+            "Марка",
+            "Ревизия робота",
+            "MTO · рев.",
+            "Статус",
+            "Подтверждено",
+            "Файл робота",
+            "Эталон РД",
+            "Путь робота",
+        ]
         kits_menu_src = inspect.getsource(window._popup_kits_context_menu)
         assert 'Показать в „АН“' in kits_menu_src
         assert "Открыть папку · АН" in kits_menu_src
         assert "Открыть смешанные папки" in kits_menu_src
+        assert "Подтвердить MTO робота как актуальное" in kits_menu_src
+        assert "Снять подтверждение" in kits_menu_src
         assert "exec_tracked_menu" in kits_menu_src
         assert "is_file()" not in kits_menu_src
         show_kits_src = inspect.getsource(window._show_kits_context_menu)

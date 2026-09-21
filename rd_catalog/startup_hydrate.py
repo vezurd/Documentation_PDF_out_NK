@@ -8,7 +8,7 @@ here on a ``QThread``. Qt widgets are filled on the GUI thread afterwards.
 from __future__ import annotations
 
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
@@ -17,7 +17,7 @@ from PySide6.QtCore import QThread, Signal
 from rd_catalog.an_index import AnMtoFile
 from rd_catalog.config import CatalogConfig
 from rd_catalog.customer_pi_auto_mto import AutoMtoFile, list_auto_mto_files_by_kit
-from rd_catalog.db import CatalogDatabase
+from rd_catalog.db import CatalogDatabase, RobotMtoAcceptRow
 from rd_catalog.google_kits import load_cached_google_kits
 from rd_catalog.issuance_review import latest_effective_issuance_kits
 from rd_catalog.kits import (
@@ -34,6 +34,7 @@ from rd_catalog.models import FileKind, FileRecord
 from rd_catalog.mto_export import ExportPin, load_export_pins
 from rd_catalog.parse import record_has_canonical_layout
 from rd_catalog.perf_log import perf_span
+from rd_catalog.robot_mto_accept import accepts_by_kit
 from rd_catalog.transfer_review_compare import path_pair_labels_from_cache
 from rd_catalog.pipeline import (
     PIPELINE_STATUS_ALGORITHM_VERSION,
@@ -89,6 +90,9 @@ class StartupSnapshot:
     official_current_ids: set[int] | None = None
     log_lines: tuple[str, ...] = ()
     rd_dump_files: tuple[AnMtoFile, ...] = ()
+    robot_mto_accepts: dict[tuple[str, str], RobotMtoAcceptRow] = field(
+        default_factory=dict
+    )
 
 
 def overlay_current_ids(
@@ -335,6 +339,12 @@ def load_startup_snapshot(
         except Exception as exc:
             rd_dump_files = ()
             logs.append(f"РД: {type(exc).__name__}: {exc}")
+        robot_mto_accepts: dict[tuple[str, str], RobotMtoAcceptRow] = {}
+        try:
+            robot_mto_accepts = accepts_by_kit(database.list_robot_mto_accepts())
+        except Exception as exc:
+            robot_mto_accepts = {}
+            logs.append(f"Правки робота: {type(exc).__name__}: {exc}")
         try:
             last_scan = database.last_scan_info(successful_only=True)
         except Exception:
@@ -358,6 +368,7 @@ def load_startup_snapshot(
             auto_mto_by_kit=auto_mto,
             an_by_kit=an_by_kit,
             rd_dump_files=rd_dump_files,
+            robot_mto_accepts=robot_mto_accepts,
             mto_content_by_kit=mto_content_equal_by_kit(mto_rows),
             export_pins=pins,
             last_scan=last_scan,
