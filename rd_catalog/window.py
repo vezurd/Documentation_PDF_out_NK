@@ -257,6 +257,7 @@ from rd_catalog.path_actions import (
     common_parent_dir,
     containing_folder,
     open_containing_folder,
+    open_directory,
     open_path,
     path_is_under,
 )
@@ -4776,14 +4777,36 @@ class CatalogWindow(QMainWindow):
     def _kit_snapshot_for(self, row: KitMatrixRow, source: str):
         return {"rd": row.rd, "robot": row.robot, "sq": row.sq}.get(source)
 
-    def _open_kit_source(self, source: str, *, folder: bool) -> None:
-        row = self._selected_kit_row()
+    def _open_kit_source(
+        self,
+        source: str,
+        *,
+        folder: bool,
+        row: KitMatrixRow | None = None,
+    ) -> None:
+        """Open a kit file or issued folder for ``rd`` / ``robot`` / ``sq``.
+
+        Args:
+            source: Kit column to open.
+            folder: True to open the issued package folder.
+            row: Kit captured by the context menu. The live table selection
+                is only a fallback: a Комплекты repaint during the menu
+                (Auto MTO) does ``setRowCount`` and drops ``currentRow``.
+        """
+
         if row is None:
+            row = self._selected_kit_row()
+        if row is None:
+            message = "Строка комплекта не выбрана — открыть путь нельзя."
+            self._append_log(message)
+            self.statusBar().showMessage(message, 10_000)
             return
         if source == "rd":
             package = self._official_rd_package(row.title, row.mark)
             if folder and package is not None and package.package_path:
-                self._open_result(package.package_path, folder=False)
+                self._open_result(
+                    package.package_path, folder=False, as_directory=True
+                )
                 return
         snapshot = self._kit_snapshot_for(row, source)
         path = snapshot.paths[0] if snapshot and snapshot.paths else None
@@ -4800,7 +4823,7 @@ class CatalogWindow(QMainWindow):
         if folder:
             package = issued_package_dir(str(path))
             if package:
-                self._open_result(package, folder=False)
+                self._open_result(package, folder=False, as_directory=True)
                 return
         self._open_result(str(path), folder=folder)
 
@@ -5810,7 +5833,9 @@ class CatalogWindow(QMainWindow):
         if command[0] == "copy":
             self._copy_text(command[1])
         else:
-            self._open_kit_source(command[0], folder=bool(command[1]))
+            self._open_kit_source(
+                command[0], folder=bool(command[1]), row=row
+            )
 
     def _popup_kits_context_menu(
         self, row_index: int, position
@@ -10134,9 +10159,19 @@ class CatalogWindow(QMainWindow):
                 restore_kit=(plan.title, plan.mark),
             )
 
-    def _open_result(self, path: str | None, *, folder: bool) -> None:
+    def _open_result(
+        self,
+        path: str | None,
+        *,
+        folder: bool,
+        as_directory: bool = False,
+    ) -> None:
         ok, message = (
-            open_containing_folder(path) if folder else open_path(path)
+            open_directory(path)
+            if as_directory
+            else open_containing_folder(path)
+            if folder
+            else open_path(path)
         )
         if not ok:
             self._append_log(message)

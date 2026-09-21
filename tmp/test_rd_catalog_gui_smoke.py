@@ -1417,6 +1417,8 @@ def main() -> None:
         show_kits_src = inspect.getsource(window._show_kits_context_menu)
         assert "gui.show_kits_context_menu" in show_kits_src
         assert "currentRow()" in kits_menu_src
+        assert "_open_kit_source(" in show_kits_src
+        assert "row=row" in show_kits_src
         an_filter_src = inspect.getsource(window._an_tab.set_kit_filter)
         assert "sortByColumn" in an_filter_src
         assert "_COL_DATE" in an_filter_src

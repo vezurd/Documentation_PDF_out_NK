@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -73,6 +74,54 @@ def containing_folder(path: str | None) -> str:
     return os.path.dirname(normalized) if normalized else ""
 
 
+def _open_with_explorer(path: str) -> bool:
+    """Open *path* with ``explorer.exe``.
+
+    UNC folders with Unicode dashes (U+2010) sometimes make
+    ``os.startfile`` / ShellExecute do nothing. ``/root,`` keeps Explorer
+    from treating ``\\\\server`` as a switch.
+
+    Args:
+        path: Normalized local or UNC path.
+
+    Returns:
+        True when Explorer was launched.
+    """
+
+    if os.name != "nt" or not path:
+        return False
+    try:
+        subprocess.Popen(["explorer", f"/root,{path}"])
+    except OSError:
+        return False
+    return True
+
+
+def open_directory(path: str | None) -> tuple[bool, str]:
+    """Open a folder in Explorer without probing the UNC source.
+
+    Prefer ``explorer.exe`` for issued RD packages: ``os.startfile`` can
+    silently fail on UNC names that contain Unicode dashes.
+
+    Args:
+        path: Directory path (already a folder, not a file).
+
+    Returns:
+        ``(True, path)`` when Explorer was started, otherwise an error.
+    """
+
+    normalized = normalize_path(path)
+    if not normalized:
+        return False, "Путь не указан."
+    if _open_with_explorer(normalized):
+        return True, normalized
+    try:
+        os.startfile(normalized)  # type: ignore[attr-defined]
+    except OSError as exc:
+        return False, f"Не удалось открыть {normalized}: {exc}"
+    return True, normalized
+
+
 def open_path(path: str | None) -> tuple[bool, str]:
     """Ask Windows to open a path without reading its contents."""
 
@@ -82,6 +131,8 @@ def open_path(path: str | None) -> tuple[bool, str]:
     try:
         os.startfile(normalized)  # type: ignore[attr-defined]
     except OSError as exc:
+        if _open_with_explorer(normalized):
+            return True, normalized
         return False, f"Не удалось открыть {normalized}: {exc}"
     return True, normalized
 
@@ -92,4 +143,4 @@ def open_containing_folder(path: str | None) -> tuple[bool, str]:
     folder = containing_folder(path)
     if not folder:
         return False, "Не удалось определить содержащую папку."
-    return open_path(folder)
+    return open_directory(folder)

@@ -113,4 +113,8 @@ limited to `kit_keys`. Ban-list identity cache uses `BanFilterStore.revision`.
    folders, package mean date, or path lookup (`_records_by_kit` /
    `_records_by_path_key`). Do not `selectRow` when the row is already current
    (that retriggers `gui.update_kits_card` / `get_kit_card`). Existence of the
-   Auto MTO file is checked on open (`_open_auto_mto_cell`).
+   Auto MTO file is checked on open (`_open_auto_mto_cell`). After the menu,
+   «Открыть содержащую папку · РД» must use the captured `row=` (not
+   `_selected_kit_row()`): a nested `gui.kits_table_paint rows=251` during
+   `exec` (`gui.auto_mto_compare_finished`) does `setRowCount` and drops
+   selection, so the click would silently do nothing.
