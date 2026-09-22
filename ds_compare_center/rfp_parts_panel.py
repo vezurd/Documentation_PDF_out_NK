@@ -118,6 +118,11 @@ _GROUP_HEADERS = (
 )
 _DS_FILE_HEADERS = ("Контур", "Файл", "ID / ключ", "Статус")
 _COVERAGE_HEADERS = ("Группа", "Файлы ДС", "RFP", "УЛ", "Статус")
+_ACTION_COMMENT_STYLE = "color: #555; font-size: 11px;"
+_TAB_COLOR_EMPTY = QColor("#666666")
+_TAB_COLOR_ERROR = QColor("#b42318")
+_TAB_COLOR_WARN = QColor("#9a6700")
+_TAB_COLOR_OK = QColor("#1a7f37")
 
 
 def rfp_parts_reports_base_dir() -> Path:
@@ -201,6 +206,7 @@ class RfpPartsPanel(QWidget):
         self._on_ds_coverage = on_ds_coverage
         self._on_ds_registry = on_ds_registry
         self._last_reports_dir: Path | None = find_latest_rfp_parts_reports_dir()
+        self._migrated_registry_path: Path | None = None
 
         splitter, self.monitor = build_side_by_side(
             self, build_left=self._build_left, show_stop=True
@@ -250,31 +256,114 @@ class RfpPartsPanel(QWidget):
         self._refresh_paths()
 
     def _build_left(self, left: QWidget, left_layout: QVBoxLayout) -> None:
-        left_layout.addWidget(self._build_registry_group(left), stretch=0)
-        left_layout.addWidget(self._build_source_group(left), stretch=0)
-        left_layout.addWidget(self._build_cockpit_group(left), stretch=1)
-        left_layout.addWidget(self._build_file_status_group(left), stretch=1)
         left_layout.addWidget(self._build_actions_group(left), stretch=0)
+        left_layout.addWidget(self._build_registry_next_group(left), stretch=0)
+        left_layout.addWidget(self._build_source_group(left), stretch=0)
+        left_layout.addWidget(self._build_indicators_group(left), stretch=1)
+        left_layout.addWidget(self._build_open_group(left), stretch=0)
 
-    def _build_registry_group(self, parent: QWidget) -> QGroupBox:
-        box = shrink_h(QGroupBox("Реестр ДС", parent))
+    def _add_action_with_comment(
+        self,
+        box: QWidget,
+        layout: QVBoxLayout,
+        text: str,
+        comment: str,
+        handler: Callable[[], None],
+    ) -> QPushButton:
+        btn = QPushButton(text, box)
+        btn.setMinimumWidth(0)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.clicked.connect(handler)
+        layout.addWidget(btn)
+        hint = WrappingLabel(comment, box)
+        hint.setStyleSheet(_ACTION_COMMENT_STYLE)
+        layout.addWidget(hint)
+        return btn
+
+    def _compact_open_button(
+        self,
+        parent: QWidget,
+        text: str,
+        handler: Callable[[], None],
+    ) -> QPushButton:
+        btn = QPushButton(text, parent)
+        btn.setMinimumWidth(0)
+        btn.clicked.connect(handler)
+        return btn
+
+    def _build_actions_group(self, parent: QWidget) -> QGroupBox:
+        box = shrink_h(QGroupBox("Что запустить", parent))
+        box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        v = QVBoxLayout(box)
+        v.setContentsMargins(10, 13, 10, 10)
+        v.setSpacing(4)
+        self._add_action_with_comment(
+            box,
+            v,
+            "Проверить реестр",
+            "Старый файл на UNC не перезаписывается. Если формат старый — "
+            "робот пишет копию нового формата и подскажет, что делать дальше.",
+            self._click_ds_registry,
+        )
+        self._add_action_with_comment(
+            box,
+            v,
+            "Собрать свод только из ДС",
+            "Аудит папки ДС без RFP. Пишет «Свод ДС для запуска.xlsx» в "
+            "_ds_baseline. При ошибке раскладки свод не создаётся.",
+            self._click_ds_baseline,
+        )
+        self._add_action_with_comment(
+            box,
+            v,
+            "Наложить RFP на группы",
+            "Корень RFP_Зиновьев, без подпапок. Группа целиком из RFP только "
+            "если совпали код, единица и количество. Иначе группа остаётся из ДС.",
+            self._click_ds_hybrid,
+        )
+        self._add_action_with_comment(
+            box,
+            v,
+            "Собрать свод частей RFP",
+            "Прежний сбор rfp_parts_net.xlsx. Контур ДС и реестр не трогает.",
+            self._click_run,
+        )
+        btn_cov = QPushButton("Только имена и покрытие", box)
+        btn_cov.setMinimumWidth(0)
+        btn_cov.setToolTip(
+            "Без разбора количеств: какие файлы ДС и RFP видны реестру."
+        )
+        btn_cov.clicked.connect(self._click_ds_coverage)
+        v.addWidget(btn_cov, alignment=Qt.AlignmentFlag.AlignLeft)
+        return box
+
+    def _build_registry_next_group(self, parent: QWidget) -> QGroupBox:
+        box = shrink_h(QGroupBox("Реестр — что дальше", parent))
         box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         v = QVBoxLayout(box)
         v.setContentsMargins(10, 13, 10, 10)
         v.setSpacing(6)
         self._registry_banner = WrappingLabel("Реестр ещё не проверялся.", box)
         v.addWidget(self._registry_banner)
-        row = QHBoxLayout()
-        btn_check = QPushButton("Проверить реестр", box)
-        btn_check.setMinimumWidth(0)
-        btn_check.clicked.connect(self._click_ds_registry)
-        row.addWidget(btn_check)
-        btn_open = QPushButton("Открыть реестр", box)
-        btn_open.setMinimumWidth(0)
-        btn_open.clicked.connect(self._open_registry)
-        row.addWidget(btn_open)
+        self._registry_next = WrappingLabel("", box)
+        self._registry_next.setVisible(False)
+        v.addWidget(self._registry_next)
+        migrate = QWidget(box)
+        row = QHBoxLayout(migrate)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self._btn_open_migrated = QPushButton("Открыть копию для робота", migrate)
+        self._btn_open_migrated.setMinimumWidth(0)
+        self._btn_open_migrated.clicked.connect(self._click_open_migrated_registry)
+        row.addWidget(self._btn_open_migrated)
+        self._btn_use_migrated = QPushButton("Подставить копию роботу", migrate)
+        self._btn_use_migrated.setMinimumWidth(0)
+        self._btn_use_migrated.clicked.connect(self._click_use_migrated_registry)
+        row.addWidget(self._btn_use_migrated)
         row.addStretch(1)
-        v.addLayout(row)
+        migrate.setVisible(False)
+        self._registry_migrate_row = migrate
+        v.addWidget(migrate)
         return box
 
     def _build_source_group(self, parent: QWidget) -> QGroupBox:
@@ -285,10 +374,8 @@ class RfpPartsPanel(QWidget):
         v.setSpacing(8)
 
         hint = WrappingLabel(
-            "Доверенный вход Step1 собирается из закупочных ДС и канонического "
-            "реестра. Overlay RFP атомарно на группу поставки. Legacy "
-            "«Проверить части RFP» по-прежнему вызывает python -m RFQ.rfp_parts "
-            "и не подменяет rfp_parts_net.xlsx этим контуром.",
+            "Папка ДС и файл реестра, которые читают кнопки выше. "
+            "Канон UNC робот сам не заменяет.",
             box,
         )
         v.addWidget(hint)
@@ -302,7 +389,7 @@ class RfpPartsPanel(QWidget):
         btn_ds.clicked.connect(self._browse_ds_folder)
         v.addWidget(btn_ds, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        v.addWidget(QLabel("Реестр ДС (канон UNC, робот не заменяет)", box))
+        v.addWidget(QLabel("Реестр, который читает робот", box))
         self._edit_registry = QLineEdit(box)
         self._edit_registry.setMinimumWidth(0)
         v.addWidget(self._edit_registry)
@@ -327,8 +414,8 @@ class RfpPartsPanel(QWidget):
         v.addWidget(self._status)
         return box
 
-    def _build_cockpit_group(self, parent: QWidget) -> QGroupBox:
-        box = shrink_h(QGroupBox("Сводка ДС / hybrid", parent))
+    def _build_indicators_group(self, parent: QWidget) -> QGroupBox:
+        box = shrink_h(QGroupBox("Индикаторы", parent))
         box.setStyleSheet(_FILE_STATUS_GROUP_STYLE)
         box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         v = QVBoxLayout(box)
@@ -344,16 +431,24 @@ class RfpPartsPanel(QWidget):
 
         tabs = QTabWidget(box)
         tabs.setDocumentMode(True)
+        tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._table_registry = self._make_table(box, _REGISTRY_HEADERS)
         self._table_groups = self._make_table(box, _GROUP_HEADERS)
         self._table_files = self._make_table(box, _DS_FILE_HEADERS)
         self._table_coverage = self._make_table(box, _COVERAGE_HEADERS)
-        tabs.addTab(self._table_registry, "Реестр по ДС")
-        tabs.addTab(self._table_groups, "Итог по группам")
-        tabs.addTab(self._table_files, "Файлы")
-        tabs.addTab(self._table_coverage, "Покрытие")
+        self._tab_index_registry = tabs.addTab(self._table_registry, "Реестр по ДС")
+        self._tab_index_groups = tabs.addTab(self._table_groups, "Итог по группам")
+        self._tab_index_files = tabs.addTab(self._table_files, "Файлы")
+        self._tab_index_coverage = tabs.addTab(self._table_coverage, "Покрытие")
+        self._tab_index_parts = tabs.addTab(
+            self._build_file_status_page(tabs), "Части RFP"
+        )
         self._cockpit_tabs = tabs
         v.addWidget(tabs, stretch=1)
+        self._paint_tab(self._tab_index_registry, [])
+        self._paint_tab(self._tab_index_groups, [])
+        self._paint_tab(self._tab_index_files, [])
+        self._paint_tab(self._tab_index_coverage, [])
         return box
 
     def _make_table(self, parent: QWidget, headers: tuple[str, ...]) -> QTableWidget:
@@ -369,7 +464,10 @@ class RfpPartsPanel(QWidget):
         table.verticalHeader().setMinimumSectionSize(_FILE_STATUS_ROW_HEIGHT)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         table.setSortingEnabled(False)
-        table.setMinimumHeight(140)
+        table.setMinimumHeight(220)
+        table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         table.setStyleSheet(_FILE_STATUS_TABLE_STYLE)
         header = table.horizontalHeader()
         for col in range(len(headers) - 1):
@@ -380,15 +478,14 @@ class RfpPartsPanel(QWidget):
         header.setStretchLastSection(True)
         return table
 
-    def _build_file_status_group(self, parent: QWidget) -> QGroupBox:
-        box = shrink_h(QGroupBox("Файлы последнего прогона частей RFP", parent))
-        box.setStyleSheet(_FILE_STATUS_GROUP_STYLE)
-        box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        v = QVBoxLayout(box)
-        v.setContentsMargins(8, 4, 8, 6)
+    def _build_file_status_page(self, parent: QWidget) -> QWidget:
+        page = QWidget(parent)
+        page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        v = QVBoxLayout(page)
+        v.setContentsMargins(4, 4, 4, 4)
         v.setSpacing(3)
 
-        self._file_status_summary = QLabel("Нет данных последнего прогона.", box)
+        self._file_status_summary = QLabel("Нет данных последнего прогона.", page)
         self._file_status_summary.setWordWrap(False)
         self._file_status_summary.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -398,7 +495,7 @@ class RfpPartsPanel(QWidget):
         )
         v.addWidget(self._file_status_summary)
 
-        self._tag_remarks_link = QLabel("", box)
+        self._tag_remarks_link = QLabel("", page)
         self._tag_remarks_link.setWordWrap(False)
         self._tag_remarks_link.setTextFormat(Qt.TextFormat.RichText)
         self._tag_remarks_link.setTextInteractionFlags(
@@ -412,7 +509,7 @@ class RfpPartsPanel(QWidget):
         )
         v.addWidget(self._tag_remarks_link)
 
-        table = QTableWidget(box)
+        table = QTableWidget(page)
         table.setColumnCount(3)
         table.setHorizontalHeaderLabels(["Файл", "Статус", "Описание"])
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -425,7 +522,7 @@ class RfpPartsPanel(QWidget):
         table.verticalHeader().setMinimumSectionSize(_FILE_STATUS_ROW_HEIGHT)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         table.setSortingEnabled(False)
-        table.setMinimumHeight(120)
+        table.setMinimumHeight(220)
         table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -437,85 +534,35 @@ class RfpPartsPanel(QWidget):
         table.setStyleSheet(_FILE_STATUS_TABLE_STYLE)
         self._file_status_table = table
         v.addWidget(table, stretch=1)
-        return box
+        return page
 
-    def _build_actions_group(self, parent: QWidget) -> QGroupBox:
-        box = shrink_h(QGroupBox("Запуск и отчёты", parent))
+    def _build_open_group(self, parent: QWidget) -> QGroupBox:
+        box = shrink_h(QGroupBox("Открыть", parent))
         box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         v = QVBoxLayout(box)
-        v.setContentsMargins(10, 13, 10, 10)
-        v.setSpacing(8)
-
-        btn_baseline = QPushButton("Собрать вход Только ДС", box)
-        btn_baseline.setMinimumWidth(0)
-        btn_baseline.setToolTip("Аудит папки ДС → Свод ДС для запуска.xlsx")
-        btn_baseline.clicked.connect(self._click_ds_baseline)
-        v.addWidget(btn_baseline)
-
-        btn_hybrid = QPushButton("Проверить RFP и наложить", box)
-        btn_hybrid.setMinimumWidth(0)
-        btn_hybrid.setToolTip("Baseline + overlay корневого RFP_Зиновьев")
-        btn_hybrid.clicked.connect(self._click_ds_hybrid)
-        v.addWidget(btn_hybrid)
-
-        btn_cov = QPushButton("Только покрытие", box)
-        btn_cov.setMinimumWidth(0)
-        btn_cov.setToolTip("Имена файлов и папок, без разбора qty")
-        btn_cov.clicked.connect(self._click_ds_coverage)
-        v.addWidget(btn_cov)
-
-        btn_run = QPushButton(
-            "Проверить части RFP и сформировать отчёт", box
-        )
-        btn_run.setMinimumWidth(0)
-        btn_run.setToolTip("python -X utf8 -m RFQ.rfp_parts --out-dir …")
-        btn_run.clicked.connect(self._click_run)
-        v.addWidget(btn_run)
-
-        btn_open_report = QPushButton("Открыть rfp_parts_report.txt", box)
-        btn_open_report.setMinimumWidth(0)
-        btn_open_report.clicked.connect(self._open_report_txt)
-        v.addWidget(btn_open_report)
-
-        btn_open_net = QPushButton("Открыть свод частей (xlsx)", box)
-        btn_open_net.setMinimumWidth(0)
-        btn_open_net.clicked.connect(self._open_net_xlsx)
-        v.addWidget(btn_open_net)
-
-        btn_open_ds = QPushButton("Открыть Свод ДС для запуска.xlsx", box)
-        btn_open_ds.setMinimumWidth(0)
-        btn_open_ds.clicked.connect(self._open_baseline_xlsx)
-        v.addWidget(btn_open_ds)
-
-        btn_open_hybrid = QPushButton("Открыть Свод ДС-RFP для запуска.xlsx", box)
-        btn_open_hybrid.setMinimumWidth(0)
-        btn_open_hybrid.clicked.connect(self._open_hybrid_xlsx)
-        v.addWidget(btn_open_hybrid)
-
-        btn_open_hybrid_report = QPushButton("Открыть отчёт сверки ДС-RFP", box)
-        btn_open_hybrid_report.setMinimumWidth(0)
-        btn_open_hybrid_report.clicked.connect(self._open_hybrid_report_xlsx)
-        v.addWidget(btn_open_hybrid_report)
-
-        btn_open_collisions = QPushButton("Открыть коллизии частей (xlsx)", box)
-        btn_open_collisions.setMinimumWidth(0)
-        btn_open_collisions.clicked.connect(self._open_collisions_xlsx)
-        v.addWidget(btn_open_collisions)
-
-        btn_open = QPushButton("Открыть последнюю папку отчётов", box)
-        btn_open.setMinimumWidth(0)
-        btn_open.clicked.connect(self._open_reports)
-        v.addWidget(btn_open)
-
-        artifacts = WrappingLabel(
-            f"ДС/hybrid: {BASELINE_XLSX_NAME}, {HYBRID_XLSX_NAME}, "
-            f"{HYBRID_REPORT_PREFIX}_<штамп>.xlsx. Части: {NET_XLSX_NAME}, "
-            f"{COLLISIONS_XLSX_NAME}, {DUPLICATE_TAGS_XLSX_NAME}. "
-            "Канон реестра робот не перезаписывает.",
-            box,
-        )
-        artifacts.setStyleSheet("color: #666; font-size: 10px;")
-        v.addWidget(artifacts)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(4)
+        primary = QHBoxLayout()
+        primary.setSpacing(4)
+        for text, handler in (
+            ("Открыть реестр", self._open_registry),
+            ("Открыть свод ДС", self._open_baseline_xlsx),
+            ("Открыть свод ДС-RFP", self._open_hybrid_xlsx),
+            ("Открыть свод частей", self._open_net_xlsx),
+            ("Открыть папку отчётов", self._open_reports),
+        ):
+            primary.addWidget(self._compact_open_button(box, text, handler))
+        v.addLayout(primary)
+        extra = QHBoxLayout()
+        extra.setSpacing(4)
+        for text, handler in (
+            ("Открыть rfp_parts_report.txt", self._open_report_txt),
+            ("Открыть коллизии частей (xlsx)", self._open_collisions_xlsx),
+            ("Открыть отчёт сверки ДС-RFP", self._open_hybrid_report_xlsx),
+        ):
+            extra.addWidget(self._compact_open_button(box, text, handler))
+        extra.addStretch(1)
+        v.addLayout(extra)
         return box
 
     def _persist_ds_paths(self) -> None:
@@ -642,7 +689,7 @@ class RfpPartsPanel(QWidget):
         link = getattr(self, "_tag_remarks_link", None)
         if table is None or summary is None:
             return
-        run_dir = self._effective_reports_dir()
+        run_dir = find_latest_rfp_parts_reports_dir() or self._effective_reports_dir()
         payload = load_file_status_payload(run_dir)
         files = payload.get("files") or []
         ok_n = int(payload.get("ok") or 0)
@@ -683,6 +730,39 @@ class RfpPartsPanel(QWidget):
                 cell.setTextAlignment(v_center)
                 table.setItem(row_idx, col, cell)
             table.setRowHeight(row_idx, _FILE_STATUS_ROW_HEIGHT)
+        self._paint_parts_tab(
+            files=bool(files), error_n=error_n, tag_n=tag_n
+        )
+
+    def _paint_tab(self, index: int, rows: list[CockpitRow]) -> None:
+        """Color a cockpit tab from row tones (gray / red / yellow / green)."""
+        tabs = getattr(self, "_cockpit_tabs", None)
+        if tabs is None:
+            return
+        if not rows:
+            color = _TAB_COLOR_EMPTY
+        elif any(row.tone == "error" for row in rows):
+            color = _TAB_COLOR_ERROR
+        elif any(row.tone == "warn" for row in rows):
+            color = _TAB_COLOR_WARN
+        else:
+            color = _TAB_COLOR_OK
+        tabs.tabBar().setTabTextColor(index, color)
+
+    def _paint_parts_tab(self, *, files: bool, error_n: int, tag_n: int) -> None:
+        tabs = getattr(self, "_cockpit_tabs", None)
+        index = getattr(self, "_tab_index_parts", None)
+        if tabs is None or index is None:
+            return
+        if not files:
+            color = _TAB_COLOR_EMPTY
+        elif error_n > 0:
+            color = _TAB_COLOR_ERROR
+        elif tag_n > 0:
+            color = _TAB_COLOR_WARN
+        else:
+            color = _TAB_COLOR_OK
+        tabs.tabBar().setTabTextColor(index, color)
 
     def _refresh_tag_remarks_link(
         self,
@@ -728,15 +808,28 @@ class RfpPartsPanel(QWidget):
         Args:
             snapshot: Last DS/hybrid/coverage/registry job outcome.
         """
-        banner = (
-            f"{snapshot.summary}\n"
-            f"Формат: {snapshot.registry_format} v{snapshot.format_version}; "
-            f"активных {snapshot.active_count}; групп {snapshot.group_count}."
-        )
-        self._registry_banner.setText(banner)
+        self._registry_banner.setText(snapshot.summary)
         self._registry_banner.setStyleSheet(
             _BANNER_STYLES.get(snapshot.banner_tone, _BANNER_STYLES["ok"])
         )
+        next_step = str(getattr(snapshot, "next_step", "") or "")
+        if next_step:
+            self._registry_next.setText(next_step)
+            self._registry_next.setVisible(True)
+        else:
+            self._registry_next.clear()
+            self._registry_next.setVisible(False)
+        migrated = getattr(snapshot, "migrated_registry_path", None)
+        if migrated:
+            self._migrated_registry_path = Path(migrated)
+            self._btn_open_migrated.setVisible(True)
+            self._btn_use_migrated.setVisible(True)
+            self._registry_migrate_row.setVisible(True)
+        else:
+            self._migrated_registry_path = None
+            self._btn_open_migrated.setVisible(False)
+            self._btn_use_migrated.setVisible(False)
+            self._registry_migrate_row.setVisible(False)
         err = f'<span style="color:#b42318">ERROR={snapshot.error_count}</span>'
         warn = f'<span style="color:#9a6700">WARN={snapshot.warn_count}</span>'
         match = f'<span style="color:#1a7f37">MATCH={snapshot.match_count}</span>'
@@ -753,9 +846,14 @@ class RfpPartsPanel(QWidget):
         self._fill_table(self._table_groups, snapshot.group_rows)
         self._fill_table(self._table_files, snapshot.file_rows)
         self._fill_table(self._table_coverage, snapshot.coverage_rows)
-        if snapshot.output_dir is not None:
+        self._paint_tab(self._tab_index_registry, snapshot.registry_rows)
+        self._paint_tab(self._tab_index_groups, snapshot.group_rows)
+        self._paint_tab(self._tab_index_files, snapshot.file_rows)
+        self._paint_tab(self._tab_index_coverage, snapshot.coverage_rows)
+        if snapshot.output_dir is not None and snapshot.kind != "registry":
             self._last_reports_dir = snapshot.output_dir
         self._refresh_status()
+        self._refresh_file_status()
 
     def _on_tag_remarks_link(self, href: str) -> None:
         local = QUrl(href).toLocalFile() or href
@@ -823,6 +921,20 @@ class RfpPartsPanel(QWidget):
         if self._on_ds_registry is not None:
             self._on_ds_registry()
 
+    def _click_open_migrated_registry(self) -> None:
+        path = self._migrated_registry_path
+        if path is None:
+            return
+        self._open_path_link(str(path))
+
+    def _click_use_migrated_registry(self) -> None:
+        path = self._migrated_registry_path
+        if path is None:
+            return
+        self._edit_registry.setText(str(path))
+        self._persist_ds_paths()
+        self._refresh_paths()
+
     def _open_registry(self) -> None:
         path = Path(
             self._edit_registry.text().strip() or str(DEFAULT_REGISTRY_PATH)
@@ -846,7 +958,7 @@ class RfpPartsPanel(QWidget):
                 self,
                 "Отчёт",
                 "Файл rfp_parts_report.txt не найден.\n"
-                "Сначала выполните «Проверить части RFP и сформировать отчёт».",
+                "Сначала выполните «Собрать свод частей RFP».",
             )
             return
         try:
@@ -890,7 +1002,7 @@ class RfpPartsPanel(QWidget):
             resolve_latest=resolve_latest_rfp_parts_net_xlsx,
             missing_hint=(
                 f"Файл {NET_XLSX_NAME} не найден.\n"
-                "Сначала выполните «Проверить части RFP и сформировать отчёт»."
+                "Сначала выполните «Собрать свод частей RFP»."
             ),
         )
 
@@ -902,7 +1014,7 @@ class RfpPartsPanel(QWidget):
             resolve_latest=resolve_latest_rfp_parts_collisions_xlsx,
             missing_hint=(
                 f"Файл {COLLISIONS_XLSX_NAME} не найден.\n"
-                "Сначала выполните «Проверить части RFP и сформировать отчёт»."
+                "Сначала выполните «Собрать свод частей RFP»."
             ),
         )
 
@@ -919,7 +1031,7 @@ class RfpPartsPanel(QWidget):
             ),
             missing_hint=(
                 f"Файл {BASELINE_XLSX_NAME} не найден.\n"
-                "Сначала выполните «Собрать вход Только ДС»."
+                "Сначала выполните «Собрать свод только из ДС»."
             ),
         )
 
@@ -936,7 +1048,7 @@ class RfpPartsPanel(QWidget):
             ),
             missing_hint=(
                 f"Файл {HYBRID_XLSX_NAME} не найден.\n"
-                "Сначала выполните «Проверить RFP и наложить»."
+                "Сначала выполните «Наложить RFP на группы»."
             ),
         )
 
@@ -950,7 +1062,7 @@ class RfpPartsPanel(QWidget):
             resolve_latest=lambda: preferred or fallback,
             missing_hint=(
                 f"Файл {HYBRID_REPORT_PREFIX}_<штамп>.xlsx не найден.\n"
-                "Сначала выполните «Проверить RFP и наложить»."
+                "Сначала выполните «Наложить RFP на группы»."
             ),
         )
 

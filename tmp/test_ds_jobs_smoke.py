@@ -248,8 +248,10 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_instantiate_and_fill_snapshot(self) -> None:
+        from RFQ.rfp_parts import ds_jobs as ds_jobs_mod
         from ds_compare_center.rfp_parts_panel import RfpPartsPanel
 
+        ds_jobs_mod._last_cockpit = None
         panel = RfpPartsPanel()
         self.app.processEvents()
         self.assertTrue(hasattr(panel, "monitor"))
@@ -257,11 +259,22 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
         from PySide6.QtWidgets import QPushButton
 
         texts = [btn.text() for btn in panel.findChildren(QPushButton)]
-        self.assertIn("Собрать вход Только ДС", texts)
-        self.assertIn("Проверить RFP и наложить", texts)
-        self.assertIn("Только покрытие", texts)
+        self.assertIn("Собрать свод только из ДС", texts)
+        self.assertIn("Наложить RFP на группы", texts)
+        self.assertIn("Только имена и покрытие", texts)
         self.assertIn("Проверить реестр", texts)
-        self.assertIn("Проверить части RFP и сформировать отчёт", texts)
+        self.assertIn("Собрать свод частей RFP", texts)
+        self.assertIn("Подставить копию роботу", texts)
+        panel.show()
+        self.app.processEvents()
+        use_btns = [
+            btn
+            for btn in panel.findChildren(QPushButton)
+            if btn.text() == "Подставить копию роботу"
+        ]
+        self.assertEqual(len(use_btns), 1)
+        btn_use = use_btns[0]
+        self.assertFalse(btn_use.isVisible())
         snapshot = DsCockpitSnapshot(
             kind="coverage",
             summary="Покрытие: групп=1, файлов ДС=1, RFP=0, без RFP=1, ERROR=0, WARN=1",
@@ -271,6 +284,8 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
             warn_count=1,
             match_count=1,
             empty_code=1,
+            migrated_registry_path=Path("migrated.xlsx"),
+            next_step="Канон UNC не заменён",
             registry_rows=[
                 CockpitRow(
                     cells=("13", "Активен", "ДС13", "13", "согл УЛ ДС13", "Вся ДС", ""),
@@ -295,6 +310,7 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
         )
         panel.fill_from_snapshot(snapshot)
         self.app.processEvents()
+        self.assertTrue(btn_use.isVisible())
         self.assertEqual(panel._table_registry.rowCount(), 1)
         self.assertEqual(panel._table_coverage.rowCount(), 1)
         self.assertIn("ERROR=0", panel._cockpit_summary.text())
