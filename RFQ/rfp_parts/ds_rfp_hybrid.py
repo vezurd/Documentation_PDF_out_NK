@@ -496,14 +496,44 @@ def rfp_identity_key(identity: DsIdentity) -> str | None:
 
 
 def _rfp_key_groups(registry: DsRegistryDocument) -> dict[str, tuple[str, ...]]:
+    """Map an RFP number to the actual-DS group that named it.
+
+    The group is ``ДС{актуальный номер}``, not the folder name and not the
+    number parsed from the file when the registry names a different number.
+    """
+
+    from RFQ.rfp_parts.ds_registry import canonical_supply_group_id
+
     mapping: dict[str, list[str]] = {}
     for row in registry.active_rows:
+        if not row.source_id:
+            continue
+        group_id = canonical_supply_group_id(row.source_id)
         for rel in row.relations:
-            if rel.is_empty() or not rel.rfp_key:
+            if not rel.rfp_key:
                 continue
             groups = mapping.setdefault(rel.rfp_key, [])
-            if rel.group_id and rel.group_id not in groups:
-                groups.append(rel.group_id)
+            if group_id not in groups:
+                groups.append(group_id)
+    return {key: tuple(groups) for key, groups in mapping.items()}
+
+
+def _rfp_file_groups(registry: DsRegistryDocument) -> dict[str, tuple[str, ...]]:
+    """Map a registry RFP file name to the actual-DS group that named it."""
+
+    from RFQ.rfp_parts.ds_registry import canonical_supply_group_id
+
+    mapping: dict[str, list[str]] = {}
+    for row in registry.active_rows:
+        if not row.source_id:
+            continue
+        group_id = canonical_supply_group_id(row.source_id)
+        for rel in row.relations:
+            if not rel.rfp_file:
+                continue
+            groups = mapping.setdefault(rel.rfp_file.casefold(), [])
+            if group_id not in groups:
+                groups.append(group_id)
     return {key: tuple(groups) for key, groups in mapping.items()}
 
 
@@ -1037,6 +1067,7 @@ def build_ds_rfp_hybrid(
 
     files, skipped = collect_rfp_workbooks(root)
     key_groups = _rfp_key_groups(registry)
+    file_groups = _rfp_file_groups(registry)
     loader_impl: RfpWorkbookLoader = loader or ProductionRfpLoader()
     extracts: list[RfpFileExtract] = []
     if phase_callback is not None:
@@ -1054,7 +1085,26 @@ def build_ds_rfp_hybrid(
         rfp_key = rfp_identity_key(identity) or ""
         group_id = ""
         mapping_issue = ""
-        if not rfp_key:
+        named = file_groups.get(source.path.name.casefold(), ())
+        if len(named) == 1:
+            group_id = named[0]
+        elif len(named) > 1:
+            mapping_issue = "неоднозначный файл RFP"
+            issues.append(
+                _issue(
+                    ISSUE_AMBIGUOUS_MAPPING,
+                    "ERROR",
+                    (
+                        f"файл RFP {source.path.name!r} относится к нескольким группам: "
+                        + ", ".join(named)
+                    ),
+                    global_blocker=True,
+                    path=source.path,
+                    relpath=source.relpath,
+                    rfp_key=rfp_key,
+                )
+            )
+        elif not rfp_key:
             mapping_issue = "имя файла не разобрано"
             issues.append(
                 _issue(
@@ -1129,29 +1179,36 @@ def build_ds_rfp_hybrid(
                 time.perf_counter() - file_start,
             )
 
-    by_key: dict[str, list[RfpFileExtract]] = defaultdict(list)
+    hashed: dict[tuple[str, str], list[RfpFileExtract]] = defaultdict(list)
     for item in extracts:
-        if item.rfp_key:
-            by_key[item.rfp_key].append(item)
-    duplicate_keys = {key for key, items in by_key.items() if len(items) > 1}
-    for key in sorted(duplicate_keys):
-        items = by_key[key]
-        group_id = next((item.group_id for item in items if item.group_id), "")
+        if not item.group_id:
+            continue
+        try:
+            digest = hashlib.sha256(item.source.path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        hashed[(item.group_id, digest)].append(item)
+    duplicate_groups: set[str] = set()
+    for items in hashed.values():
+        if len(items) < 2:
+            continue
+        group_id = items[0].group_id
+        duplicate_groups.add(group_id)
         names = ", ".join(item.source.relpath for item in items)
         issues.append(
             _issue(
                 ISSUE_DUPLICATE_RFP_KEY,
                 "ERROR",
-                f"несколько корневых файлов с ключом RFP {key!r}: {names}",
+                f"точный дубль файла RFP в группе {group_id}: {names}",
                 path=items[0].source.path,
                 relpath=items[0].source.relpath,
-                rfp_key=key,
+                rfp_key=items[0].rfp_key,
                 group_id=group_id,
             )
         )
         for item in items:
             if not item.mapping_issue:
-                item.mapping_issue = "дубль ключа RFP"
+                item.mapping_issue = "точный дубль файла RFP"
 
     if converter is None:
         converter = PartsRfpUnitsConverter(
@@ -1260,12 +1317,6 @@ def build_ds_rfp_hybrid(
         for item in extracts
         if item.extract_error and item.group_id
     }
-    duplicate_groups = {
-        item.group_id
-        for key in duplicate_keys
-        for item in by_key[key]
-        if item.group_id
-    }
     ambiguous_groups = {
         group_id
         for key, groups in key_groups.items()
@@ -1296,7 +1347,6 @@ def build_ds_rfp_hybrid(
             for item in file_extracts
             if item.group_id
             and not item.extract_error
-            and item.rfp_key not in duplicate_keys
             and not item.mapping_issue
         ]
         rfp_records = [rec for item in usable for rec in item.records]
@@ -1334,7 +1384,7 @@ def build_ds_rfp_hybrid(
                 )
             )
         if group_id in duplicate_groups:
-            block_reasons.append("дубль корневого RFP с тем же ключом")
+            block_reasons.append("точный дубль файла RFP")
         if group_id in extract_failed_groups or group_id in convert_failed_groups:
             block_reasons.append("ошибка разбора или конвертации RFP")
         if group_id in ambiguous_groups:

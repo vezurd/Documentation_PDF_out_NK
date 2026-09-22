@@ -121,6 +121,12 @@ def _write_ds_xlsx(path: Path) -> None:
     wb.close()
 
 
+def _local_ul(root: Path) -> Path:
+    ul = root / "ul"
+    ul.mkdir(parents=True, exist_ok=True)
+    return ul
+
+
 def _google() -> GoogleUnitsIndex:
     return GoogleUnitsIndex(
         units_by_code={"BCC0000001": "шт"},
@@ -173,7 +179,7 @@ class DsJobsSmokeTest(unittest.TestCase):
             _write_legacy(legacy)
             before = legacy.read_bytes()
             self.assertEqual(detect_registry_format(legacy), "legacy")
-            result = run_ds_registry_check_job(legacy, reports, None)
+            result = run_ds_registry_check_job(legacy, reports, _local_ul(root))
             self.assertTrue(result.success, result.message)
             self.assertEqual(legacy.read_bytes(), before)
             working = reports / "Реестр_ДС_УЛ.xlsx"
@@ -196,7 +202,7 @@ class DsJobsSmokeTest(unittest.TestCase):
             legacy = home / CANONICAL_REGISTRY_NAME
             _write_legacy(legacy)
             before = legacy.read_bytes()
-            result = run_ds_registry_check_job(legacy, home, None)
+            result = run_ds_registry_check_job(legacy, home, _local_ul(home))
             self.assertTrue(result.success, result.message)
             old = home / OLD_REGISTRY_NAME
             self.assertTrue(old.is_file())
@@ -255,7 +261,7 @@ class DsJobsSmokeTest(unittest.TestCase):
             _write_ds_xlsx(ds_root / "ДС_13" / "spec.xlsx")
             missing_rfp = root / "no_rfp"
             result = run_ds_coverage_job(
-                ds_root, registry, None, None, missing_rfp
+                ds_root, registry, None, _local_ul(root), missing_rfp
             )
             self.assertTrue(result.success, result.message)
             self.assertIn("WARN", result.message)
@@ -277,7 +283,7 @@ class DsJobsSmokeTest(unittest.TestCase):
                     ds_root,
                     registry,
                     reports,
-                    None,
+                    _local_ul(root),
                     converter=IdentityDsUnitsConverter(),
                     google_index=_google(),
                 )
@@ -303,7 +309,7 @@ class DsJobsSmokeTest(unittest.TestCase):
                 ds_root,
                 registry,
                 reports,
-                None,
+                _local_ul(root),
                 converter=conv,
                 google_index=google,
             )
@@ -313,7 +319,7 @@ class DsJobsSmokeTest(unittest.TestCase):
                 ds_root,
                 registry,
                 reports,
-                None,
+                _local_ul(root),
                 rfp_root,
                 converter=conv,
                 rfp_converter=IdentityRfpUnitsConverter(),

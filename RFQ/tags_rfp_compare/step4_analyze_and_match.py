@@ -68,6 +68,7 @@ from RFQ.packing_list_provider import (
     load_packing_dataset,
     packing_match_key,
     packing_row_key,
+    registry_packing_scope,
 )
 from RFQ.tags_rfp_compare.rfp_tags_utils import (
     DEFAULT_UNITS_SPLIT_BAN,
@@ -247,7 +248,8 @@ def step4_analyze_and_match(rfp_data: List[RowStd],
                             bcc_accum_matrix: BccAccumMatrix | None = None,
                             ds_manager_matrix: DsManagerMatrix | None = None,
                             gem_supply_codes: GemSupplyCodes | None = None,
-                            rfp_paths_by_key: dict[str, list[str]] | None = None):
+                            rfp_paths_by_key: dict[str, list[str]] | None = None,
+                            registry_packing_index: object | None = None):
     """
     Анализ всех данных для сопоставления строк из RFP со строками из MTO и VO
     
@@ -302,245 +304,268 @@ def step4_analyze_and_match(rfp_data: List[RowStd],
     Returns:
         Результат анализа (список агрегированных тегов из MTO)
     """
-    print("=" * 80)
-    print("ЭТАП 4: Сопоставление RFP / MTO / VO")
+    with registry_packing_scope(registry_packing_index):
+        print("=" * 80)
+        print("ЭТАП 4: Сопоставление RFP / MTO / VO")
     
-    total_mto = sum(len(rows) for rows in mto_data.values()) if mto_data else 0
-    total_vo = sum(len(rows) for rows in vo_data.values()) if vo_data else 0
-    print(f"RFP: {len(rfp_data)} | MTO: {total_mto} ({len(mto_data)} TS) | VO: {total_vo} ({len(vo_data)} TS)")
+        total_mto = sum(len(rows) for rows in mto_data.values()) if mto_data else 0
+        total_vo = sum(len(rows) for rows in vo_data.values()) if vo_data else 0
+        print(f"RFP: {len(rfp_data)} | MTO: {total_mto} ({len(mto_data)} TS) | VO: {total_vo} ({len(vo_data)} TS)")
     
-    _d1 = debug_step4_1
-    _d2 = debug_step4_2
-    _d3 = debug_step4_3
-    _d4 = debug_step4_4
-    _any_debug = _d1 or _d2 or _d3 or _d4
-    debug_log_lines: List[str] = [] if _any_debug else None
-    total_start = time.perf_counter()
+        _d1 = debug_step4_1
+        _d2 = debug_step4_2
+        _d3 = debug_step4_3
+        _d4 = debug_step4_4
+        _any_debug = _d1 or _d2 or _d3 or _d4
+        debug_log_lines: List[str] = [] if _any_debug else None
+        total_start = time.perf_counter()
 
-    def log_timing(step_name: str, start_time: float) -> None:
-        append_timing_log(result_dir, f"step4::{step_name}: {time.perf_counter() - start_time:.3f}s")
+        def log_timing(step_name: str, start_time: float) -> None:
+            append_timing_log(result_dir, f"step4::{step_name}: {time.perf_counter() - start_time:.3f}s")
 
-    # Сравнение title_system для RFP, MTO, VO (кросс-TM проверка до цикла)
-    step_start = time.perf_counter()
-    _compare_title_systems_rfp_mto_vo(
-        rfp_data,
-        mto_data,
-        vo_data,
-        result_dir,
-        print_table=print_title_systems_table,
-        export_to_excel=export_title_systems_comparison_excel,
-    )
-    log_timing("compare_title_systems", step_start)
+        # Сравнение title_system для RFP, MTO, VO (кросс-TM проверка до цикла)
+        step_start = time.perf_counter()
+        _compare_title_systems_rfp_mto_vo(
+            rfp_data,
+            mto_data,
+            vo_data,
+            result_dir,
+            print_table=print_title_systems_table,
+            export_to_excel=export_title_systems_comparison_excel,
+        )
+        log_timing("compare_title_systems", step_start)
 
-    quantity_input_snapshot = build_input_snapshot(rfp_data, mto_data, vo_data)
-    print_input_quantity_balance(quantity_input_snapshot)
-    packing_ordered_snapshot = (
-        build_ordered_snapshot(rfp_data) if include_packing_lists else {}
-    )
+        quantity_input_snapshot = build_input_snapshot(rfp_data, mto_data, vo_data)
+        print_input_quantity_balance(quantity_input_snapshot)
+        packing_ordered_snapshot = (
+            build_ordered_snapshot(rfp_data) if include_packing_lists else {}
+        )
 
-    mto_paths_by_title = build_mto_paths_by_title(mto_data or {})
+        mto_paths_by_title = build_mto_paths_by_title(mto_data or {})
 
-    split_units_ban = (
-        list(units_split_ban) if units_split_ban is not None else list(DEFAULT_UNITS_SPLIT_BAN)
-    )
-    split_code_ban = (
-        set(_load_code_ban_from_file(code_ban_file))
-        if use_rfp_code_ban and split_rfp_in_worker
-        else set()
-    )
+        split_units_ban = (
+            list(units_split_ban) if units_split_ban is not None else list(DEFAULT_UNITS_SPLIT_BAN)
+        )
+        split_code_ban = (
+            set(_load_code_ban_from_file(code_ban_file))
+            if use_rfp_code_ban and split_rfp_in_worker
+            else set()
+        )
 
-    # Снапшот RFP для check_values_sum (до модификации)
-    rfp_sums_by_title, rfp_counts_by_title = _extract_rfp_snapshot_for_check(
-        rfp_data,
-        skip_split=split_rfp_in_worker,
-        units_ban=split_units_ban,
-        code_ban=split_code_ban,
-    )
+        # Снапшот RFP для check_values_sum (до модификации)
+        rfp_sums_by_title, rfp_counts_by_title = _extract_rfp_snapshot_for_check(
+            rfp_data,
+            skip_split=split_rfp_in_worker,
+            units_ban=split_units_ban,
+            code_ban=split_code_ban,
+        )
 
-    step_start = time.perf_counter()
-    replacement_table = (
-        load_replacement_table(replacement_table_file, print_replacement_table_info=False)
-        if replacement_table_file
-        else {}
-    )
-    log_timing("load_replacement_table", step_start)
+        step_start = time.perf_counter()
+        replacement_table = (
+            load_replacement_table(replacement_table_file, print_replacement_table_info=False)
+            if replacement_table_file
+            else {}
+        )
+        log_timing("load_replacement_table", step_start)
 
-    lot_map = _load_lot_registry(rfp_registr_lot_path) if rfp_registr_lot_path else {}
+        lot_map = _load_lot_registry(rfp_registr_lot_path) if rfp_registr_lot_path else {}
 
-    # code_base_by_code загружается в agregate_tags.py параллельно со step2+step3
-    # и передаётся сюда готовым. Fallback на пустой dict если не передан.
-    if code_base_by_code is None:
-        code_base_by_code = {}
+        # code_base_by_code загружается в agregate_tags.py параллельно со step2+step3
+        # и передаётся сюда готовым. Fallback на пустой dict если не передан.
+        if code_base_by_code is None:
+            code_base_by_code = {}
 
-    for idx, row in enumerate(rfp_data):
-        setattr(row, "_orig_idx", idx)
+        for idx, row in enumerate(rfp_data):
+            setattr(row, "_orig_idx", idx)
 
-    rfp_title_order, rfp_rows_by_title, orphan_rows = _partition_rfp_rows_by_title_mark(rfp_data)
-    title_marks = _build_title_mark_order(rfp_title_order, mto_data, vo_data)
+        rfp_title_order, rfp_rows_by_title, orphan_rows = _partition_rfp_rows_by_title_mark(rfp_data)
+        title_marks = _build_title_mark_order(rfp_title_order, mto_data, vo_data)
 
-    if filter_to_mto_titles and mto_data:
-        mto_title_set = set(mto_data.keys())
-        before = len(title_marks)
-        title_marks = [tm for tm in title_marks if tm in mto_title_set]
-        n_rows = sum(len(rfp_rows_by_title.get(tm, [])) for tm in title_marks)
-        print(f"pre-filter TM: {before} -> {len(title_marks)}, RFP строк в работе: {n_rows}")
+        if filter_to_mto_titles and mto_data:
+            mto_title_set = set(mto_data.keys())
+            before = len(title_marks)
+            title_marks = [tm for tm in title_marks if tm in mto_title_set]
+            n_rows = sum(len(rfp_rows_by_title.get(tm, [])) for tm in title_marks)
+            print(f"pre-filter TM: {before} -> {len(title_marks)}, RFP строк в работе: {n_rows}")
 
-    result_rows: List[RowStd] = list(orphan_rows)
-    agg_mto_tagged_sums: Dict[str, float] = {}
-    agg_mto_tagged_values_by_code: Dict[tuple, float] = defaultdict(float)
-    agg_vo_tagged_sums: Dict[str, float] = {}
-    agg_vo_codes: Set[str] = set()
-    agg_mto_codes_with_tags: Set[str] = set()
-    all_mto_count_mismatches: List[dict] = []
-    all_mto_duplicate_tags: List[dict] = []
-    all_vo_duplicate_tags: List[dict] = []
-    post_split_mto_by_title: Dict[str, float] = {}
-    post_split_mto_rows_by_title: Dict[str, int] = {}
-    post_split_vo_by_title: Dict[str, float] = {}
-    post_split_vo_rows_by_title: Dict[str, int] = {}
+        result_rows: List[RowStd] = list(orphan_rows)
+        agg_mto_tagged_sums: Dict[str, float] = {}
+        agg_mto_tagged_values_by_code: Dict[tuple, float] = defaultdict(float)
+        agg_vo_tagged_sums: Dict[str, float] = {}
+        agg_vo_codes: Set[str] = set()
+        agg_mto_codes_with_tags: Set[str] = set()
+        all_mto_count_mismatches: List[dict] = []
+        all_mto_duplicate_tags: List[dict] = []
+        all_vo_duplicate_tags: List[dict] = []
+        post_split_mto_by_title: Dict[str, float] = {}
+        post_split_mto_rows_by_title: Dict[str, int] = {}
+        post_split_vo_by_title: Dict[str, float] = {}
+        post_split_vo_rows_by_title: Dict[str, int] = {}
 
-    append_memory_log(result_dir, "step4_before_tm_loop")
-    log_data_structures_memory(
-        result_dir,
-        "step4_before_tm_loop",
-        rfp_data=rfp_data,
-        mto_data=mto_data,
-        vo_data=vo_data,
-    )
+        append_memory_log(result_dir, "step4_before_tm_loop")
+        log_data_structures_memory(
+            result_dir,
+            "step4_before_tm_loop",
+            rfp_data=rfp_data,
+            mto_data=mto_data,
+            vo_data=vo_data,
+        )
 
-    use_parallel_tm = bool(parallel_by_title_mark and len(title_marks) > 1)
+        use_parallel_tm = bool(parallel_by_title_mark and len(title_marks) > 1)
 
-    tm_common_kwargs = {
-        "result_dir": result_dir,
-        "replacement_table": replacement_table,
-        "debug_step4_1": _d1,
-        "debug_step4_2": _d2,
-        "debug_step4_3": _d3,
-        "debug_step4_4": _d4,
-        "debug_tag": debug_tag,
-        "debug_code": debug_code,
-        "debug_title_system": debug_title_system,
-        "use_multiprocessing": use_multiprocessing,
-        "collapse_debug": collapse_debug,
-        "split_rfp_in_worker": split_rfp_in_worker,
-        "units_ban": split_units_ban,
-        "code_ban": split_code_ban,
-        "collapse_func": _collapse_rfp_rows_before_export,
-        "lot_map": lot_map,
-        "code_base_by_code": code_base_by_code,
-        # В parallel-by-title-mark workers не пишут timing_log.xlsx:
-        # запись выполняется только в main-процессе (step4::tm::* / step4_total).
-        "timing_log_enabled": (timing_log_enabled and not use_parallel_tm),
-        "verbose_progress_messages": verbose_progress_messages,
-        # Подавляем консольный вывод и Excel-отчёты в workers; диагностика
-        # собирается через return-dict и сохраняется единым файлом после merge.
-        "defer_reports": use_parallel_tm,
-        "assign_rfp_mto_code_compare_colors": assign_rfp_mto_code_compare_colors,
-        "include_mto_vo_without_rfp_anchor": include_mto_vo_without_rfp_anchor,
-    }
+        tm_common_kwargs = {
+            "result_dir": result_dir,
+            "replacement_table": replacement_table,
+            "debug_step4_1": _d1,
+            "debug_step4_2": _d2,
+            "debug_step4_3": _d3,
+            "debug_step4_4": _d4,
+            "debug_tag": debug_tag,
+            "debug_code": debug_code,
+            "debug_title_system": debug_title_system,
+            "use_multiprocessing": use_multiprocessing,
+            "collapse_debug": collapse_debug,
+            "split_rfp_in_worker": split_rfp_in_worker,
+            "units_ban": split_units_ban,
+            "code_ban": split_code_ban,
+            "collapse_func": _collapse_rfp_rows_before_export,
+            "lot_map": lot_map,
+            "code_base_by_code": code_base_by_code,
+            # В parallel-by-title-mark workers не пишут timing_log.xlsx:
+            # запись выполняется только в main-процессе (step4::tm::* / step4_total).
+            "timing_log_enabled": (timing_log_enabled and not use_parallel_tm),
+            "verbose_progress_messages": verbose_progress_messages,
+            # Подавляем консольный вывод и Excel-отчёты в workers; диагностика
+            # собирается через return-dict и сохраняется единым файлом после merge.
+            "defer_reports": use_parallel_tm,
+            "assign_rfp_mto_code_compare_colors": assign_rfp_mto_code_compare_colors,
+            "include_mto_vo_without_rfp_anchor": include_mto_vo_without_rfp_anchor,
+        }
 
-    def _merge_tm_result(tm_result: Dict[str, object], tm_idx: int) -> None:
-        title = tm_result["title_mark"]
-        result_rows.extend(tm_result["result_rows"])
-        mto_s = tm_result.get("mto_summary") or {}
-        vo_s = tm_result.get("vo_summary") or {}
-        if mto_s.get("tagged_sum"):
-            agg_mto_tagged_sums[title] = (
-                agg_mto_tagged_sums.get(title, 0.0) + mto_s["tagged_sum"]
-            )
-        for code, val in (mto_s.get("tagged_values_by_code") or {}).items():
-            agg_mto_tagged_values_by_code[(title, code)] += val
-        agg_mto_codes_with_tags.update(mto_s.get("codes_with_tags") or set())
-        if vo_s.get("tagged_sum"):
-            agg_vo_tagged_sums[title] = (
-                agg_vo_tagged_sums.get(title, 0.0) + vo_s["tagged_sum"]
-            )
-        agg_vo_codes.update(vo_s.get("codes") or set())
-        mto_d = tm_result.get("mto_diagnostics") or {}
-        vo_d = tm_result.get("vo_diagnostics") or {}
-        all_mto_count_mismatches.extend(mto_d.get("count_mismatches", []))
-        all_mto_duplicate_tags.extend(mto_d.get("duplicate_tags", []))
-        all_vo_duplicate_tags.extend(vo_d.get("duplicate_tags_vo", []))
-        tm_key = _title_key(title)
-        if "post_split_mto_sum" in tm_result:
-            post_split_mto_by_title[tm_key] = float(tm_result["post_split_mto_sum"])
-            post_split_mto_rows_by_title[tm_key] = int(tm_result.get("post_split_mto_rows") or 0)
-        if "post_split_vo_sum" in tm_result:
-            post_split_vo_by_title[tm_key] = float(tm_result["post_split_vo_sum"])
-            post_split_vo_rows_by_title[tm_key] = int(tm_result.get("post_split_vo_rows") or 0)
-        worker_dbg = tm_result.get("debug_log_lines")
-        if worker_dbg and debug_log_lines is not None:
-            debug_log_lines.extend(worker_dbg)
-        if tm_idx % 10 == 0:
-            append_memory_log(result_dir, f"step4_tm_loop_after_{tm_idx}")
-            log_data_structures_memory(result_dir, f"step4_tm_loop_after_{tm_idx}", result_rows=result_rows)
+        def _merge_tm_result(tm_result: Dict[str, object], tm_idx: int) -> None:
+            title = tm_result["title_mark"]
+            result_rows.extend(tm_result["result_rows"])
+            mto_s = tm_result.get("mto_summary") or {}
+            vo_s = tm_result.get("vo_summary") or {}
+            if mto_s.get("tagged_sum"):
+                agg_mto_tagged_sums[title] = (
+                    agg_mto_tagged_sums.get(title, 0.0) + mto_s["tagged_sum"]
+                )
+            for code, val in (mto_s.get("tagged_values_by_code") or {}).items():
+                agg_mto_tagged_values_by_code[(title, code)] += val
+            agg_mto_codes_with_tags.update(mto_s.get("codes_with_tags") or set())
+            if vo_s.get("tagged_sum"):
+                agg_vo_tagged_sums[title] = (
+                    agg_vo_tagged_sums.get(title, 0.0) + vo_s["tagged_sum"]
+                )
+            agg_vo_codes.update(vo_s.get("codes") or set())
+            mto_d = tm_result.get("mto_diagnostics") or {}
+            vo_d = tm_result.get("vo_diagnostics") or {}
+            all_mto_count_mismatches.extend(mto_d.get("count_mismatches", []))
+            all_mto_duplicate_tags.extend(mto_d.get("duplicate_tags", []))
+            all_vo_duplicate_tags.extend(vo_d.get("duplicate_tags_vo", []))
+            tm_key = _title_key(title)
+            if "post_split_mto_sum" in tm_result:
+                post_split_mto_by_title[tm_key] = float(tm_result["post_split_mto_sum"])
+                post_split_mto_rows_by_title[tm_key] = int(tm_result.get("post_split_mto_rows") or 0)
+            if "post_split_vo_sum" in tm_result:
+                post_split_vo_by_title[tm_key] = float(tm_result["post_split_vo_sum"])
+                post_split_vo_rows_by_title[tm_key] = int(tm_result.get("post_split_vo_rows") or 0)
+            worker_dbg = tm_result.get("debug_log_lines")
+            if worker_dbg and debug_log_lines is not None:
+                debug_log_lines.extend(worker_dbg)
+            if tm_idx % 10 == 0:
+                append_memory_log(result_dir, f"step4_tm_loop_after_{tm_idx}")
+                log_data_structures_memory(result_dir, f"step4_tm_loop_after_{tm_idx}", result_rows=result_rows)
 
-    tm_loop_start = time.perf_counter()
-    if use_parallel_tm:
-        cpu_cnt = os.cpu_count() or 1
-        resolved_workers = max_workers if isinstance(max_workers, int) and max_workers > 0 else max(1, cpu_cnt - 1)
-        resolved_workers = max(1, min(resolved_workers, len(title_marks)))
-        # C.3: LPT scheduling — тяжёлые TM первыми для уменьшения tail latency
-        tm_weights = []
-        for tm in title_marks:
-            n_rfp = len(rfp_rows_by_title.get(tm, []))
-            n_mto = len(mto_data.get(tm, []))
-            n_vo = len(vo_data.get(tm, []))
-            weight = n_rfp + n_mto * 2 + n_vo
-            tm_weights.append((tm, weight))
-        tm_weights.sort(key=lambda x: x[1], reverse=True)
-        sorted_tms = [tw[0] for tw in tm_weights]
+        tm_loop_start = time.perf_counter()
+        if use_parallel_tm:
+            cpu_cnt = os.cpu_count() or 1
+            resolved_workers = max_workers if isinstance(max_workers, int) and max_workers > 0 else max(1, cpu_cnt - 1)
+            resolved_workers = max(1, min(resolved_workers, len(title_marks)))
+            # C.3: LPT scheduling — тяжёлые TM первыми для уменьшения tail latency
+            tm_weights = []
+            for tm in title_marks:
+                n_rfp = len(rfp_rows_by_title.get(tm, []))
+                n_mto = len(mto_data.get(tm, []))
+                n_vo = len(vo_data.get(tm, []))
+                weight = n_rfp + n_mto * 2 + n_vo
+                tm_weights.append((tm, weight))
+            tm_weights.sort(key=lambda x: x[1], reverse=True)
+            sorted_tms = [tw[0] for tw in tm_weights]
 
-        top_w = tm_weights[0][1] if tm_weights else 0
-        bot_w = tm_weights[-1][1] if tm_weights else 0
-        print(f"Title_mark: {len(title_marks)} | Параллельно: {resolved_workers} workers, weight {top_w}..{bot_w}")
-        # Metadata only: count of workers (not a duration).
-        append_timing_log(result_dir, f"step4::parallel_by_title_mark::workers_count={resolved_workers}")
-        try:
-            with ProcessPoolExecutor(
-                max_workers=resolved_workers,
-                initializer=worker_init,
-                initargs=(tm_common_kwargs,),
-            ) as executor:
-                future_to_meta = {}
-                for idx, title_mark in enumerate(sorted_tms, 1):
-                    future = executor.submit(
-                        process_title_mark_parallel,
-                        title_mark,
-                        rfp_rows_by_title.get(title_mark, []),
-                        mto_data.get(title_mark, []),
-                        vo_data.get(title_mark, []),
-                    )
-                    future_to_meta[future] = (idx, title_mark, time.perf_counter())
+            top_w = tm_weights[0][1] if tm_weights else 0
+            bot_w = tm_weights[-1][1] if tm_weights else 0
+            print(f"Title_mark: {len(title_marks)} | Параллельно: {resolved_workers} workers, weight {top_w}..{bot_w}")
+            # Metadata only: count of workers (not a duration).
+            append_timing_log(result_dir, f"step4::parallel_by_title_mark::workers_count={resolved_workers}")
+            try:
+                with ProcessPoolExecutor(
+                    max_workers=resolved_workers,
+                    initializer=worker_init,
+                    initargs=(tm_common_kwargs,),
+                ) as executor:
+                    future_to_meta = {}
+                    for idx, title_mark in enumerate(sorted_tms, 1):
+                        future = executor.submit(
+                            process_title_mark_parallel,
+                            title_mark,
+                            rfp_rows_by_title.get(title_mark, []),
+                            mto_data.get(title_mark, []),
+                            vo_data.get(title_mark, []),
+                        )
+                        future_to_meta[future] = (idx, title_mark, time.perf_counter())
 
-                completed_idx = 0
-                total_tms = len(title_marks)
+                    completed_idx = 0
+                    total_tms = len(title_marks)
+                    gc.disable()
+                    with tqdm(total=total_tms, desc="Step4 TM", unit="tm", ncols=80, dynamic_ncols=False) as pbar:
+                        for future in as_completed(future_to_meta):
+                            idx, title_mark, started = future_to_meta[future]
+                            wall_elapsed = time.perf_counter() - started
+                            tm_result = future.result()
+                            worker_dur = tm_result.get("worker_duration", wall_elapsed)
+                            append_timing_log(result_dir, f"step4::tm::{title_mark}: {worker_dur:.3f}s")
+                            completed_idx += 1
+                            pbar.update(1)
+                            _merge_tm_result(tm_result, completed_idx)
+                            del tm_result
+                    gc.enable()
+                    gc.collect()
+            except Exception as exc:
+                print(f"Параллельная обработка title_mark не удалась, fallback в sequential: {exc}")
+                append_timing_log(result_dir, f"step4::parallel_by_title_mark_fallback: {time.perf_counter() - tm_loop_start:.3f}s")
+                result_rows = list(orphan_rows)
+                agg_mto_tagged_sums.clear()
+                agg_mto_tagged_values_by_code.clear()
+                agg_vo_tagged_sums.clear()
+                agg_vo_codes.clear()
+                agg_mto_codes_with_tags.clear()
+                all_mto_count_mismatches.clear()
+                all_mto_duplicate_tags.clear()
+                all_vo_duplicate_tags.clear()
                 gc.disable()
+                total_tms = len(title_marks)
                 with tqdm(total=total_tms, desc="Step4 TM", unit="tm", ncols=80, dynamic_ncols=False) as pbar:
-                    for future in as_completed(future_to_meta):
-                        idx, title_mark, started = future_to_meta[future]
-                        wall_elapsed = time.perf_counter() - started
-                        tm_result = future.result()
-                        worker_dur = tm_result.get("worker_duration", wall_elapsed)
-                        append_timing_log(result_dir, f"step4::tm::{title_mark}: {worker_dur:.3f}s")
-                        completed_idx += 1
+                    for idx, title_mark in enumerate(title_marks, 1):
+                        tm_step_start = time.perf_counter()
+                        tm_result = process_title_mark(
+                            title_mark,
+                            rfp_rows_by_title.get(title_mark, []),
+                            mto_data.get(title_mark, []),
+                            vo_data.get(title_mark, []),
+                            debug_log=debug_log_lines,
+                            **tm_common_kwargs,
+                        )
+                        tm_elapsed = time.perf_counter() - tm_step_start
+                        append_timing_log(result_dir, f"step4::tm::{title_mark}: {tm_elapsed:.3f}s")
                         pbar.update(1)
-                        _merge_tm_result(tm_result, completed_idx)
+                        _merge_tm_result(tm_result, idx)
                         del tm_result
                 gc.enable()
                 gc.collect()
-        except Exception as exc:
-            print(f"Параллельная обработка title_mark не удалась, fallback в sequential: {exc}")
-            append_timing_log(result_dir, f"step4::parallel_by_title_mark_fallback: {time.perf_counter() - tm_loop_start:.3f}s")
-            result_rows = list(orphan_rows)
-            agg_mto_tagged_sums.clear()
-            agg_mto_tagged_values_by_code.clear()
-            agg_vo_tagged_sums.clear()
-            agg_vo_codes.clear()
-            agg_mto_codes_with_tags.clear()
-            all_mto_count_mismatches.clear()
-            all_mto_duplicate_tags.clear()
-            all_vo_duplicate_tags.clear()
+        else:
+            print(f"Title_mark: {len(title_marks)} | Последовательно")
             gc.disable()
             total_tms = len(title_marks)
             with tqdm(total=total_tms, desc="Step4 TM", unit="tm", ncols=80, dynamic_ncols=False) as pbar:
@@ -561,339 +586,317 @@ def step4_analyze_and_match(rfp_data: List[RowStd],
                     del tm_result
             gc.enable()
             gc.collect()
-    else:
-        print(f"Title_mark: {len(title_marks)} | Последовательно")
-        gc.disable()
-        total_tms = len(title_marks)
-        with tqdm(total=total_tms, desc="Step4 TM", unit="tm", ncols=80, dynamic_ncols=False) as pbar:
-            for idx, title_mark in enumerate(title_marks, 1):
-                tm_step_start = time.perf_counter()
-                tm_result = process_title_mark(
-                    title_mark,
-                    rfp_rows_by_title.get(title_mark, []),
-                    mto_data.get(title_mark, []),
-                    vo_data.get(title_mark, []),
-                    debug_log=debug_log_lines,
-                    **tm_common_kwargs,
-                )
-                tm_elapsed = time.perf_counter() - tm_step_start
-                append_timing_log(result_dir, f"step4::tm::{title_mark}: {tm_elapsed:.3f}s")
-                pbar.update(1)
-                _merge_tm_result(tm_result, idx)
-                del tm_result
-        gc.enable()
-        gc.collect()
 
-    log_timing("tm_loop_total", tm_loop_start)
+        log_timing("tm_loop_total", tm_loop_start)
 
-    if all_mto_count_mismatches or all_mto_duplicate_tags:
+        if all_mto_count_mismatches or all_mto_duplicate_tags:
+            step_start = time.perf_counter()
+            save_mto_diagnostics_reports(all_mto_count_mismatches, all_mto_duplicate_tags, result_dir)
+            log_timing("save_mto_diagnostics_reports", step_start)
+        if all_vo_duplicate_tags:
+            step_start = time.perf_counter()
+            save_vo_diagnostics_reports(all_vo_duplicate_tags, result_dir)
+            log_timing("save_vo_diagnostics_reports", step_start)
+
         step_start = time.perf_counter()
-        save_mto_diagnostics_reports(all_mto_count_mismatches, all_mto_duplicate_tags, result_dir)
-        log_timing("save_mto_diagnostics_reports", step_start)
-    if all_vo_duplicate_tags:
-        step_start = time.perf_counter()
-        save_vo_diagnostics_reports(all_vo_duplicate_tags, result_dir)
-        log_timing("save_vo_diagnostics_reports", step_start)
+        result_rows = _restore_original_row_order(result_rows)
+        log_timing("restore_original_row_order", step_start)
 
-    step_start = time.perf_counter()
-    result_rows = _restore_original_row_order(result_rows)
-    log_timing("restore_original_row_order", step_start)
-
-    append_memory_log(result_dir, "step4_after_tm_loop")
-    log_data_structures_memory(
-        result_dir,
-        "step4_after_tm_loop",
-        result_rows=result_rows,
-    )
-
-    # Per-row post-merge ops now run inside workers (step4_postmerge_ops).
-    # Only global operations remain in the main process.
-
-    step_start = time.perf_counter()
-    if use_rfp_code_ban:
-        _save_code_ban_list(
-            result_rows,
+        append_memory_log(result_dir, "step4_after_tm_loop")
+        log_data_structures_memory(
             result_dir,
-            code_ban_file,
-            agg_vo_codes,
-            agg_mto_codes_with_tags,
-            replacement_table,
-        )
-        log_timing("save_code_ban_list", step_start)
-
-    if filter_to_mto_titles and mto_data:
-        mto_title_set = set(mto_data.keys())
-        before = len(result_rows)
-        result_rows[:] = [r for r in result_rows if r.get_value(DS_TITLE) in mto_title_set]
-        print(f"Фильтрация по MTO title_system: {before} -> {len(result_rows)} строк ({len(mto_title_set)} TS)")
-
-    emit_milestone("step4_match", "Done", f"rows={len(result_rows)}")
-    emit_milestone("global_checks", "Running")
-    try:
-        step_start = time.perf_counter()
-        _detect_and_save_effective_tag_duplicates(result_rows, result_dir)
-        log_timing("detect_effective_tag_duplicates", step_start)
-
-        apply_post_split_input_to_snapshot(
-            quantity_input_snapshot,
-            post_split_mto_by_title,
-            post_split_mto_rows_by_title,
-            post_split_vo_by_title,
-            post_split_vo_rows_by_title,
-        )
-        emit_milestone(
-            "global_checks",
-            "Running",
-            format_input_rfp_mto_vo_detail(quantity_input_snapshot),
+            "step4_after_tm_loop",
+            result_rows=result_rows,
         )
 
-        balance_report = run_output_quantity_balance_check(
-            quantity_input_snapshot,
-            result_rows,
-            all_mto_count_mismatches,
-            result_dir,
-        )
-        if balance_report.fatal:
-            emit_milestone("global_checks", "Error", balance_report.summary)
-            balance_report.emit_fatal()
+        # Per-row post-merge ops now run inside workers (step4_postmerge_ops).
+        # Only global operations remain in the main process.
 
         step_start = time.perf_counter()
-        rfp_sums_for_check = rfp_sums_by_title
-        rfp_counts_for_check = rfp_counts_by_title
-        if filter_to_mto_titles and mto_data:
-            _mto_keys = set(mto_data.keys())
-            rfp_sums_for_check = {
-                k: v for k, v in rfp_sums_by_title.items() if k in _mto_keys
-            }
-            rfp_counts_for_check = {
-                k: v for k, v in rfp_counts_by_title.items() if k in _mto_keys
-            }
-        check_values_sum(
-            rfp_sums_for_check,
-            rfp_counts_for_check,
-            agg_mto_tagged_sums,
-            dict(agg_mto_tagged_values_by_code),
-            agg_vo_tagged_sums,
-            result_rows,
-            result_dir,
-        )
-        log_timing("check_values_sum", step_start)
-    except QuantityBalanceFatalError as exc:
-        emit_milestone(
-            "global_checks",
-            "Error",
-            exc.summary or str(exc).splitlines()[0],
-        )
-        raise
-    except Exception as exc:
-        emit_milestone("global_checks", "Error", str(exc))
-        raise
-    emit_milestone("global_checks", "Done", balance_report.summary)
-
-    packing_audit = None
-    if include_packing_lists:
-        emit_milestone("packing_lists", "Running")
-        step_start = time.perf_counter()
-        try:
-            resolved_packing_dataset = _resolve_packing_dataset_for_step4(
-                include_packing_lists=include_packing_lists,
-                packing_dataset=packing_dataset,
-            )
-            if resolved_packing_dataset is None:
-                raise RuntimeError("Packing dataset is required when include_packing_lists=True")
-            if filter_to_mto_titles and mto_data and resolved_packing_dataset.rows:
-                allowed_title_systems = set()
-                for title_mark in mto_data:
-                    parsed = parse_composite_title(title_mark)
-                    if parsed is not None:
-                        allowed_title_systems.add(
-                            packing_match_key(*parsed, "")[:2]
-                        )
-                resolved_packing_dataset.rows = [
-                    row
-                    for row in resolved_packing_dataset.rows
-                    if packing_row_key(row)[:2] in allowed_title_systems
-                ]
-            ul_in_qty, ul_in_rows, ul_in_by_title = packing_queue_input_by_title(
-                resolved_packing_dataset
-            )
-            print_input_ul_quantity_balance(
-                available=resolved_packing_dataset.available,
-                qty=ul_in_qty,
-                rows=ul_in_rows,
-            )
-            emit_milestone(
-                "packing_lists",
-                "Running",
-                format_input_ul_detail(
-                    available=resolved_packing_dataset.available,
-                    qty=ul_in_qty,
-                    rows=ul_in_rows,
-                ),
-            )
-            try:
-                result_rows, packing_audit = compare_rfp_rows_with_packing(
-                    result_rows,
-                    packing_ordered_snapshot,
-                    resolved_packing_dataset,
-                    use_mto_tags=ul_match_use_mto_tags,
-                )
-            except RfpPackingFatalError as exc:
-                try:
-                    save_rfp_packing_report(exc.audit, result_dir)
-                except OSError as report_exc:
-                    print(
-                        "УЛ Step4 ERROR: не удалось записать фатальный audit-report: "
-                        f"{report_exc}"
-                    )
-                print(exc.audit.format_short())
-                raise
-            for phase_name, phase_seconds in packing_audit.phase_timings.items():
-                append_timing_log(
-                    result_dir, f"step4::ul::{phase_name}: {phase_seconds:.3f}s"
-                )
-            gem_n = apply_gem_supply_status(result_rows, gem_supply_codes)
-            if gem_n:
-                print(f"Поставка ГЭМ: {gem_n} строк")
-            zip_n = apply_zip_smr_pnr_status(result_rows)
-            if zip_n:
-                print(f"ЗИП для СМР, ПНР: {zip_n} строк")
-            try:
-                save_rfp_packing_report(packing_audit, result_dir)
-            except OSError as report_exc:
-                print(
-                    "УЛ Step4 WARNING: не удалось записать audit-report; "
-                    f"Excel будет сохранён: {report_exc}"
-                )
-            print(packing_audit.format_short())
-            ul_balance_report = run_output_ul_quantity_balance_check(
-                ul_in_qty,
-                ul_in_by_title,
+        if use_rfp_code_ban:
+            _save_code_ban_list(
                 result_rows,
                 result_dir,
-                available=resolved_packing_dataset.available,
+                code_ban_file,
+                agg_vo_codes,
+                agg_mto_codes_with_tags,
+                replacement_table,
             )
-            if ul_balance_report.fatal:
-                emit_milestone("packing_lists", "Error", ul_balance_report.summary)
-                ul_balance_report.emit_fatal()
-            log_timing("compare_packing_lists", step_start)
+            log_timing("save_code_ban_list", step_start)
+
+        if filter_to_mto_titles and mto_data:
+            mto_title_set = set(mto_data.keys())
+            before = len(result_rows)
+            result_rows[:] = [r for r in result_rows if r.get_value(DS_TITLE) in mto_title_set]
+            print(f"Фильтрация по MTO title_system: {before} -> {len(result_rows)} строк ({len(mto_title_set)} TS)")
+
+        emit_milestone("step4_match", "Done", f"rows={len(result_rows)}")
+        emit_milestone("global_checks", "Running")
+        try:
+            step_start = time.perf_counter()
+            _detect_and_save_effective_tag_duplicates(result_rows, result_dir)
+            log_timing("detect_effective_tag_duplicates", step_start)
+
+            apply_post_split_input_to_snapshot(
+                quantity_input_snapshot,
+                post_split_mto_by_title,
+                post_split_mto_rows_by_title,
+                post_split_vo_by_title,
+                post_split_vo_rows_by_title,
+            )
+            emit_milestone(
+                "global_checks",
+                "Running",
+                format_input_rfp_mto_vo_detail(quantity_input_snapshot),
+            )
+
+            balance_report = run_output_quantity_balance_check(
+                quantity_input_snapshot,
+                result_rows,
+                all_mto_count_mismatches,
+                result_dir,
+            )
+            if balance_report.fatal:
+                emit_milestone("global_checks", "Error", balance_report.summary)
+                balance_report.emit_fatal()
+
+            step_start = time.perf_counter()
+            rfp_sums_for_check = rfp_sums_by_title
+            rfp_counts_for_check = rfp_counts_by_title
+            if filter_to_mto_titles and mto_data:
+                _mto_keys = set(mto_data.keys())
+                rfp_sums_for_check = {
+                    k: v for k, v in rfp_sums_by_title.items() if k in _mto_keys
+                }
+                rfp_counts_for_check = {
+                    k: v for k, v in rfp_counts_by_title.items() if k in _mto_keys
+                }
+            check_values_sum(
+                rfp_sums_for_check,
+                rfp_counts_for_check,
+                agg_mto_tagged_sums,
+                dict(agg_mto_tagged_values_by_code),
+                agg_vo_tagged_sums,
+                result_rows,
+                result_dir,
+            )
+            log_timing("check_values_sum", step_start)
         except QuantityBalanceFatalError as exc:
             emit_milestone(
-                "packing_lists",
+                "global_checks",
                 "Error",
                 exc.summary or str(exc).splitlines()[0],
             )
             raise
         except Exception as exc:
-            emit_milestone("packing_lists", "Error", str(exc))
+            emit_milestone("global_checks", "Error", str(exc))
             raise
-        emit_milestone("packing_lists", "Done", ul_balance_report.summary)
-    else:
-        emit_milestone("packing_lists", "Skipped", "include_packing_lists=false")
+        emit_milestone("global_checks", "Done", balance_report.summary)
 
-    apply_mto_ul_quantity_diff(result_rows)
+        packing_audit = None
+        if include_packing_lists:
+            emit_milestone("packing_lists", "Running")
+            step_start = time.perf_counter()
+            try:
+                resolved_packing_dataset = _resolve_packing_dataset_for_step4(
+                    include_packing_lists=include_packing_lists,
+                    packing_dataset=packing_dataset,
+                )
+                if resolved_packing_dataset is None:
+                    raise RuntimeError("Packing dataset is required when include_packing_lists=True")
+                if filter_to_mto_titles and mto_data and resolved_packing_dataset.rows:
+                    allowed_title_systems = set()
+                    for title_mark in mto_data:
+                        parsed = parse_composite_title(title_mark)
+                        if parsed is not None:
+                            allowed_title_systems.add(
+                                packing_match_key(*parsed, "")[:2]
+                            )
+                    resolved_packing_dataset.rows = [
+                        row
+                        for row in resolved_packing_dataset.rows
+                        if packing_row_key(row)[:2] in allowed_title_systems
+                    ]
+                ul_in_qty, ul_in_rows, ul_in_by_title = packing_queue_input_by_title(
+                    resolved_packing_dataset
+                )
+                print_input_ul_quantity_balance(
+                    available=resolved_packing_dataset.available,
+                    qty=ul_in_qty,
+                    rows=ul_in_rows,
+                )
+                emit_milestone(
+                    "packing_lists",
+                    "Running",
+                    format_input_ul_detail(
+                        available=resolved_packing_dataset.available,
+                        qty=ul_in_qty,
+                        rows=ul_in_rows,
+                    ),
+                )
+                try:
+                    result_rows, packing_audit = compare_rfp_rows_with_packing(
+                        result_rows,
+                        packing_ordered_snapshot,
+                        resolved_packing_dataset,
+                        use_mto_tags=ul_match_use_mto_tags,
+                    )
+                except RfpPackingFatalError as exc:
+                    try:
+                        save_rfp_packing_report(exc.audit, result_dir)
+                    except OSError as report_exc:
+                        print(
+                            "УЛ Step4 ERROR: не удалось записать фатальный audit-report: "
+                            f"{report_exc}"
+                        )
+                    print(exc.audit.format_short())
+                    raise
+                for phase_name, phase_seconds in packing_audit.phase_timings.items():
+                    append_timing_log(
+                        result_dir, f"step4::ul::{phase_name}: {phase_seconds:.3f}s"
+                    )
+                gem_n = apply_gem_supply_status(result_rows, gem_supply_codes)
+                if gem_n:
+                    print(f"Поставка ГЭМ: {gem_n} строк")
+                zip_n = apply_zip_smr_pnr_status(result_rows)
+                if zip_n:
+                    print(f"ЗИП для СМР, ПНР: {zip_n} строк")
+                try:
+                    save_rfp_packing_report(packing_audit, result_dir)
+                except OSError as report_exc:
+                    print(
+                        "УЛ Step4 WARNING: не удалось записать audit-report; "
+                        f"Excel будет сохранён: {report_exc}"
+                    )
+                print(packing_audit.format_short())
+                ul_balance_report = run_output_ul_quantity_balance_check(
+                    ul_in_qty,
+                    ul_in_by_title,
+                    result_rows,
+                    result_dir,
+                    available=resolved_packing_dataset.available,
+                )
+                if ul_balance_report.fatal:
+                    emit_milestone("packing_lists", "Error", ul_balance_report.summary)
+                    ul_balance_report.emit_fatal()
+                log_timing("compare_packing_lists", step_start)
+            except QuantityBalanceFatalError as exc:
+                emit_milestone(
+                    "packing_lists",
+                    "Error",
+                    exc.summary or str(exc).splitlines()[0],
+                )
+                raise
+            except Exception as exc:
+                emit_milestone("packing_lists", "Error", str(exc))
+                raise
+            emit_milestone("packing_lists", "Done", ul_balance_report.summary)
+        else:
+            emit_milestone("packing_lists", "Skipped", "include_packing_lists=false")
 
-    step_start = time.perf_counter()
-    apply_ds_source_columns(
-        result_rows,
-        matrix=ds_manager_matrix,
-        rfp_paths_by_key=rfp_paths_by_key or {},
-        mto_paths_by_title=mto_paths_by_title,
-    )
-    log_timing("apply_ds_source_columns", step_start)
-    paint_gem_supply_rows(result_rows)
+        apply_mto_ul_quantity_diff(result_rows)
 
-    emit_milestone("save_excel", "Running")
-    step_start = time.perf_counter()
-    try:
-        excel_path = save_match_result_to_excel(
+        step_start = time.perf_counter()
+        apply_ds_source_columns(
             result_rows,
-            result_dir,
-            debug_log=debug_log_lines,
-            packing_audit=packing_audit,
+            matrix=ds_manager_matrix,
+            rfp_paths_by_key=rfp_paths_by_key or {},
+            mto_paths_by_title=mto_paths_by_title,
         )
-    except Exception as exc:
-        emit_milestone("save_excel", "Error", str(exc))
-        raise
-    emit_milestone("save_excel", "Done", str(excel_path or ""))
-    log_timing("save_match_result_to_excel", step_start)
+        log_timing("apply_ds_source_columns", step_start)
+        paint_gem_supply_rows(result_rows)
 
-    if not export_bcc_accum_matrix:
-        emit_milestone("bcc_accum_matrix", "Skipped", "export_bcc_accum_matrix=false")
-    elif bcc_accum_matrix is None:
-        emit_milestone("bcc_accum_matrix", "Skipped", "снимок матрицы отсутствует")
-    else:
-        n_rows = len(bcc_accum_matrix.rows)
-        emit_milestone(
-            "bcc_accum_matrix",
-            "Running",
-            f"строк={n_rows}",
-        )
-        matrix_start = time.perf_counter()
+        emit_milestone("save_excel", "Running")
+        step_start = time.perf_counter()
         try:
-            matrix_path = save_bcc_accum_matrix_to_excel(
-                bcc_accum_matrix,
+            excel_path = save_match_result_to_excel(
+                result_rows,
                 result_dir,
+                debug_log=debug_log_lines,
+                packing_audit=packing_audit,
             )
         except Exception as exc:
-            emit_milestone("bcc_accum_matrix", "Error", str(exc))
-            print(f"Накопительная матрица BCC: ошибка записи, основной Шаг4 сохранён: {exc}")
-            import traceback
-            traceback.print_exc()
+            emit_milestone("save_excel", "Error", str(exc))
+            raise
+        emit_milestone("save_excel", "Done", str(excel_path or ""))
+        log_timing("save_match_result_to_excel", step_start)
+
+        if not export_bcc_accum_matrix:
+            emit_milestone("bcc_accum_matrix", "Skipped", "export_bcc_accum_matrix=false")
+        elif bcc_accum_matrix is None:
+            emit_milestone("bcc_accum_matrix", "Skipped", "снимок матрицы отсутствует")
         else:
-            emit_milestone("bcc_accum_matrix", "Done", str(matrix_path or ""))
-            log_timing("save_bcc_accum_matrix_to_excel", matrix_start)
-
-    append_timing_log(result_dir, f"step4_total: {time.perf_counter() - total_start:.3f}s")
-
-    if unified_debug and result_dir and debug_log_lines:
-        # Сводка по строкам с несколькими шкафами в IN_CABINET (формат "A/B")
-        multi_cabinet_rows = []
-        for row in result_rows:
-            if row.row_type != RowType.position_row:
-                continue
-            in_cabinet = str(row.get_value(IN_CABINET) or "").strip()
-            if "/" in in_cabinet:
-                multi_cabinet_rows.append({
-                    "ds_title": row.get_value(DS_TITLE) or "",
-                    "code": row.get_value(CODE) or "",
-                    "code_mto": row.el[CODE_MTO].value if row.el.get(CODE_MTO) else "",
-                    "code_vo": row.el[CODE_VO].value if row.el.get(CODE_VO) else "",
-                    "tag_mto": row.el[TAG_MTO].value if row.el.get(TAG_MTO) else "",
-                    "tag_vo": row.el[TAG_VO].value if row.el.get(TAG_VO) else "",
-                    "in_cabinet": in_cabinet,
-                    "match_status": row.el[MATCH_STATUS].value if row.el.get(MATCH_STATUS) else "",
-                    "match_status_vo": row.el[MATCH_STATUS_VO].value if row.el.get(MATCH_STATUS_VO) else "",
-                })
-        if multi_cabinet_rows:
-            print(f"\n  Внимание: найдено {len(multi_cabinet_rows)} строк с несколькими шкафами в IN_CABINET (формат A/B)")
-            debug_log_lines.append("\n")
-            debug_log_lines.append("=" * 80 + "\n")
-            debug_log_lines.append("СВОДКА: Строки с несколькими шкафами в IN_CABINET (возможное сопоставление из разных шкафов)\n")
-            debug_log_lines.append("=" * 80 + "\n")
-            for i, r in enumerate(multi_cabinet_rows, 1):
-                debug_log_lines.append(
-                    f"  [{i}] DS_TITLE={r['ds_title']}, CODE={r['code']}, "
-                    f"CODE_MTO={r['code_mto']}, CODE_VO={r['code_vo']}, "
-                    f"TAG_MTO={r['tag_mto']}, TAG_VO={r['tag_vo']}\n"
+            n_rows = len(bcc_accum_matrix.rows)
+            emit_milestone(
+                "bcc_accum_matrix",
+                "Running",
+                f"строк={n_rows}",
+            )
+            matrix_start = time.perf_counter()
+            try:
+                matrix_path = save_bcc_accum_matrix_to_excel(
+                    bcc_accum_matrix,
+                    result_dir,
                 )
-                debug_log_lines.append(
-                    f"      IN_CABINET={r['in_cabinet']}, "
-                    f"MATCH_STATUS={r['match_status']}, MATCH_STATUS_VO={r['match_status_vo']}\n"
-                )
-            debug_log_lines.append("\n")
-        try:
-            os.makedirs(result_dir, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_name = f"step4_unified_debug_{timestamp}.txt"
-            file_path = os.path.join(result_dir, file_name)
-            with open(file_path, "w", encoding="utf-8") as file:
-                file.writelines(debug_log_lines)
-            print(f"Debug log -> {os.path.basename(file_path)}")
-        except Exception as exc:
-            print(f"Ошибка сохранения unified debug-лога: {exc}")
+            except Exception as exc:
+                emit_milestone("bcc_accum_matrix", "Error", str(exc))
+                print(f"Накопительная матрица BCC: ошибка записи, основной Шаг4 сохранён: {exc}")
+                import traceback
+                traceback.print_exc()
+            else:
+                emit_milestone("bcc_accum_matrix", "Done", str(matrix_path or ""))
+                log_timing("save_bcc_accum_matrix_to_excel", matrix_start)
+
+        append_timing_log(result_dir, f"step4_total: {time.perf_counter() - total_start:.3f}s")
+
+        if unified_debug and result_dir and debug_log_lines:
+            # Сводка по строкам с несколькими шкафами в IN_CABINET (формат "A/B")
+            multi_cabinet_rows = []
+            for row in result_rows:
+                if row.row_type != RowType.position_row:
+                    continue
+                in_cabinet = str(row.get_value(IN_CABINET) or "").strip()
+                if "/" in in_cabinet:
+                    multi_cabinet_rows.append({
+                        "ds_title": row.get_value(DS_TITLE) or "",
+                        "code": row.get_value(CODE) or "",
+                        "code_mto": row.el[CODE_MTO].value if row.el.get(CODE_MTO) else "",
+                        "code_vo": row.el[CODE_VO].value if row.el.get(CODE_VO) else "",
+                        "tag_mto": row.el[TAG_MTO].value if row.el.get(TAG_MTO) else "",
+                        "tag_vo": row.el[TAG_VO].value if row.el.get(TAG_VO) else "",
+                        "in_cabinet": in_cabinet,
+                        "match_status": row.el[MATCH_STATUS].value if row.el.get(MATCH_STATUS) else "",
+                        "match_status_vo": row.el[MATCH_STATUS_VO].value if row.el.get(MATCH_STATUS_VO) else "",
+                    })
+            if multi_cabinet_rows:
+                print(f"\n  Внимание: найдено {len(multi_cabinet_rows)} строк с несколькими шкафами в IN_CABINET (формат A/B)")
+                debug_log_lines.append("\n")
+                debug_log_lines.append("=" * 80 + "\n")
+                debug_log_lines.append("СВОДКА: Строки с несколькими шкафами в IN_CABINET (возможное сопоставление из разных шкафов)\n")
+                debug_log_lines.append("=" * 80 + "\n")
+                for i, r in enumerate(multi_cabinet_rows, 1):
+                    debug_log_lines.append(
+                        f"  [{i}] DS_TITLE={r['ds_title']}, CODE={r['code']}, "
+                        f"CODE_MTO={r['code_mto']}, CODE_VO={r['code_vo']}, "
+                        f"TAG_MTO={r['tag_mto']}, TAG_VO={r['tag_vo']}\n"
+                    )
+                    debug_log_lines.append(
+                        f"      IN_CABINET={r['in_cabinet']}, "
+                        f"MATCH_STATUS={r['match_status']}, MATCH_STATUS_VO={r['match_status_vo']}\n"
+                    )
+                debug_log_lines.append("\n")
+            try:
+                os.makedirs(result_dir, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                file_name = f"step4_unified_debug_{timestamp}.txt"
+                file_path = os.path.join(result_dir, file_name)
+                with open(file_path, "w", encoding="utf-8") as file:
+                    file.writelines(debug_log_lines)
+                print(f"Debug log -> {os.path.basename(file_path)}")
+            except Exception as exc:
+                print(f"Ошибка сохранения unified debug-лога: {exc}")
     
-    return result_rows
+        return result_rows
 
 
 

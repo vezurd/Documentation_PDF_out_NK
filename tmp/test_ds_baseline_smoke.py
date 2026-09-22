@@ -535,7 +535,7 @@ class DsBaselineSmokeTest(unittest.TestCase):
 
             by_source = {item.source_id: item for item in result.positions}
             self.assertEqual(by_source["13"].group_label, "ДС13")
-            self.assertEqual(by_source["47"].group_label, "ДС13")
+            self.assertEqual(by_source["47"].group_label, "ДС47")
             self.assertFalse(by_source["13"].grouping_fallback)
             self.assertEqual(by_source["4905_1"].source_id, "4905_1")
             self.assertEqual(by_source["4905_1"].group_label, "ДС4905_1")
@@ -572,7 +572,7 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 self.assertEqual(headers[4], "Теги / Tag")
                 names = {row[0] for row in data_rows if row and row[0]}
                 self.assertIn("ДС13", names)
-                self.assertIn("ДС4905", names)
+                self.assertIn("ДС4905_1", names)
                 self.assertIn("ДС101", names)
                 self.assertIn("ДС8", names)
                 for row in data_rows:

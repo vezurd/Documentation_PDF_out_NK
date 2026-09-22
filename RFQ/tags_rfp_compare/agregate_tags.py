@@ -172,6 +172,45 @@ def _load_config_override(config_path: str) -> Dict[str, Any]:
 # ГЛАВНАЯ ФУНКЦИЯ
 # ============================================================================
 
+def _registry_packing_index(rfp_parts_cfg: Dict[str, Any], include_packing_lists: bool):
+    """Load a clean DS registry into the Step4 packing-key override.
+
+    A missing file or a registry with errors leaves name parsing in place.
+    """
+
+    if not include_packing_lists:
+        return None
+    try:
+        from pathlib import Path
+
+        from RFQ.packing_list_provider import RegistryPackingIndex
+        from RFQ.rfp_parts.ds_registry import (
+            load_registry,
+            registry_packing_maps,
+            resolve_latest_registry,
+        )
+    except ImportError:
+        return None
+    raw = str(rfp_parts_cfg.get("ds_registry_path", "") or "").strip()
+    try:
+        home = Path(raw).parent if raw else None
+        latest = resolve_latest_registry(home)
+        target = latest if latest.is_file() else Path(raw) if raw else latest
+        if not target.is_file():
+            return None
+        maps = registry_packing_maps(load_registry(target))
+    except Exception as exc:
+        print(f"УЛ: реестр ДС не применён к ключу посадки: {exc}")
+        return None
+    if maps is None:
+        return None
+    folders, numbers = maps
+    return RegistryPackingIndex(
+        folder_to_actual=folders,
+        rfp_number_to_actual=numbers,
+    )
+
+
 def main(config_override: Optional[Dict[str, Any]] = None):
     """Главная функция для запуска процесса сравнения тегов.
     
@@ -746,6 +785,9 @@ def main(config_override: Optional[Dict[str, Any]] = None):
             ds_manager_matrix=ds_manager_matrix,
             gem_supply_codes=gem_supply_codes,
             rfp_paths_by_key=rfp_paths_by_key,
+            registry_packing_index=_registry_packing_index(
+                rfp_parts_cfg, include_packing_lists
+            ),
         )
     except (QuantityBalanceFatalError, RfpPackingFatalError) as exc:
         detail = getattr(exc, "summary", "") or str(exc)

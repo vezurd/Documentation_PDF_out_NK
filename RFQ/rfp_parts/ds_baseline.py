@@ -41,6 +41,7 @@ warnings.filterwarnings(
 from RFQ.ds_compare.ds_quantity_parse import try_parse_quantity
 from RFQ.ds_compare.ds_units_normalize import normalize_units_text
 from RFQ.rfp_parts.analyze_rfp_parts import NetSummaryRow, RfpRecord, _write_net_xlsx
+from RFQ.rfp_parts.ds_progress import DsHeartbeat
 from RFQ.rfp_parts.ds_registry import (
     MODE_FILTER,
     MODE_NEEDS_SPLIT,
@@ -534,13 +535,22 @@ def _atomic_write_bytes(target: Path, data: bytes) -> Path:
     return target
 
 
-def _save_workbook_atomic(target: Path, workbook: Workbook) -> Path:
+def _save_workbook_atomic(
+    target: Path,
+    workbook: Workbook,
+    progress: Callable[[str], None] | None = None,
+) -> Path:
+    if progress is not None:
+        progress("сериализация xlsx")
     buffer = BytesIO()
     try:
         workbook.save(buffer)
     finally:
         workbook.close()
-    return _atomic_write_bytes(target, buffer.getvalue())
+    data = buffer.getvalue()
+    if progress is not None:
+        progress(f"запись на диск ({max(len(data) // 1024, 1)} КБ)")
+    return _atomic_write_bytes(target, data)
 
 
 def _issue(
@@ -1853,10 +1863,40 @@ def _write_summary_sheet(
 
 
 def _mark_level(cell, level: str) -> None:
+    # WARN/OVERLAY fills on tens of thousands of rows are an openpyxl bottleneck.
     if level == "ERROR":
         cell.fill = _FILL_ERROR
-    elif level in {"WARN", "OVERLAY"}:
-        cell.fill = _FILL_WARN
+
+
+def _emit_phase(
+    phase_callback: Callable[[str], None] | None,
+    text: str,
+) -> None:
+    if phase_callback is not None:
+        phase_callback(text)
+
+
+def _phase_timer(
+    phase_callback: Callable[[str], None] | None,
+    label: str,
+) -> Callable[..., None]:
+    started = time.perf_counter()
+    _emit_phase(phase_callback, label)
+
+    def done(suffix: str = "") -> None:
+        elapsed = time.perf_counter() - started
+        extra = f" ({suffix})" if suffix else ""
+        _emit_phase(phase_callback, f"{label}{extra} — {elapsed:.1f} с")
+
+    return done
+
+
+def _display_tag(owners: Sequence[DsBaselinePosition], tag_key: str) -> str:
+    for item in owners:
+        for tag in item.diagnostic_tags:
+            if tag.casefold() == tag_key:
+                return tag
+    return tag_key
 
 
 def _write_structure_report(
@@ -1868,7 +1908,9 @@ def _write_structure_report(
     sheet_scans: Sequence[tuple[str, DsSheetScan]],
     column_notes: Sequence[dict[str, object]],
     issues: Sequence[DsBaselineIssue],
+    progress: Callable[[str], None] | None = None,
 ) -> Path:
+    hb = DsHeartbeat(progress, "отчёт по структуре")
     wb = Workbook()
     summary = wb.active
     assert summary is not None
@@ -1979,7 +2021,8 @@ def _write_structure_report(
             "Сообщение",
         ]
     )
-    for item in issues:
+    issue_count = len(issues)
+    for index, item in enumerate(issues, start=1):
         problems.append(
             [
                 item.level,
@@ -1994,11 +2037,16 @@ def _write_structure_report(
             ]
         )
         _mark_level(problems.cell(row=problems.max_row, column=1), item.level)
+        if index == 1 or index % 500 == 0 or index == issue_count:
+            hb.tick(f"замечания {index}/{issue_count}")
     _style_header(problems, 9)
     problems.column_dimensions["C"].width = 36
     problems.column_dimensions["D"].width = 70
     problems.column_dimensions["I"].width = 70
-    return _save_workbook_atomic(path, wb)
+    hb.tick("сохранение xlsx", force=True)
+    saved = _save_workbook_atomic(path, wb, progress=progress)
+    hb.finish("сохранён")
+    return saved
 
 
 def _write_quality_report(
@@ -2008,7 +2056,9 @@ def _write_quality_report(
     positions: Sequence[DsBaselinePosition],
     issues: Sequence[DsBaselineIssue],
     files: Sequence[DsSourceFile],
+    progress: Callable[[str], None] | None = None,
 ) -> Path:
+    hb = DsHeartbeat(progress, "отчёт по качеству")
     wb = Workbook()
     summary = wb.active
     assert summary is not None
@@ -2112,7 +2162,8 @@ def _write_quality_report(
             "Trace",
         ]
     )
-    for item in positions:
+    position_count = len(positions)
+    for index, item in enumerate(positions, start=1):
         units_ws.append(
             [
                 item.relpath,
@@ -2131,6 +2182,8 @@ def _write_quality_report(
                 item.conversion_trace,
             ]
         )
+        if index == 1 or index % 500 == 0 or index == position_count:
+            hb.tick(f"единицы {index}/{position_count}")
     _style_header(units_ws, 12)
     units_ws.column_dimensions["A"].width = 36
     units_ws.column_dimensions["B"].width = 70
@@ -2241,7 +2294,10 @@ def _write_quality_report(
     _style_header(src_ws, 5)
     src_ws.column_dimensions["A"].width = 40
     src_ws.column_dimensions["B"].width = 70
-    return _save_workbook_atomic(path, wb)
+    hb.tick("сохранение xlsx", force=True)
+    saved = _save_workbook_atomic(path, wb, progress=progress)
+    hb.finish("сохранён")
+    return saved
 
 
 def _write_sidecar_positions(
@@ -2250,17 +2306,25 @@ def _write_sidecar_positions(
     headers: Sequence[str],
     rows: Sequence[Sequence[object]],
     path_cols: Sequence[int],
+    progress: Callable[[str], None] | None = None,
 ) -> Path:
     del path_cols
+    hb = DsHeartbeat(progress, f"sidecar {title}")
     wb = Workbook()
     ws = wb.active
     assert ws is not None
     ws.title = title
     ws.append(list(headers))
-    for row in rows:
+    row_count = len(rows)
+    for index, row in enumerate(rows, start=1):
         ws.append(list(row))
+        if index == 1 or index % 500 == 0 or index == row_count:
+            hb.tick(f"{index}/{row_count}")
     _style_header(ws, len(headers))
-    return _save_workbook_atomic(path, wb)
+    hb.tick("сохранение xlsx", force=True)
+    saved = _save_workbook_atomic(path, wb, progress=progress)
+    hb.finish("сохранён")
+    return saved
 
 
 def _positions_to_net_rows(

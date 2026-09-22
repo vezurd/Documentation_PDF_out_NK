@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 import tempfile
 import unittest
@@ -231,9 +232,9 @@ def _write_registry(path: Path) -> None:
             source_id="47",
             relations=(
                 _rel(
-                    group_id="ДС13",
-                    rfp_key="13",
-                    ul_folder="согл УЛ ДС13",
+                    group_id="ДС47",
+                    rfp_key="47",
+                    ul_folder="согл УЛ ДС47",
                     mode=MODE_WHOLE,
                 ),
             ),
@@ -342,7 +343,7 @@ def _google_index() -> GoogleUnitsIndex:
 
 
 def _write_ds_tree(ds_root: Path) -> None:
-    _write_xlsx(ds_root / "ДС13.xlsx", [DS_HEADER, _ds_row(npp=1, qty=1)])
+    _write_xlsx(ds_root / "ДС13.xlsx", [DS_HEADER, _ds_row(npp=1, qty=2)])
     _write_xlsx(
         ds_root / "ДС_47" / "spec.xlsx",
         [DS_HEADER, _ds_row(npp=2, qty=1)],
@@ -427,10 +428,7 @@ def _write_rfp_tree(rfp_root: Path, *, duplicate: bool = False) -> None:
     _write_xlsx(rfp_root / "rfp_parts_net.xlsx", [["net"]])
     _write_xlsx(rfp_root / HYBRID_XLSX_NAME, [["hybrid"]])
     if duplicate:
-        _write_rfp(
-            rfp_root / "ДС13. copy.xlsx",
-            [_rfp_data(number=1, code=CODE_MATCH, qty=2)],
-        )
+        shutil.copyfile(rfp_root / "ДС13. AGCC.xlsx", rfp_root / "ДС13. copy.xlsx")
 
 
 def _run(
@@ -517,11 +515,11 @@ class DsRfpHybridSmokeTest(unittest.TestCase):
             self.assertEqual(by_id["ДС99"].selected_source, "ДС")
             self.assertEqual(by_id["ДС88"].status, STATUS_DS_ONLY)
             self.assertEqual(by_id["ДС88"].selected_source, "ДС")
-            self.assertEqual(by_id["NO_UL:101"].status, STATUS_DS_ONLY)
+            self.assertEqual(by_id["ДС101"].status, STATUS_DS_ONLY)
             self.assertEqual(by_id["ДС55"].status, STATUS_MISMATCH)
             self.assertEqual(by_id["ДС66"].status, STATUS_MATCH)
-            self.assertEqual(by_id["ДС8"].status, STATUS_BLOCKED)
-            self.assertEqual(by_id["ДС8"].selected_source, "ДС")
+            self.assertEqual(by_id["ДС8"].status, STATUS_MATCH)
+            self.assertEqual(by_id["ДС8"].selected_source, "RFP")
             rfp_only = [
                 item for item in hybrid.groups if item.status == STATUS_RFP_ONLY
             ]
@@ -673,7 +671,8 @@ class DsRfpHybridSmokeTest(unittest.TestCase):
                 for item in hybrid.hybrid_rows
                 if item.record.ds_name == "ДС13"
             ]
-            self.assertEqual(len(dup_rows), 2)
+            self.assertEqual(len(dup_rows), 1)
+            self.assertEqual(dup_rows[0].record.values, Decimal("2"))
             self.assertTrue(all(item.source == SOURCE_DS for item in dup_rows))
             self.assertTrue(all(not item.record.tags for item in dup_rows))
 

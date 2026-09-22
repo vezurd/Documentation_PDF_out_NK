@@ -6,13 +6,15 @@ the same cache contract can be reused by both pipelines.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import pickle
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import base.t_comm_initial_classes as t_com_init_cls
 from base.base_classes import CheckElement, RowStd, RowType, TableComments
@@ -201,6 +203,38 @@ def default_packing_cache_path() -> Path:
     return DEFAULT_PACKING_OUTPUT_DIR / PACKING_CACHE_NAME
 
 
+@dataclass(frozen=True, slots=True)
+class RegistryPackingIndex:
+    """Actual DS numbers taken from the registry, not from folder or file names.
+
+    ``folder_to_actual`` keys are casefolded UL folder names.
+    ``rfp_number_to_actual`` maps the RFP number named on a row to that row's
+    actual DS. A clean registry has one owner per folder and per RFP number.
+    """
+
+    folder_to_actual: dict[str, int] = field(default_factory=dict)
+    rfp_number_to_actual: dict[int, int] = field(default_factory=dict)
+
+
+_REGISTRY_PACKING_INDEX: ContextVar[RegistryPackingIndex | None] = ContextVar(
+    "registry_packing_index",
+    default=None,
+)
+
+
+@contextlib.contextmanager
+def registry_packing_scope(
+    index: RegistryPackingIndex | None,
+) -> Iterator[None]:
+    """Use registry actual numbers for UL folders and RFP rows in this block."""
+
+    token = _REGISTRY_PACKING_INDEX.set(index)
+    try:
+        yield
+    finally:
+        _REGISTRY_PACKING_INDEX.reset(token)
+
+
 def normalize_packing_key_part(value: object) -> str:
     """Normalize a title, mark, or code for cross-pipeline matching."""
     if value is None:
@@ -277,8 +311,14 @@ def rfp_row_actual_ds(row: RowStd) -> int | None:
         # the compound regex requires; retry so ``ДС92_24Б`` still splits.
         retry = parse_rfp_ds_identity(ds_name + ". ")
         if retry.compound:
-            return retry.actual
-    return ident.actual
+            ident = retry
+    actual = ident.actual
+    index = _REGISTRY_PACKING_INDEX.get()
+    if index is not None and actual is not None:
+        override = index.rfp_number_to_actual.get(actual)
+        if override is not None:
+            return override
+    return actual
 
 
 def packing_row_actual_ds(row: RowStd) -> int | None:
@@ -298,6 +338,11 @@ def packing_row_actual_ds(row: RowStd) -> int | None:
     normalized = annotation.replace("\\", "/")
     parts = Path(normalized).parts
     folder = parts[0] if parts else ""
+    index = _REGISTRY_PACKING_INDEX.get()
+    if index is not None and folder:
+        override = index.folder_to_actual.get(folder.casefold())
+        if override is not None:
+            return override
     return parse_ul_folder_ds_identity(folder).actual
 
 

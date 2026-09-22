@@ -21,14 +21,11 @@ from RFQ.rfp_parts.ds_registry import (
     HEADER_REQUIRED_MARK,
     HDR_SOURCE_ID,
     HDR_STATUS,
-    ISSUE_DUPLICATE_SOURCE_ID,
-    ISSUE_GAPPED_BLOCK,
-    ISSUE_GROUP_MISMATCH,
-    ISSUE_MULTI_LINK_NEEDS_SPLIT,
-    ISSUE_PARTIAL_BLOCK,
-    ISSUE_UL_IDENTITY_MISMATCH,
-    ISSUE_UL_UNEXPECTED,
-    ISSUE_UL_UNPARSED,
+    ISSUE_DUPLICATE_LINK,
+    ISSUE_ORPHAN,
+    ISSUE_RFP_FILE_MISSING,
+    ISSUE_SHARED_RFP,
+    ISSUE_SHARED_UL,
     MIGRATION_REPORT_PREFIX,
     MODE_NEEDS_SPLIT,
     MODE_NO_UL,
@@ -45,10 +42,14 @@ from RFQ.rfp_parts.ds_registry import (
     DsRegistryRow,
     backup_and_replace_registry,
     canonical_supply_group_id,
+    DsRegistryDocument,
+    collect_orphan_rows,
+    collapse_registry_rows,
     detect_registry_format,
     load_registry,
     migrate_registry,
     no_ul_group_id,
+    registry_packing_maps,
     validate_registry_rows,
     write_registry_workbook,
 )
@@ -113,7 +114,11 @@ class DsRegistrySmokeTest(unittest.TestCase):
             self.assertEqual(result.report_path, report_path)
             self.assertEqual(result.active_count, 6)
             self.assertEqual(result.history_count, 1)
-            self.assertTrue(result.validation.is_ok)
+            self.assertFalse(result.validation.is_ok)
+            self.assertTrue(result.validation.blocks_overlay)
+            codes = {item.code for item in result.validation.issues}
+            self.assertIn(ISSUE_SHARED_UL, codes)
+            self.assertIn(ISSUE_SHARED_RFP, codes)
 
             by_id = {row.source_id: row for row in result.rows if row.source_id}
             self.assertEqual(by_id["13"].status, STATUS_ACTIVE)
@@ -122,9 +127,8 @@ class DsRegistrySmokeTest(unittest.TestCase):
             self.assertEqual(by_id["13"].relations[0].group_id, "ДС13")
             self.assertEqual(by_id["13"].relations[0].rfp_key, "13")
             self.assertEqual(by_id["13"].relations[0].ul_folder, "согл УЛ ДС13")
-            self.assertEqual(by_id["13"].relations[0].mode, MODE_WHOLE)
 
-            self.assertEqual(by_id["47"].relations[0].group_id, "ДС13")
+            self.assertEqual(by_id["47"].relations[0].group_id, "ДС47")
             self.assertEqual(by_id["47"].relations[0].rfp_key, "13")
             self.assertEqual(by_id["47"].relations[0].ul_folder, "согл УЛ ДС13")
 
@@ -133,28 +137,18 @@ class DsRegistrySmokeTest(unittest.TestCase):
             self.assertEqual(row8.relations[0].group_id, "ДС8")
             self.assertEqual(row8.relations[0].rfp_key, "8")
             self.assertEqual(row8.relations[0].ul_folder, "согл УЛ ДС8")
-            self.assertEqual(row8.relations[1].group_id, "ДС81")
+            self.assertEqual(row8.relations[1].group_id, "ДС8")
             self.assertEqual(row8.relations[1].rfp_key, "81")
             self.assertEqual(row8.relations[1].ul_folder, "согл УЛ ДС81")
-            self.assertEqual(row8.relations[0].mode, MODE_NEEDS_SPLIT)
-            self.assertEqual(row8.relations[1].mode, MODE_NEEDS_SPLIT)
-            self.assertTrue(
-                any(
-                    item.code == ISSUE_MULTI_LINK_NEEDS_SPLIT and item.blocks_overlay
-                    for item in result.validation.issues
-                )
-            )
-            self.assertTrue(result.validation.blocks_overlay)
 
             row101 = by_id["101"]
-            self.assertEqual(row101.relations[0].group_id, no_ul_group_id("101"))
+            self.assertEqual(row101.relations[0].group_id, "ДС101")
             self.assertEqual(row101.relations[0].rfp_key, "101")
             self.assertEqual(row101.relations[0].ul_folder, "")
-            self.assertEqual(row101.relations[0].mode, MODE_NO_UL)
 
             self.assertIn("4905_1", by_id)
             self.assertEqual(by_id["4905_1"].source_id, "4905_1")
-            self.assertEqual(by_id["4905_1"].relations[0].group_id, "ДС4905")
+            self.assertEqual(by_id["4905_1"].relations[0].group_id, "ДС4905_1")
             self.assertEqual(by_id["4905"].relations[0].group_id, "ДС4905")
             self.assertEqual(by_id["4905"].relations[0].rfp_key, "4905")
             self.assertEqual(by_id["4905"].relations[0].ul_folder, "согл УЛ 4905")
@@ -220,8 +214,8 @@ class DsRegistrySmokeTest(unittest.TestCase):
                     str(legend.cell(row, 1).value or "")
                     for row in range(4, 20)
                 ]
-                self.assertIn("Режим «Требует распределения»", names)
-                self.assertIn("Режим «Вся ДС»", names)
+                self.assertIn("Несколько строк", names)
+                self.assertIn("Сверка RFP", names)
                 ws = wb[REGISTRY_SHEET_NAME]
                 self.assertEqual(ws.freeze_panes, "A2")
                 self.assertIn(REGISTRY_TABLE_NAME, ws.tables)
@@ -233,18 +227,16 @@ class DsRegistrySmokeTest(unittest.TestCase):
                 self.assertEqual(ws["B2"].value, "ДС23")
                 self.assertEqual(ws["C1"].value, "Исторический номер ДС")
                 self.assertIn(HEADER_REQUIRED_MARK, str(ws["A1"].value))
-                self.assertIn(HEADER_CONDITIONAL_MARK, str(ws["I1"].value))
+                self.assertIn(HEADER_CONDITIONAL_MARK, str(ws["E1"].value))
                 self.assertTrue(_fill_rgb(ws["A1"]).endswith("1B4F72"))
                 self.assertTrue(_fill_rgb(ws["B1"]).endswith("1B4F72"))
-                self.assertTrue(_fill_rgb(ws["I1"]).endswith("FFC000"))
+                self.assertTrue(_fill_rgb(ws["E1"]).endswith("FFC000"))
                 self.assertTrue(_fill_rgb(ws["D1"]).endswith("D9D9D9"))
                 self.assertIsNotNone(ws["A1"].comment)
                 self.assertIn("Активен", ws["A1"].comment.text)
                 self.assertIn("*", ws["A1"].comment.text)
-                self.assertIsNotNone(ws["I1"].comment)
-                self.assertIn(MODE_NO_UL, ws["I1"].comment.text)
-                self.assertEqual(ws["E1"].border.left.style, "medium")
-                self.assertEqual(ws["L1"].border.right.style, "medium")
+                self.assertIsNotNone(ws["E1"].comment)
+                self.assertIn("Одна папка", ws["E1"].comment.text)
                 info = wb["Исходный ДС"]
                 self.assertEqual(info["A2"].value, "ДС23")
                 self.assertEqual(info["E2"].value, 2)
@@ -255,8 +247,6 @@ class DsRegistrySmokeTest(unittest.TestCase):
                 joined = " ".join(formulas)
                 self.assertIn(STATUS_ACTIVE, joined)
                 self.assertIn(STATUS_HISTORY, joined)
-                self.assertIn(MODE_WHOLE, joined)
-                self.assertIn(MODE_NEEDS_SPLIT, joined)
                 self.assertTrue(ws.conditional_formatting._cf_rules)
             finally:
                 wb.close()
@@ -318,7 +308,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
             self.assertEqual(loaded.rows[1].status, STATUS_HISTORY)
             self.assertEqual(loaded.rows[1].relations, ())
             self.assertEqual(loaded.rows[2].source_id, "4905_1")
-            self.assertEqual(loaded.rows[2].relations[0].group_id, "ДС4905")
+            self.assertEqual(loaded.rows[2].relations[0].group_id, "ДС4905_1")
             self.assertEqual(loaded.rows[2].relations[0].rfp_key, "4905")
 
     def test_validate_duplicate_partial_gap_mismatch(self) -> None:
@@ -353,7 +343,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
             ),
         ]
         dup_codes = {item.code for item in validate_registry_rows(duplicate).issues}
-        self.assertIn(ISSUE_DUPLICATE_SOURCE_ID, dup_codes)
+        self.assertIn(ISSUE_DUPLICATE_LINK, dup_codes)
 
         partial = [
             DsRegistryRow(
@@ -372,7 +362,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
             )
         ]
         partial_codes = {item.code for item in validate_registry_rows(partial).issues}
-        self.assertIn(ISSUE_PARTIAL_BLOCK, partial_codes)
+        self.assertEqual(partial_codes, set())
 
         gap = [
             DsRegistryRow(
@@ -401,11 +391,9 @@ class DsRegistrySmokeTest(unittest.TestCase):
             path = Path(raw) / "gap.xlsx"
             write_registry_workbook(path, gap)
             loaded = load_registry(path)
-            self.assertFalse(loaded.validation.is_ok)
-            self.assertIn(
-                ISSUE_GAPPED_BLOCK,
-                {item.code for item in loaded.validation.issues},
-            )
+            self.assertTrue(loaded.validation.is_ok, loaded.validation.issues)
+            self.assertEqual(len(loaded.rows[0].relations), 1)
+            self.assertEqual(loaded.rows[0].relations[0].ul_folder, "согл УЛ ДС81")
 
         mismatch = [
             DsRegistryRow(
@@ -438,7 +426,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
             ),
         ]
         mismatch_codes = {item.code for item in validate_registry_rows(mismatch).issues}
-        self.assertIn(ISSUE_GROUP_MISMATCH, mismatch_codes)
+        self.assertIn(ISSUE_SHARED_RFP, mismatch_codes)
 
     def test_ul_identity_roundtrip_and_mismatch(self) -> None:
         self.assertEqual(canonical_supply_group_id(13), "ДС13")
@@ -496,9 +484,9 @@ class DsRegistrySmokeTest(unittest.TestCase):
             self.assertTrue(loaded.validation.is_ok)
             self.assertEqual(loaded.rows[0].relations[0].group_id, "ДС13")
             self.assertEqual(loaded.rows[0].relations[0].rfp_key, "13")
-            self.assertEqual(loaded.rows[1].relations[0].group_id, "ДС4905")
+            self.assertEqual(loaded.rows[1].relations[0].group_id, "ДС4905_1")
             self.assertEqual(loaded.rows[1].relations[0].rfp_key, "4905")
-            self.assertEqual(loaded.rows[2].relations[0].group_id, "NO_UL:101")
+            self.assertEqual(loaded.rows[2].relations[0].group_id, "ДС101")
 
         bare_group = [
             DsRegistryRow(
@@ -517,7 +505,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
             )
         ]
         bare_codes = {item.code for item in validate_registry_rows(bare_group).issues}
-        self.assertIn(ISSUE_UL_IDENTITY_MISMATCH, bare_codes)
+        self.assertEqual(bare_codes, set())
 
         wrong_key = [
             DsRegistryRow(
@@ -536,7 +524,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
             )
         ]
         key_codes = {item.code for item in validate_registry_rows(wrong_key).issues}
-        self.assertIn(ISSUE_UL_IDENTITY_MISMATCH, key_codes)
+        self.assertEqual(key_codes, set())
 
         unparsed_filled = [
             DsRegistryRow(
@@ -557,8 +545,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
         unparsed_codes = {
             item.code for item in validate_registry_rows(unparsed_filled).issues
         }
-        self.assertIn(ISSUE_UL_UNPARSED, unparsed_codes)
-        self.assertNotIn(ISSUE_UL_IDENTITY_MISMATCH, unparsed_codes)
+        self.assertEqual(unparsed_codes, set())
 
         no_ul = [
             DsRegistryRow(
@@ -577,8 +564,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
             )
         ]
         no_ul_codes = {item.code for item in validate_registry_rows(no_ul).issues}
-        self.assertNotIn(ISSUE_UL_IDENTITY_MISMATCH, no_ul_codes)
-        self.assertNotIn(ISSUE_UL_UNPARSED, no_ul_codes)
+        self.assertEqual(no_ul_codes, set())
 
     def test_backup_atomic_replace_and_confirm_false(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
@@ -727,12 +713,14 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
                     rfp_files={"13": (rfp_file,)},
                     scanned_ds=True,
                     scanned_rfp=True,
+                    reconcile_by_source={"11": RFP_STATUS_MATCH, "8": RFP_STATUS_MISS},
                 ),
             )
             loaded = load_registry(path)
             self.assertEqual(loaded.rows[0].source_id, "11")
             self.assertEqual(loaded.rows[0].previous_ds, "2")
             self.assertEqual(loaded.rows[0].relations[0].rfp_key, "13")
+            self.assertTrue(loaded.validation.is_ok, loaded.validation.issues)
             wb = _load_xlsx(path)
             try:
                 ws = wb[REGISTRY_SHEET_NAME]
@@ -743,9 +731,8 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
                 self.assertEqual(ws["G2"].value, rfp_file.name)
                 self.assertEqual(ws["H2"].value, RFP_STATUS_MATCH)
                 self.assertEqual(ws["H3"].value, RFP_STATUS_MISS)
-                self.assertTrue(_fill_rgb(ws["H3"]).endswith("FFFF00"))
-                self.assertTrue(_fill_rgb(ws["J3"]).endswith("FFFF00"))
-                self.assertTrue(_fill_rgb(ws["K3"]).endswith("FFFF00"))
+                self.assertTrue(_fill_rgb(ws["F3"]).endswith("FFFF00"))
+                self.assertFalse(_fill_rgb(ws["E2"]).endswith("FFFF00"))
             finally:
                 wb.close()
 
@@ -781,10 +768,28 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
                     ),
                 ),
             )
-            warned = validate_registry_rows([present, absent], ul_root=root)
-            codes = [(item.source_id, item.code) for item in warned.issues]
-            self.assertIn(("101", ISSUE_UL_UNEXPECTED), codes)
-            self.assertNotIn(("102", ISSUE_UL_UNEXPECTED), codes)
+            named_missing = DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="103",
+                excel_row=4,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС103",
+                        rfp_key="",
+                        ul_folder="согл УЛ нет на диске",
+                        mode="",
+                        block_index=1,
+                    ),
+                ),
+            )
+            warned = validate_registry_rows(
+                [present, absent, named_missing], ul_root=root
+            )
+            self.assertTrue(warned.is_ok, warned.issues)
+            orphans = collect_orphan_rows([present, absent], ul_root=root)
+            self.assertTrue(
+                any(rel.ul_folder == "согл УЛ ДС101" for row in orphans for rel in row.relations)
+            )
 
     def test_legacy_header_name_still_loads(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
@@ -832,6 +837,114 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
             self.assertEqual(loaded.rows[0].previous_ds, "2")
             self.assertEqual(loaded.rows[0].note, "заметка")
             self.assertEqual(loaded.rows[0].relations[0].rfp_key, "11")
+
+    def test_one_bag_shared_folder_and_packing_key(self) -> None:
+        folder_1 = "согл УЛ ДС1 ГФ 5титулов"
+        folder_7 = "согл УЛ ДС7 ГФ 2 тит"
+        ds8 = DsRegistryRow(
+            status=STATUS_ACTIVE,
+            source_id="8",
+            relations=(
+                DsRegistryRelation(
+                    group_id="ДС1",
+                    rfp_key="8",
+                    ul_folder=folder_1,
+                    mode="",
+                    block_index=1,
+                ),
+                DsRegistryRelation(
+                    group_id="ДС7",
+                    rfp_key="1",
+                    ul_folder=folder_7,
+                    mode="",
+                    block_index=2,
+                ),
+            ),
+        )
+        collapsed, collapse_issues = collapse_registry_rows([ds8])
+        self.assertEqual(collapse_issues, [])
+        self.assertEqual(len(collapsed), 1)
+        self.assertEqual(
+            {rel.group_id for rel in collapsed[0].relations},
+            {"ДС8"},
+        )
+        clean = validate_registry_rows(collapsed)
+        self.assertTrue(clean.is_ok, clean.issues)
+        document = DsRegistryDocument(
+            path=Path("registry.xlsx"),
+            rows=collapsed,
+            validation=clean,
+            max_relation_blocks=1,
+        )
+        maps = registry_packing_maps(document)
+        self.assertIsNotNone(maps)
+        assert maps is not None
+        self.assertEqual(maps[0][folder_1.casefold()], 8)
+        self.assertEqual(maps[0][folder_7.casefold()], 8)
+
+        from base.base_classes import RowStd
+        from base.tables_columns import ANNOTATION, DS_NAME
+        from RFQ.packing_list_provider import (
+            RegistryPackingIndex,
+            packing_row_actual_ds,
+            registry_packing_scope,
+            rfp_row_actual_ds,
+        )
+
+        index = RegistryPackingIndex(
+            folder_to_actual=maps[0],
+            rfp_number_to_actual=maps[1],
+        )
+        packing = RowStd()
+        packing.el[ANNOTATION].value = folder_1 + "/list.xlsx"
+        rfp = RowStd()
+        rfp.el[DS_NAME].value = "ДС1"
+        self.assertEqual(packing_row_actual_ds(packing), 1)
+        self.assertEqual(rfp_row_actual_ds(rfp), 1)
+        with registry_packing_scope(index):
+            self.assertEqual(packing_row_actual_ds(packing), 8)
+            self.assertEqual(rfp_row_actual_ds(rfp), 8)
+
+        shared = [
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="14",
+                excel_row=2,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС14",
+                        rfp_key="14",
+                        ul_folder="согл УЛ ДС14",
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="48",
+                excel_row=3,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС48",
+                        rfp_key="14",
+                        ul_folder="согл УЛ ДС14",
+                        block_index=1,
+                    ),
+                ),
+            ),
+        ]
+        blocked = validate_registry_rows(shared)
+        codes = {item.code for item in blocked.issues}
+        self.assertIn(ISSUE_SHARED_UL, codes)
+        self.assertIn(ISSUE_SHARED_RFP, codes)
+        self.assertTrue(blocked.blocks_overlay)
+        dirty = DsRegistryDocument(
+            path=Path("shared.xlsx"),
+            rows=shared,
+            validation=blocked,
+            max_relation_blocks=1,
+        )
+        self.assertIsNone(registry_packing_maps(dirty))
 
 
 if __name__ == "__main__":

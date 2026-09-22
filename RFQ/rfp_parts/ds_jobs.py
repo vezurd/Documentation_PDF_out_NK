@@ -59,6 +59,7 @@ from RFQ.rfp_parts.ds_registry import (
     detect_registry_format,
     default_migration_report_path,
     ensure_registry_legend,
+    RFP_RECONCILE_NO_FILE,
     RegistryLinks,
     index_rfp_files,
     index_ul_folders,
@@ -322,11 +323,26 @@ def _optional_ul_for_validate(ul_root: Path | None) -> Path | None:
     return ul_root if _is_dir(ul_root) else None
 
 
+def _catalog_if_dir(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    return path if _is_dir(path) else None
+
+
 def _load_new_registry(
-    path: Path, *, ul_root: Path | None
+    path: Path,
+    *,
+    ul_root: Path | None,
+    ds_root: Path | None = None,
+    rfp_root: Path | None = None,
 ) -> tuple[DsRegistryDocument | None, str | None]:
     try:
-        document = load_registry(path, ul_root=_optional_ul_for_validate(ul_root))
+        document = load_registry(
+            path,
+            ul_root=_optional_ul_for_validate(ul_root),
+            ds_root=_catalog_if_dir(ds_root),
+            rfp_root=_catalog_if_dir(rfp_root),
+        )
     except DsRegistryError as exc:
         return None, str(exc)
     except OSError as exc:
@@ -433,8 +449,7 @@ def _registry_tables(
         if mode == MODE_NO_UL:
             ul_label = "Нет УЛ"
         elif not ul_folder:
-            ul_ok = False
-            ul_label = "нет папки в реестре"
+            ul_label = "—"
         elif ul_root is None:
             ul_label = ul_folder
         else:
@@ -897,6 +912,46 @@ def _map_ds_paths(root: Path, source_ids: Sequence[str]) -> dict[str, tuple[Path
     return {key: tuple(paths) for key, paths in found.items()}
 
 
+def _reconcile_missing_rfp(
+    rows: Sequence[Any],
+    rfp_files: dict[str, tuple[Path, ...]],
+    scanned_rfp: bool,
+) -> dict[str, str]:
+    """Write-only label. A named RFP with no file on disk is «нет файла».
+
+    «совпало» and «расхождение» are the launch decision and are not guessed
+    from file presence. The summary does not read this cell back.
+    """
+
+    if not scanned_rfp:
+        return {}
+    on_disk = {
+        path.name.casefold()
+        for paths in rfp_files.values()
+        for path in paths
+    }
+    labels: dict[str, str] = {}
+    for row in rows:
+        source_id = str(getattr(row, "source_id", "") or "")
+        if not source_id or not getattr(row, "is_active", False):
+            continue
+        named = False
+        present = False
+        for rel in getattr(row, "relations", ()):
+            if rel.rfp_file:
+                named = True
+                if rel.rfp_file.casefold() in on_disk:
+                    present = True
+            if rel.rfp_key and rfp_files.get(rel.rfp_key):
+                named = True
+                present = True
+            elif rel.rfp_key:
+                named = True
+        if named and not present:
+            labels[source_id] = RFP_RECONCILE_NO_FILE
+    return labels
+
+
 def _registry_links(
     rows: Sequence[Any],
     *,
@@ -908,13 +963,15 @@ def _registry_links(
     scanned_ds = ds_root is not None and _is_dir(ds_root)
     scanned_ul = ul_root is not None and _is_dir(ul_root)
     scanned_rfp = rfp_root is not None and _is_dir(rfp_root)
+    rfp_files = index_rfp_files(rfp_root) if scanned_rfp else {}
     return RegistryLinks(
         ds_files=_map_ds_paths(ds_root, source_ids) if scanned_ds and ds_root else {},
-        rfp_files=index_rfp_files(rfp_root) if scanned_rfp else {},
+        rfp_files=rfp_files,
         ul_by_actual=index_ul_folders(ul_root) if scanned_ul else {},
         scanned_ds=scanned_ds,
         scanned_rfp=scanned_rfp,
         scanned_ul=scanned_ul,
+        reconcile_by_source=_reconcile_missing_rfp(rows, rfp_files, scanned_rfp),
     )
 
 
@@ -975,6 +1032,8 @@ def _open_registry_for_job(
     migrate_legacy: bool,
     install_into_home: bool = False,
     attach_links: bool = False,
+    ds_root: Path | None = None,
+    rfp_root: Path | None = None,
 ) -> tuple[DsRegistryDocument | None, str, Path | None, str | None, int]:
     """Load new-format registry, or migrate legacy into ``output_dir``.
 
@@ -989,7 +1048,9 @@ def _open_registry_for_job(
     except Exception as exc:
         return None, "unknown", None, f"не удалось определить формат реестра: {exc}", 0
     if fmt == "new":
-        document, err = _load_new_registry(registry_path, ul_root=ul_root)
+        document, err = _load_new_registry(
+            registry_path, ul_root=ul_root, ds_root=ds_root, rfp_root=rfp_root
+        )
         if (
             not install_into_home
             or document is None
@@ -1005,7 +1066,9 @@ def _open_registry_for_job(
         if install_err or installed is None:
             return None, fmt, None, install_err or "реестр не записан", extra_warn
         _emit_install(installed)
-        reloaded, err = _load_new_registry(installed.path, ul_root=ul_root)
+        reloaded, err = _load_new_registry(
+            installed.path, ul_root=ul_root, ds_root=ds_root, rfp_root=rfp_root
+        )
         return reloaded, "new", installed.path, err, extra_warn
     if fmt != "legacy":
         return (
@@ -1047,7 +1110,9 @@ def _open_registry_for_job(
             result = migrate_registry(registry_path, migrated)
         except DsRegistryError as exc:
             return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
-        document, err = _load_new_registry(result.output_path, ul_root=ul_root)
+        document, err = _load_new_registry(
+            result.output_path, ul_root=ul_root, ds_root=ds_root, rfp_root=rfp_root
+        )
         return document, "new", result.output_path, err, extra_warn
     try:
         legacy_rows = read_legacy_registry(registry_path)
@@ -1062,7 +1127,9 @@ def _open_registry_for_job(
     if install_err or installed is None:
         return None, fmt, None, install_err or "реестр не записан", extra_warn
     _emit_install(installed)
-    document, err = _load_new_registry(installed.path, ul_root=ul_root)
+    document, err = _load_new_registry(
+        installed.path, ul_root=ul_root, ds_root=ds_root, rfp_root=rfp_root
+    )
     if document is not None:
         report = default_migration_report_path(installed.path)
         try:
@@ -1088,6 +1155,8 @@ def run_ds_registry_check_job(
     registry_path: str | Path | None = None,
     output_dir: str | Path | None = None,
     ul_root: str | Path | None = None,
+    ds_root: str | Path | None = None,
+    rfp_root: str | Path | None = None,
 ) -> DsJobResult:
     """Validate the registry and keep one working file in the ``_RFP`` folder.
 
@@ -1101,6 +1170,11 @@ def run_ds_registry_check_job(
             Tests pass a temp folder. Production passes ``DEFAULT_RFP_BASE``.
         ul_root: TSD root for UL-folder existence. Default
             ``gui_paths.last_tsd_packing_folder``.
+        ds_root: Trusted DS folder. Folders and files not named on a row
+            become yellow placeholder rows. Omitted means that catalog is
+            not scanned.
+        rfp_root: Root-only RFP folder. Same orphan rule. Omitted means the
+            RFP catalog is not scanned.
 
     Returns:
         Russian summary. ``success`` is false when the file cannot be loaded.
@@ -1123,6 +1197,8 @@ def run_ds_registry_check_job(
         migrate_legacy=True,
         install_into_home=True,
         attach_links=_is_canon_home(home),
+        ds_root=Path(ds_root) if ds_root else None,
+        rfp_root=Path(rfp_root) if rfp_root else None,
     )
     session.phase_done(
         "чтение и проверка реестра",
@@ -1184,6 +1260,7 @@ def run_ds_baseline_job(
         ul_root=ul_path,
         output_dir=reports,
         migrate_legacy=True,
+        ds_root=source,
     )
     if document is None:
         return _fail(load_err or "реестр не прочитан")
@@ -1262,6 +1339,8 @@ def run_ds_hybrid_job(
         ul_root=ul_path,
         output_dir=reports,
         migrate_legacy=True,
+        ds_root=source,
+        rfp_root=rfp_path,
     )
     extra_warn += migrate_warn
     if document is None:
@@ -1365,6 +1444,8 @@ def run_ds_coverage_job(
         ul_root=ul_path,
         output_dir=None,
         migrate_legacy=False,
+        ds_root=source,
+        rfp_root=rfp_path,
     )
     session.phase_done("реестр и каталоги", time.perf_counter() - load_start)
     extra_warn += migrate_warn

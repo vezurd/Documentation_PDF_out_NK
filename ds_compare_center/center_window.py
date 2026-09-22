@@ -1005,6 +1005,8 @@ class CenterWindow(QWidget):
             paths["registry_path"],
             DEFAULT_RFP_BASE,
             paths["ul_root"],
+            paths["source_root"],
+            paths["rfp_root"],
             job_tab="rfp_parts",
         )
 

@@ -1,9 +1,13 @@
-"""Canonical DS registry: one sheet, one row per source DS, numbered links.
+"""Canonical DS registry: several sheet rows may share one actual DS number.
 
-The one working workbook lives in ``_RFP`` as ``Реестр_ДС_УЛ.xlsx``.
-«Проверить реестр» renames a legacy file to ``Реестр_ДС_УЛ_old.xlsx`` and
-replaces it. If Excel holds the file open, a dated copy is written; the
-program reads the newest of the main file and at most five dated copies.
+One sheet row is one link (a UL folder, an RFP file, or both). Rows of the
+same actual number collapse into one specification bag. One folder or one
+RFP number/file cannot sit on two actual numbers. The working workbook lives
+in ``_RFP`` as ``Реестр_ДС_УЛ.xlsx``. «Проверить реестр» renames a legacy
+file to ``Реестр_ДС_УЛ_old.xlsx`` and replaces it. If Excel holds the file
+open, a dated copy is written; the program reads the newest of the main file
+and at most five dated copies. An old wide sheet (blocks «Связь N») is still
+read and collapsed into rows of the same number.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -92,9 +96,24 @@ HDR_PREVIOUS = "Исторический номер ДС"
 HDR_REVISION = "Ревизия"
 HDR_NOTE = "Примечание"
 HDR_ORIGINAL_ROW = "Исходная строка реестра"
+HDR_UL_FOLDER = f"Папка УЛ {HEADER_CONDITIONAL_MARK}"
+HDR_RFP_NUMBER = f"Номер RFP {HEADER_CONDITIONAL_MARK}"
+HDR_RFP_FILE = "Файл RFP"
+HDR_RFP_RECONCILE = "Сверка RFP"
 SOURCE_INFO_SHEET_NAME = "Исходный ДС"
 RFP_STATUS_MATCH = "совпало"
 RFP_STATUS_MISS = "не совпало"
+FLAT_HEADER_TITLES: tuple[str, ...] = (
+    HDR_STATUS,
+    HDR_SOURCE_ID,
+    HDR_PREVIOUS,
+    HDR_FILE_DS,
+    HDR_UL_FOLDER,
+    HDR_RFP_NUMBER,
+    HDR_RFP_FILE,
+    HDR_RFP_RECONCILE,
+)
+_FLAT_WIDTHS = (16, 24, 28, 42, 36, 16, 42, 18)
 
 CORE_HEADER_TITLES: tuple[str, ...] = (
     HDR_STATUS,
@@ -121,6 +140,16 @@ ISSUE_UL_UNPARSED = "ul_unparsed"
 ISSUE_UL_IDENTITY_MISMATCH = "ul_identity_mismatch"
 ISSUE_UL_FOLDER_MISSING = "ul_folder_missing"
 ISSUE_UL_UNEXPECTED = "ul_unexpected"
+ISSUE_SHARED_UL = "shared_ul_folder"
+ISSUE_SHARED_RFP = "shared_rfp"
+ISSUE_DUPLICATE_LINK = "duplicate_link"
+ISSUE_IDENTITY_SPLIT = "identity_split"
+ISSUE_ORPHAN = "orphan_unassigned"
+ISSUE_RFP_FILE_MISSING = "rfp_file_missing"
+
+RFP_RECONCILE_MATCH = "совпало"
+RFP_RECONCILE_DIFF = "расхождение"
+RFP_RECONCILE_NO_FILE = "нет файла"
 
 _FILL_REQUIRED = PatternFill(
     fill_type="solid", fgColor="1B4F72", start_color="1B4F72", end_color="1B4F72"
@@ -206,10 +235,12 @@ class DsRegistryRelation:
     group_id: str
     rfp_key: str
     ul_folder: str
-    mode: str
+    mode: str = ""
     title_filter: str = ""
     mark_filter: str = ""
     block_index: int = 1
+    rfp_file: str = ""
+    excel_row: int = 0
 
     def is_empty(self) -> bool:
         return not any(
@@ -220,6 +251,7 @@ class DsRegistryRelation:
                 self.mode,
                 self.title_filter,
                 self.mark_filter,
+                self.rfp_file,
             )
         )
 
@@ -234,6 +266,7 @@ class DsRegistryRow:
     status: str
     source_id: str
     previous_ds: str = ""
+    ds_file: str = ""
     revision: str = ""
     note: str = ""
     relations: tuple[DsRegistryRelation, ...] = ()
@@ -261,6 +294,7 @@ class DsRegistryIssue:
     group_id: str = ""
     block_index: int | None = None
     blocks_overlay: bool = False
+    field: str = ""
 
 
 @dataclass
@@ -398,6 +432,14 @@ class _HeaderLayout:
     original_row: int
     blocks: tuple[_RelationBlockLayout, ...]
     file_ds: int = 0
+    flat_ul: int = 0
+    flat_rfp_number: int = 0
+    flat_rfp_file: int = 0
+    flat_reconcile: int = 0
+
+    @property
+    def is_flat(self) -> bool:
+        return self.flat_ul > 0 or self.flat_rfp_number > 0
 
     @property
     def max_blocks(self) -> int:
@@ -597,6 +639,10 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
         "Ревизия",
         "Примечание",
         "Исходная строка реестра",
+        "Папка УЛ",
+        "Номер RFP",
+        "Файл RFP",
+        "Сверка RFP",
     }
     matchers = (
         ("group_id", _HEADER_RE_GROUP),
@@ -690,6 +736,10 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
         note=indexed.get("Примечание", 0),
         original_row=indexed.get("Исходная строка реестра", 0),
         blocks=tuple(blocks),
+        flat_ul=0 if blocks else indexed.get("Папка УЛ", 0),
+        flat_rfp_number=0 if blocks else indexed.get("Номер RFP", 0),
+        flat_rfp_file=0 if blocks else indexed.get("Файл RFP", 0),
+        flat_reconcile=0 if blocks else indexed.get("Сверка RFP", 0),
     )
 
 
@@ -705,8 +755,25 @@ def _header_comment(header: str) -> str:
             "В Шаге 4 ему соответствует ключ посадки, не ярлык «Порядковый ДС»."
         ),
         HDR_PREVIOUS: (
-            "Старый номер, который заменён актуальным. Для пары 14/48 у файла 48 "
-            "здесь 48, а папка УЛ и ключ посадки остаются ДС14. Несколько номеров — через ;."
+            "Справка. Старый номер не выбирает ключ посадки и не входит в мешок. "
+            "Одна и та же папка УЛ на номерах 14 и 48 — ошибка реестра."
+        ),
+        HDR_UL_FOLDER: (
+            "Одна папка на строку. Несколько папок одного номера — несколько строк. "
+            "Одна папка не может стоять на разных актуальных номерах. "
+            "Если папки нет на диске, ячейку не красить: свод не останавливается."
+        ),
+        HDR_RFP_NUMBER: (
+            "Номер файла в корне RFP_Зиновьев. Один номер принадлежит только "
+            "одному актуальному ДС. Несколько файлов одного номера суммируются."
+        ),
+        HDR_RFP_FILE: (
+            "Имя файла RFP. Если файла нет, ячейка жёлтая и в мешок RFP он не входит. "
+            "Когда других файлов нет, свод остаётся из ДС."
+        ),
+        HDR_RFP_RECONCILE: (
+            "Пишет робот: совпало, расхождение или нет файла. "
+            "Одинаково на всех строках номера. При сборке свода не читается."
         ),
         HDR_FILE_DS: (
             "Имя файла ДС. Путь в ячейке не пишется: щелчок открывает файл. "
@@ -781,7 +848,10 @@ def _issue(
     group_id: str = "",
     block_index: int | None = None,
     blocks_overlay: bool = False,
+    field: str = "",
 ) -> DsRegistryIssue:
+    if level == "ERROR":
+        blocks_overlay = True
     return DsRegistryIssue(
         code=code,
         level=level,
@@ -791,11 +861,19 @@ def _issue(
         group_id=group_id,
         block_index=block_index,
         blocks_overlay=blocks_overlay,
+        field=field,
     )
 
 
 def _row_nonempty_for_status(row: DsRegistryRow) -> bool:
-    if row.status or row.source_id or row.previous_ds or row.revision or row.note:
+    if (
+        row.status
+        or row.source_id
+        or row.previous_ds
+        or row.ds_file
+        or row.revision
+        or row.note
+    ):
         return True
     return any(not rel.is_empty() for rel in row.relations)
 
@@ -889,25 +967,317 @@ def index_rfp_files(rfp_root: str | Path | None) -> dict[str, tuple[Path, ...]]:
     return {key: tuple(paths) for key, paths in found.items()}
 
 
+def _norm_link(text: str) -> str:
+    return _WS_RE.sub(" ", str(text or "").strip()).casefold()
+
+
+def _claiming_links(row: DsRegistryRow) -> list[DsRegistryRelation]:
+    return [
+        rel
+        for rel in row.relations
+        if rel.ul_folder or rel.rfp_key or rel.rfp_file
+    ]
+
+
+def collapse_registry_rows(
+    rows: Sequence[DsRegistryRow],
+) -> tuple[list[DsRegistryRow], list[DsRegistryIssue]]:
+    """Merge sheet rows that share one actual number into one logical DS.
+
+    A repeated actual number is the normal form. Status, historical number
+    and DS file must agree across those rows. Each non-empty link stays.
+    """
+
+    issues: list[DsRegistryIssue] = []
+    buckets: dict[str, list[DsRegistryRow]] = {}
+    for row in rows:
+        if row.source_id:
+            buckets.setdefault(row.source_id, []).append(row)
+
+    merged_by_id: dict[str, DsRegistryRow] = {}
+    for source_id, group in buckets.items():
+        statuses = {item.status for item in group if item.status}
+        previous = {item.previous_ds for item in group if item.previous_ds}
+        files = {_norm_link(item.ds_file) for item in group if item.ds_file}
+        group_id = canonical_supply_group_id(source_id)
+        if len(statuses) > 1 or len(previous) > 1 or len(files) > 1:
+            issues.append(
+                _issue(
+                    ISSUE_IDENTITY_SPLIT,
+                    "ERROR",
+                    (
+                        f"у номера {format_registry_ds_number(source_id)} на разных "
+                        "строках разошлись статус, исторический номер или файл ДС"
+                    ),
+                    group[-1],
+                    group_id=group_id,
+                    field="status",
+                )
+            )
+        first = group[0]
+        relations: list[DsRegistryRelation] = []
+        for item in group:
+            for rel in item.relations:
+                if not (rel.ul_folder or rel.rfp_key or rel.rfp_file or rel.mode):
+                    continue
+                relations.append(
+                    replace(
+                        rel,
+                        group_id=group_id,
+                        excel_row=rel.excel_row or item.excel_row,
+                    )
+                )
+        merged_by_id[source_id] = DsRegistryRow(
+            status=first.status,
+            source_id=source_id,
+            previous_ds=next(
+                (item.previous_ds for item in group if item.previous_ds),
+                first.previous_ds,
+            ),
+            ds_file=next(
+                (item.ds_file for item in group if item.ds_file),
+                first.ds_file,
+            ),
+            revision=first.revision,
+            note=first.note,
+            relations=tuple(relations),
+            excel_row=first.excel_row,
+            original_excel_row=first.original_excel_row,
+        )
+
+    ordered: list[DsRegistryRow] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not row.source_id:
+            ordered.append(row)
+            continue
+        if row.source_id in seen:
+            continue
+        seen.add(row.source_id)
+        ordered.append(merged_by_id[row.source_id])
+    return ordered, issues
+
+
+def _iter_named_workbooks(root: Path, *, recursive: bool) -> list[Path]:
+    try:
+        children = root.rglob("*") if recursive else root.iterdir()
+        found = [
+            path
+            for path in children
+            if path.is_file()
+            and path.suffix.lower() in {".xlsx", ".xlsm"}
+            and not path.name.startswith("~$")
+        ]
+    except OSError:
+        return []
+    return found
+
+
+def collect_orphan_rows(
+    rows: Sequence[DsRegistryRow],
+    *,
+    ul_root: str | Path | None = None,
+    rfp_root: str | Path | None = None,
+    ds_root: str | Path | None = None,
+) -> list[DsRegistryRow]:
+    """Return yellow placeholder rows for folders and files absent from the sheet.
+
+    A named-but-missing UL folder is not an orphan. A DS workbook that resolves
+    to exactly one listed number with an empty file cell is not an orphan: the
+    check fills that name. Anything else not named on a row is a placeholder
+    until a person sets the actual number and a status.
+    """
+
+    claimed_folders = {
+        _norm_link(rel.ul_folder)
+        for row in rows
+        for rel in row.relations
+        if rel.ul_folder
+    }
+    claimed_rfp_files = {
+        _norm_link(rel.rfp_file)
+        for row in rows
+        for rel in row.relations
+        if rel.rfp_file
+    }
+    claimed_rfp_keys = {
+        rel.rfp_key
+        for row in rows
+        for rel in row.relations
+        if rel.rfp_key
+    }
+    claimed_ds_files = {_norm_link(row.ds_file) for row in rows if row.ds_file}
+    extras: list[DsRegistryRow] = []
+
+    if ul_root:
+        root = Path(ul_root)
+        try:
+            folders = [path for path in root.iterdir() if path.is_dir()]
+        except OSError:
+            folders = []
+        for folder in folders:
+            if _norm_link(folder.name) in claimed_folders:
+                continue
+            extras.append(
+                DsRegistryRow(
+                    status="",
+                    source_id="",
+                    note="сирота: папка УЛ не названа ни на одной строке",
+                    relations=(
+                        DsRegistryRelation(
+                            group_id="",
+                            rfp_key="",
+                            ul_folder=folder.name,
+                            mode="",
+                        ),
+                    ),
+                )
+            )
+
+    if rfp_root:
+        for path in _iter_named_workbooks(Path(rfp_root), recursive=False):
+            if _norm_link(path.name) in claimed_rfp_files:
+                continue
+            identity = parse_rfp_ds_identity(path.name)
+            key = str(identity.actual) if identity.actual is not None else ""
+            if key and key in claimed_rfp_keys:
+                continue
+            extras.append(
+                DsRegistryRow(
+                    status="",
+                    source_id="",
+                    note="сирота: файл RFP не назван ни на одной строке",
+                    relations=(
+                        DsRegistryRelation(
+                            group_id="",
+                            rfp_key=key,
+                            ul_folder="",
+                            mode="",
+                            rfp_file=path.name,
+                        ),
+                    ),
+                )
+            )
+
+    if ds_root:
+        root = Path(ds_root)
+        books = _iter_named_workbooks(root, recursive=True)
+        active_ids = [row.source_id for row in rows if row.source_id]
+        resolved: dict[str, list[Path]] = {}
+        try:
+            from RFQ.rfp_parts.ds_baseline import resolve_ds_source_id
+        except ImportError:  # pragma: no cover - package always present
+            resolve_ds_source_id = None  # type: ignore[assignment]
+        for path in books:
+            if _norm_link(path.name) in claimed_ds_files:
+                continue
+            source_id = ""
+            if resolve_ds_source_id is not None:
+                try:
+                    rel = path.relative_to(root).as_posix()
+                except OSError:
+                    rel = path.name
+                resolution = resolve_ds_source_id(rel, active_ids)
+                source_id = resolution.source_id or ""
+            if source_id:
+                resolved.setdefault(source_id, []).append(path)
+                continue
+            extras.append(
+                DsRegistryRow(
+                    status="",
+                    source_id="",
+                    ds_file=path.name,
+                    note="сирота: файл ДС не назван ни на одной строке",
+                    relations=(),
+                )
+            )
+        for source_id, paths in resolved.items():
+            owners = [row for row in rows if row.source_id == source_id]
+            if len(paths) == 1 and owners and not any(row.ds_file for row in owners):
+                continue
+            for path in paths:
+                extras.append(
+                    DsRegistryRow(
+                        status="",
+                        source_id="",
+                        ds_file=path.name,
+                        note=(
+                            "сирота: файл ДС не записан в строке номера "
+                            f"{format_registry_ds_number(source_id)}"
+                        ),
+                        relations=(),
+                    )
+                )
+    return extras
+
+
+def fill_unique_ds_files(
+    rows: Sequence[DsRegistryRow],
+    ds_root: str | Path | None,
+) -> list[DsRegistryRow]:
+    """Copy the only resolved DS workbook name onto a row that left the cell empty."""
+
+    if not ds_root:
+        return list(rows)
+    root = Path(ds_root)
+    if not root.is_dir():
+        return list(rows)
+    try:
+        from RFQ.rfp_parts.ds_baseline import resolve_ds_source_id
+    except ImportError:  # pragma: no cover
+        return list(rows)
+    found: dict[str, list[Path]] = {}
+    active_ids = [row.source_id for row in rows if row.source_id]
+    for path in _iter_named_workbooks(root, recursive=True):
+        try:
+            rel = path.relative_to(root).as_posix()
+        except OSError:
+            rel = path.name
+        resolution = resolve_ds_source_id(rel, active_ids)
+        if resolution.source_id:
+            found.setdefault(resolution.source_id, []).append(path)
+    filled: list[DsRegistryRow] = []
+    for row in rows:
+        paths = found.get(row.source_id, [])
+        if row.source_id and not row.ds_file and len(paths) == 1:
+            filled.append(replace(row, ds_file=paths[0].name))
+        else:
+            filled.append(row)
+    return filled
+
+
 def validate_registry_rows(
     rows: Sequence[DsRegistryRow],
     *,
     ul_root: str | Path | None = None,
+    rfp_root: str | Path | None = None,
     max_blocks: int | None = None,
 ) -> DsRegistryValidation:
-    """Validate parsed rows. History without ID/blocks is allowed and kept."""
+    """Validate logical rows. A repeated actual number is not an error.
 
+    The same UL folder, RFP number or RFP file on two actual numbers is an
+    error, as is a repeat inside one number. A named UL folder that is absent
+    from disk is not painted and does not stop the summary. A named RFP file
+    that is absent is a warning: it stays out of the RFP bag.
+    """
+
+    del max_blocks  # wide-sheet width is not a rule anymore
     issues: list[DsRegistryIssue] = []
-    active_ids: dict[str, DsRegistryRow] = {}
-    group_anchor: dict[str, tuple[str, str, DsRegistryRow, int]] = {}
-    rfp_anchor: dict[str, tuple[str, DsRegistryRow]] = {}
-    ul_root_path = Path(ul_root) if ul_root else None
-    ul_index = index_ul_folders(ul_root_path) if ul_root_path is not None else {}
+    folder_owner: dict[str, str] = {}
+    rfp_owner: dict[str, str] = {}
+    file_owner: dict[str, str] = {}
+    rfp_index = index_rfp_files(rfp_root) if rfp_root else {}
+    rfp_names = {
+        path.name.casefold()
+        for paths in rfp_index.values()
+        for path in paths
+    }
 
     for row in rows:
         if not _row_nonempty_for_status(row):
             continue
-        if row.status not in ALLOWED_STATUSES:
+        links = _claiming_links(row)
+        if row.status and row.status not in ALLOWED_STATUSES:
             issues.append(
                 _issue(
                     ISSUE_INVALID_STATUS,
@@ -915,255 +1285,215 @@ def validate_registry_rows(
                     f"недопустимый статус {row.status!r}; "
                     f"ожидается {', '.join(sorted(ALLOWED_STATUSES))}",
                     row,
+                    field="status",
                 )
             )
-
-        started = [rel for rel in row.relations if not rel.is_empty()]
-        if row.relations:
-            occupancy = [not rel.is_empty() for rel in row.relations]
-            if any(occupancy):
-                first_empty = None
-                for rel in row.relations:
-                    if rel.is_empty() and first_empty is None:
-                        first_empty = rel.block_index
-                    elif not rel.is_empty() and first_empty is not None:
-                        issues.append(
-                            _issue(
-                                ISSUE_GAPPED_BLOCK,
-                                "ERROR",
-                                (
-                                    f"блок связи {rel.block_index} заполнен, "
-                                    f"а блок {first_empty} пуст"
-                                ),
-                                row,
-                                block_index=rel.block_index,
-                            )
-                        )
-                        break
-
-        if row.is_history:
-            for rel in started:
-                if rel.mode and rel.mode not in ALLOWED_MODES:
-                    issues.append(
-                        _issue(
-                            ISSUE_INVALID_MODE,
-                            "WARN",
-                            f"недопустимый режим {rel.mode!r}",
-                            row,
-                            group_id=rel.group_id,
-                            block_index=rel.block_index,
-                        )
-                    )
-                _append_ul_identity_issues(issues, row, rel)
-            continue
-
-        if row.is_active and not row.source_id:
-            issues.append(
-                _issue(
-                    ISSUE_MISSING_SOURCE_ID,
-                    "ERROR",
-                    "у активной строки нет ID ДС источника",
-                    row,
-                )
-            )
-        if row.is_active and row.source_id:
-            previous = active_ids.get(row.source_id)
-            if previous is not None:
+        if not row.source_id:
+            if links or row.ds_file:
                 issues.append(
                     _issue(
-                        ISSUE_DUPLICATE_SOURCE_ID,
+                        ISSUE_ORPHAN,
                         "ERROR",
                         (
-                            f"активный ID {row.source_id!r} повторяется "
-                            f"(строки {previous.excel_row} и {row.excel_row})"
+                            "строка без актуального номера: проставьте номер и статус "
+                            f"«{STATUS_ACTIVE}» или «{STATUS_DISABLED}»"
                         ),
                         row,
+                        field="row",
                     )
                 )
-            else:
-                active_ids[row.source_id] = row
-
-        if row.is_active and not started:
+            elif row.is_active:
+                issues.append(
+                    _issue(
+                        ISSUE_MISSING_SOURCE_ID,
+                        "ERROR",
+                        "активная строка без актуального номера ДС",
+                        row,
+                        field="row",
+                    )
+                )
+            continue
+        if row.is_active and not links:
             issues.append(
                 _issue(
                     ISSUE_MISSING_RELATION,
                     "ERROR",
-                    "у активной строки нет блока связи 1",
+                    "у активной строки нет папки УЛ и номера RFP",
                     row,
+                    field="ul_folder",
                 )
             )
 
-        for rel in started:
-            if rel.mode and rel.mode not in ALLOWED_MODES:
-                issues.append(
-                    _issue(
-                        ISSUE_INVALID_MODE,
-                        "ERROR",
-                        f"недопустимый режим {rel.mode!r}",
-                        row,
-                        group_id=rel.group_id,
-                        block_index=rel.block_index,
-                    )
-                )
-            missing_core = not rel.group_id or not rel.rfp_key or not rel.mode
-            if missing_core:
-                issues.append(
-                    _issue(
-                        ISSUE_PARTIAL_BLOCK,
-                        "ERROR",
-                        (
-                            f"блок связи {rel.block_index} заполнен частично "
-                            "(нужны ID группы, ключ RFP и режим)"
-                        ),
-                        row,
-                        group_id=rel.group_id,
-                        block_index=rel.block_index,
-                    )
-                )
-            if rel.mode and rel.mode != MODE_NO_UL and not rel.ul_folder:
-                issues.append(
-                    _issue(
-                        ISSUE_UL_REQUIRED,
-                        "ERROR",
-                        (
-                            f"блок {rel.block_index}: папка УЛ обязательна, "
-                            f"кроме режима «{MODE_NO_UL}»"
-                        ),
-                        row,
-                        group_id=rel.group_id,
-                        block_index=rel.block_index,
-                    )
-                )
-            if rel.mode == MODE_FILTER and not rel.has_complete_filters():
-                issues.append(
-                    _issue(
-                        ISSUE_FILTERS_REQUIRED,
-                        "ERROR",
-                        (
-                            f"блок {rel.block_index}: при режиме «{MODE_FILTER}» "
-                            "нужны фильтр титула и фильтр марки"
-                        ),
-                        row,
-                        group_id=rel.group_id,
-                        block_index=rel.block_index,
-                    )
-                )
-            _append_ul_identity_issues(issues, row, rel)
-            if rel.mode == MODE_NO_UL and rel.rfp_key and ul_index.get(rel.rfp_key):
-                found_names = ", ".join(ul_index[rel.rfp_key])
-                issues.append(
-                    _issue(
-                        ISSUE_UL_UNEXPECTED,
-                        "WARN",
-                        (
-                            f"блок {rel.block_index}: режим «{MODE_NO_UL}», "
-                            f"но в папке УЛ уже есть: {found_names}"
-                        ),
-                        row,
-                        group_id=rel.group_id,
-                        block_index=rel.block_index,
-                    )
-                )
-            if (
-                ul_root_path is not None
-                and rel.ul_folder
-                and rel.mode != MODE_NO_UL
-            ):
-                folder_path = ul_root_path / rel.ul_folder
-                if not folder_path.is_dir():
+        seen_folders: set[str] = set()
+        seen_rfp: set[str] = set()
+        seen_files: set[str] = set()
+        group_id = canonical_supply_group_id(row.source_id) if row.source_id else ""
+        for rel in links:
+            excel_row = rel.excel_row or row.excel_row
+            painted = replace(row, excel_row=excel_row) if excel_row else row
+            if rel.ul_folder:
+                key = _norm_link(rel.ul_folder)
+                repeated_here = key in seen_folders
+                if repeated_here:
                     issues.append(
                         _issue(
-                            ISSUE_UL_FOLDER_MISSING,
+                            ISSUE_DUPLICATE_LINK,
                             "ERROR",
-                            f"нет папки УЛ {rel.ul_folder!r}",
-                            row,
-                            group_id=rel.group_id,
+                            f"папка УЛ {rel.ul_folder!r} повторена внутри номера",
+                            painted,
+                            group_id=group_id,
                             block_index=rel.block_index,
+                            field="ul_folder",
                         )
                     )
-            if rel.group_id:
-                anchor = group_anchor.get(rel.group_id)
-                if anchor is None:
-                    group_anchor[rel.group_id] = (
-                        rel.rfp_key,
-                        rel.ul_folder,
-                        row,
-                        rel.block_index,
+                seen_folders.add(key)
+                owner = folder_owner.get(key)
+                if owner and owner != row.source_id:
+                    issues.append(
+                        _issue(
+                            ISSUE_SHARED_UL,
+                            "ERROR",
+                            (
+                                f"папка УЛ {rel.ul_folder!r} указана у номеров "
+                                f"{format_registry_ds_number(owner)} и "
+                                f"{format_registry_ds_number(row.source_id)}"
+                            ),
+                            painted,
+                            group_id=group_id,
+                            block_index=rel.block_index,
+                            field="ul_folder",
+                        )
+                    )
+                elif owner == row.source_id and not repeated_here:
+                    issues.append(
+                        _issue(
+                            ISSUE_DUPLICATE_LINK,
+                            "ERROR",
+                            f"папка УЛ {rel.ul_folder!r} повторена внутри номера",
+                            painted,
+                            group_id=group_id,
+                            block_index=rel.block_index,
+                            field="ul_folder",
+                        )
                     )
                 else:
-                    a_key, a_ul, a_row, _a_block = anchor
-                    if a_key != rel.rfp_key or a_ul != rel.ul_folder:
-                        issues.append(
-                            _issue(
-                                ISSUE_GROUP_MISMATCH,
-                                "ERROR",
-                                (
-                                    f"группа {rel.group_id!r} повторена с другими "
-                                    f"ключом RFP/папкой УЛ (строка {a_row.excel_row} "
-                                    f"vs {row.excel_row})"
-                                ),
-                                row,
-                                group_id=rel.group_id,
-                                block_index=rel.block_index,
-                            )
-                        )
+                    folder_owner[key] = row.source_id
             if rel.rfp_key:
-                other = rfp_anchor.get(rel.rfp_key)
-                if other is None:
-                    rfp_anchor[rel.rfp_key] = (rel.group_id, row)
-                elif other[0] and rel.group_id and other[0] != rel.group_id:
+                repeated_here = rel.rfp_key in seen_rfp
+                if repeated_here:
                     issues.append(
                         _issue(
-                            ISSUE_RFP_KEY_CONFLICT,
+                            ISSUE_DUPLICATE_LINK,
+                            "ERROR",
+                            f"номер RFP {rel.rfp_key!r} повторен внутри номера ДС",
+                            painted,
+                            group_id=group_id,
+                            block_index=rel.block_index,
+                            field="rfp_key",
+                        )
+                    )
+                seen_rfp.add(rel.rfp_key)
+                owner = rfp_owner.get(rel.rfp_key)
+                if owner and owner != row.source_id:
+                    issues.append(
+                        _issue(
+                            ISSUE_SHARED_RFP,
                             "ERROR",
                             (
-                                f"ключ RFP {rel.rfp_key!r} относится к разным "
-                                f"группам {other[0]!r} и {rel.group_id!r}"
+                                f"номер RFP {rel.rfp_key!r} указан у номеров "
+                                f"{format_registry_ds_number(owner)} и "
+                                f"{format_registry_ds_number(row.source_id)}"
                             ),
-                            row,
-                            group_id=rel.group_id,
+                            painted,
+                            group_id=group_id,
                             block_index=rel.block_index,
+                            field="rfp_key",
                         )
                     )
-
-        if len(started) > 1:
-            fully_filtered = all(
-                rel.mode == MODE_FILTER and rel.has_complete_filters()
-                for rel in started
-            )
-            if not fully_filtered:
-                for rel in started:
+                elif owner == row.source_id and not repeated_here:
                     issues.append(
                         _issue(
-                            ISSUE_MULTI_LINK_NEEDS_SPLIT,
-                            "OVERLAY",
-                            (
-                                "несколько связей без полных фильтров: overlay "
-                                f"группы {rel.group_id or '—'} заблокирован, "
-                                f"нужен режим «{MODE_NEEDS_SPLIT}» или «{MODE_FILTER}»"
-                            ),
-                            row,
-                            group_id=rel.group_id,
+                            ISSUE_DUPLICATE_LINK,
+                            "ERROR",
+                            f"номер RFP {rel.rfp_key!r} повторен внутри номера ДС",
+                            painted,
+                            group_id=group_id,
                             block_index=rel.block_index,
-                            blocks_overlay=True,
+                            field="rfp_key",
                         )
                     )
-                    if rel.mode == MODE_WHOLE:
-                        issues.append(
-                            _issue(
-                                ISSUE_INVALID_MODE,
-                                "ERROR",
-                                (
-                                    f"блок {rel.block_index}: при нескольких УЛ "
-                                    f"режим «{MODE_WHOLE}» недопустим"
-                                ),
-                                row,
-                                group_id=rel.group_id,
-                                block_index=rel.block_index,
-                            )
+                else:
+                    rfp_owner[rel.rfp_key] = row.source_id
+            if rel.rfp_file:
+                file_key = _norm_link(rel.rfp_file)
+                repeated_here = file_key in seen_files
+                if repeated_here:
+                    issues.append(
+                        _issue(
+                            ISSUE_DUPLICATE_LINK,
+                            "ERROR",
+                            f"файл RFP {rel.rfp_file!r} повторен внутри номера",
+                            painted,
+                            group_id=group_id,
+                            field="rfp_file",
                         )
+                    )
+                seen_files.add(file_key)
+                owner = file_owner.get(file_key)
+                if owner and owner != row.source_id:
+                    issues.append(
+                        _issue(
+                            ISSUE_SHARED_RFP,
+                            "ERROR",
+                            (
+                                f"файл RFP {rel.rfp_file!r} указан у номеров "
+                                f"{format_registry_ds_number(owner)} и "
+                                f"{format_registry_ds_number(row.source_id)}"
+                            ),
+                            painted,
+                            group_id=group_id,
+                            field="rfp_file",
+                        )
+                    )
+                elif owner == row.source_id and not repeated_here:
+                    issues.append(
+                        _issue(
+                            ISSUE_DUPLICATE_LINK,
+                            "ERROR",
+                            f"файл RFP {rel.rfp_file!r} повторен внутри номера",
+                            painted,
+                            group_id=group_id,
+                            field="rfp_file",
+                        )
+                    )
+                else:
+                    file_owner[file_key] = row.source_id
+                if rfp_root and file_key not in rfp_names:
+                    issues.append(
+                        _issue(
+                            ISSUE_RFP_FILE_MISSING,
+                            "WARN",
+                            f"нет файла RFP {rel.rfp_file!r}",
+                            painted,
+                            group_id=group_id,
+                            field="rfp_file",
+                        )
+                    )
+            elif rel.rfp_key and rfp_root and rel.rfp_key not in rfp_index:
+                issues.append(
+                    _issue(
+                        ISSUE_RFP_FILE_MISSING,
+                        "WARN",
+                        f"в корне RFP нет файла с номером {rel.rfp_key}",
+                        painted,
+                        group_id=group_id,
+                        field="rfp_key",
+                    )
+                )
 
     return DsRegistryValidation(issues=issues)
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -1616,6 +1946,19 @@ def _add_blank_required_cf(ws: Worksheet, layout: _HeaderLayout, last_row: int) 
             fill=_FILL_BLANK,
         ),
     )
+    if layout.is_flat and layout.flat_ul and layout.flat_rfp_number:
+        ul = get_column_letter(layout.flat_ul)
+        rfp = get_column_letter(layout.flat_rfp_number)
+        active = f'${status_col}2="{STATUS_ACTIVE}"'
+        for letter in (ul, rfp):
+            ws.conditional_formatting.add(
+                f"{letter}2:{letter}{last_row}",
+                FormulaRule(
+                    formula=[f'AND({active},{ul}2="",{rfp}2="")'],
+                    fill=_FILL_BLANK,
+                ),
+            )
+        return
     for block in layout.blocks:
         g = get_column_letter(block.group_id)
         r = get_column_letter(block.rfp_key)
@@ -1667,115 +2010,58 @@ def _legend_rows() -> list[tuple[str, str, str, str]]:
     grey = "не обязательно, серый"
     return [
         (
-            "Одна строка",
+            "Несколько строк",
             star,
-            "Один ДС — одна строка на листе «Реестр ДС».",
-            "Робот собирает свод по этой строке. Вторую поставку того же ДС "
-            "пишите в Связь 2, не через точку с запятой.",
+            "Один актуальный номер может занимать несколько строк: каждая строка — одна папка УЛ и/или один файл RFP.",
+            "Все строки номера — один мешок спецификации и один набор RFP. Повтор номера — нормальная форма.",
         ),
         (
             "Статус",
             star,
-            "Активен, История или Отключен.",
-            "В свод попадают только «Активен». История и Отключен робот пропускает.",
+            "Активен, История или Отключен. На всех строках одного номера статус совпадает.",
+            "В свод попадают только «Активен».",
         ),
         (
             "Актуальный номер ДС",
             star,
-            "Номер файла ДС: ДС11, ДС8, ДС4905_1. У активных строк не повторяется.",
-            "По нему робот находит файл ДС. В Шаге 4 это ключ посадки "
-            "(столбец сейчас называется «Фактический ДС»), не ярлык файла «Порядковый ДС».",
+            "Номер файла ДС: ДС11, ДС8, ДС4905_1. Это ключ посадки Шага 4 (столбец «Фактический ДС»).",
+            "Число в имени папки и первое число ярлыка ДС14_48 ключ не выбирают.",
         ),
         (
             "Исторический номер ДС",
             grey,
-            "Старый номер из прежнего реестра. Несколько — через точку с запятой.",
-            "На количества не влияет. Нужен, чтобы видеть, какой номер заменён актуальным.",
+            "Справка. В ключ и в мешок не входит.",
+            "Одинаковый на всех строках номера.",
         ),
         (
             "Файл ДС",
             grey,
-            "Не заполняйте вручную. Робот ставит имя файла при проверке реестра.",
-            "В ячейке только имя. Щелчок открывает файл.",
-        ),
-        (
-            "Номер RFP, Файл RFP, Статус RFP",
-            star,
-            "Номер — какой файл искать в корне RFP_Зиновьев. Файл и статус "
-            "робот подставляет сам: «совпало» или «не совпало».",
-            "Совпало значит, что файл с этим номером есть. "
-            "Количества это не сравнивает.",
-        ),
-        (
-            "Лист «Исходный ДС»",
-            grey,
-            "Там предыдущий ДС, ревизия, примечание и номер старой строки. "
-            "На рабочем листе этих столбцов нет.",
-            "На свод и на RFP не влияет. Робот этот лист только хранит.",
-        ),
-        (
-            "Связь 1, Связь 2…",
-            star,
-            "Связь 1 заполните всегда. Связь 2 — только если у этого ДС вторая "
-            "поставка (другая папка УЛ или другой RFP). Пустых дыр не оставляйте: "
-            "нельзя заполнить Связь 2, оставив Связь 1 пустой.",
-            "Каждая связь — отдельная поставка. Робот не смешивает их в одной ячейке.",
-        ),
-        (
-            "ID группы поставки",
-            star,
-            "Обычно точное имя папки УЛ. Если два ДС делят одну поставку "
-            "(например 13 и 47), у обоих одинаковые группа, ключ RFP и папка УЛ.",
-            "Сверка с RFP идёт по группе целиком, не по одному ДС. "
-            "Совпали код, единица и количество — в запуск попадает RFP. "
-            "Нет — вся группа остаётся из ДС.",
-        ),
-        (
-            "Фактический ДС / ключ RFP",
-            star,
-            "Номер, который робот ищет в имени файла в корне RFP_Зиновьев. Пример: 13. "
-            "Один ключ принадлежит только одной группе.",
-            "Подпапки RFP робот не читает. Чужой ключ наложит чужой файл или не найдёт RFP.",
+            "Имя файла. Одинаковое на всех строках номера.",
+            "Робот может подставить единственный найденный файл. Лишний файл в папке — жёлтая строка.",
         ),
         (
             "Папка УЛ",
             yellow,
-            "Точное имя папки в ТСД. Пустой можно оставить только в режиме «Нет УЛ».",
-            "Робот проверяет, что папка есть. Неверное имя — ошибка реестра.",
+            "Одна папка на строку, либо пусто, если на строке есть номер RFP. Одна папка — только один актуальный номер.",
+            "Папки нет на диске — ячейку не красить и свод не останавливать. Папка в каталоге без строки — жёлтая строка, свод не пишется.",
         ),
         (
-            "Режим «Вся ДС»",
-            star,
-            "Все строки этого ДС входят в связь. Фильтры оставьте пустыми. Папку УЛ заполните.",
-            "Обычный случай: один ДС — одна поставка.",
-        ),
-        (
-            "Режим «По фильтру»",
+            "Номер RFP и файл RFP",
             yellow,
-            "Заполните и фильтр титула, и фильтр марки. Так один ДС делится на несколько папок УЛ.",
-            "В связь попадут только строки с этим титулом и маркой. "
-            "Пустой фильтр — ошибка, группу на RFP не заменят.",
+            "Один файл или пусто. Номер и файл не могут стоять на разных актуальных номерах и не повторяются внутри номера.",
+            "Несколько файлов номера суммируются. Точный дубль файла блокирует группу. Нет файла — жёлтая ячейка, в мешок RFP он не входит.",
         ),
         (
-            "Режим «Нет УЛ»",
-            star,
-            "Папку УЛ оставьте пустой. Робот сам смотрит папку со всеми УЛ: "
-            "если каталога с этим номером нет, ячейку трогать не нужно. "
-            "Если каталог появился, ячейка режима станет жёлтой.",
-            "У поставки нет папки УЛ. Группа получит имя NO_UL: и номер ДС.",
-        ),
-        (
-            "Режим «Требует распределения»",
-            yellow,
-            "Так робот помечает несколько связей без полных фильтров. "
-            "Исправьте: либо одна связь «Вся ДС», либо у каждой связи оба фильтра.",
-            "Пока режим такой, эту группу нельзя заменить на RFP. В своде останется ДС.",
-        ),
-        (
-            "Строки только из RFP",
+            "Сверка RFP",
             grey,
-            "В реестре их не пишут.",
-            "Если позиции нет в ДС, в свод для запуска она не попадёт.",
+            "Не заполняйте. Робот пишет: совпало, расхождение или нет файла. Одинаково на всех строках номера.",
+            "Свод эту ячейку не читает: решение каждый раз считается заново. Полное совпадение кодов, единиц и количеств берёт RFP, иначе ДС.",
+        ),
+        (
+            "Жёлтая строка без номера",
+            yellow,
+            "Робот добавил папку или файл, которых не было ни на одной строке.",
+            "Пока не проставлены номер и статус «Активен» или «Отключен», свод не пишется.",
         ),
     ]
 
@@ -2104,6 +2390,174 @@ class RegistryLinks:
     scanned_ds: bool = False
     scanned_rfp: bool = False
     scanned_ul: bool = False
+    reconcile_by_source: dict[str, str] = field(default_factory=dict)
+
+
+def _flat_layout() -> _HeaderLayout:
+    return _HeaderLayout(
+        headers=FLAT_HEADER_TITLES,
+        status=1,
+        source_id=2,
+        previous=3,
+        revision=0,
+        note=0,
+        original_row=0,
+        blocks=(),
+        file_ds=4,
+        flat_ul=5,
+        flat_rfp_number=6,
+        flat_rfp_file=7,
+        flat_reconcile=8,
+    )
+
+
+def registry_packing_maps(
+    document: DsRegistryDocument,
+) -> tuple[dict[str, int], dict[int, int]] | None:
+    """Return folder and RFP-number maps for a clean registry.
+
+    Conflicts make the document invalid; the caller then keeps the name parser.
+    Only integer actual numbers are packing keys.
+    """
+
+    if not document.validation.is_ok:
+        return None
+    folders: dict[str, int] = {}
+    numbers: dict[int, int] = {}
+    for row in document.active_rows:
+        if not row.source_id.isdigit():
+            continue
+        actual = int(row.source_id)
+        for rel in row.relations:
+            if rel.ul_folder:
+                folders[rel.ul_folder.casefold()] = actual
+            if rel.rfp_key.isdigit():
+                numbers[int(rel.rfp_key)] = actual
+    return folders, numbers
+
+
+def expand_registry_rows(rows: Sequence[DsRegistryRow]) -> list[DsRegistryRow]:
+    """One sheet row per link. Identity columns repeat on every row of the number."""
+
+    expanded: list[DsRegistryRow] = []
+    for row in rows:
+        links = _claiming_links(row)
+        if not links:
+            expanded.append(row)
+            continue
+        for rel in links:
+            expanded.append(
+                DsRegistryRow(
+                    status=row.status,
+                    source_id=row.source_id,
+                    previous_ds=row.previous_ds,
+                    ds_file=row.ds_file,
+                    revision=row.revision,
+                    note=row.note,
+                    relations=(rel,),
+                    excel_row=rel.excel_row or row.excel_row,
+                    original_excel_row=row.original_excel_row,
+                )
+            )
+    return expanded
+
+
+def _paint_cell(cell, comment: str) -> None:
+    _mark_todo(cell)
+    if comment and cell.comment is None:
+        cell.comment = _make_comment(comment)
+
+
+def _paint_flat_conflicts(
+    ws: Worksheet,
+    layout: _HeaderLayout,
+    rows: Sequence[DsRegistryRow],
+    links: RegistryLinks,
+) -> None:
+    """Yellow cells for conflicts, orphans and a missing named RFP file."""
+
+    folder_rows: dict[str, list[tuple[int, str]]] = {}
+    rfp_rows: dict[str, list[tuple[int, str]]] = {}
+    file_rows: dict[str, list[tuple[int, str]]] = {}
+    identity: dict[str, list[tuple[int, str, str, str]]] = {}
+    rfp_on_disk = {
+        path.name.casefold()
+        for paths in links.rfp_files.values()
+        for path in paths
+    }
+    for index, row in enumerate(rows):
+        excel_row = index + 2
+        rel = row.relations[0] if row.relations else None
+        folder = rel.ul_folder if rel is not None else ""
+        rfp_key = rel.rfp_key if rel is not None else ""
+        rfp_file = rel.rfp_file if rel is not None else ""
+        if not row.source_id and (folder or rfp_key or rfp_file or row.ds_file):
+            comment = row.note or (
+                "Проставьте актуальный номер и статус «Активен» или «Отключен»."
+            )
+            for col in range(1, layout.column_count + 1):
+                _paint_cell(ws.cell(row=excel_row, column=col), comment)
+            continue
+        if row.source_id:
+            identity.setdefault(row.source_id, []).append(
+                (excel_row, row.status, row.previous_ds, _norm_link(row.ds_file))
+            )
+        if folder:
+            folder_rows.setdefault(_norm_link(folder), []).append(
+                (excel_row, row.source_id)
+            )
+        if rfp_key:
+            rfp_rows.setdefault(rfp_key, []).append((excel_row, row.source_id))
+        if rfp_file:
+            file_rows.setdefault(_norm_link(rfp_file), []).append(
+                (excel_row, row.source_id)
+            )
+            if links.scanned_rfp and rfp_file.casefold() not in rfp_on_disk:
+                _paint_cell(
+                    ws.cell(row=excel_row, column=layout.flat_rfp_file),
+                    f"Нет файла RFP {rfp_file!r}. В мешок RFP он не входит.",
+                )
+        elif (
+            links.scanned_rfp
+            and rfp_key
+            and rfp_key not in links.rfp_files
+        ):
+            _paint_cell(
+                ws.cell(row=excel_row, column=layout.flat_rfp_number),
+                f"В корне RFP нет файла с номером {rfp_key}.",
+            )
+
+    def _shared(groups: dict[str, list[tuple[int, str]]], column: int, label: str) -> None:
+        for items in groups.values():
+            owners = {source for _row, source in items if source}
+            if len(owners) > 1 or (len(items) > 1 and len(owners) <= 1):
+                comment = (
+                    f"{label} повторяется"
+                    + (
+                        " на разных номерах ДС"
+                        if len(owners) > 1
+                        else " внутри одного номера"
+                    )
+                )
+                for excel_row, _source in items:
+                    _paint_cell(ws.cell(row=excel_row, column=column), comment)
+
+    _shared(folder_rows, layout.flat_ul, "Папка УЛ")
+    _shared(rfp_rows, layout.flat_rfp_number, "Номер RFP")
+    _shared(file_rows, layout.flat_rfp_file, "Файл RFP")
+    for items in identity.values():
+        statuses = {item[1] for item in items if item[1]}
+        previous = {item[2] for item in items if item[2]}
+        files = {item[3] for item in items if item[3]}
+        if len(statuses) <= 1 and len(previous) <= 1 and len(files) <= 1:
+            continue
+        comment = "На строках одного номера разошлись статус, исторический номер или файл ДС."
+        for excel_row, _status, _previous, _file in items:
+            _paint_cell(ws.cell(row=excel_row, column=layout.status), comment)
+            if layout.previous:
+                _paint_cell(ws.cell(row=excel_row, column=layout.previous), comment)
+            if layout.file_ds:
+                _paint_cell(ws.cell(row=excel_row, column=layout.file_ds), comment)
 
 
 def write_registry_workbook(
@@ -2113,13 +2567,14 @@ def write_registry_workbook(
     spare_rows: int = DEFAULT_SPARE_ROWS,
     links: RegistryLinks | None = None,
 ) -> Path:
-    """Write the registry, the how-to sheet and the source-info sheet.
+    """Write one sheet row per link, the how-to sheet and the source-info sheet.
 
     Args:
         path: Destination xlsx. Parent directories are created.
-        rows: Canonical rows in display order.
+        rows: Logical rows. Several links of one number become several sheet rows.
         spare_rows: Extra empty table rows so a person can append data.
-        links: Optional DS/RFP/UL lookup filled by «Проверить реестр».
+        links: Optional DS/RFP lookup and the reconcile text written into the sheet.
+            The reconcile column is not read back into decisions.
 
     Returns:
         The written path.
@@ -2130,86 +2585,72 @@ def write_registry_workbook(
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    max_blocks = max(
-        (len(row.relations) for row in rows),
-        default=MIN_RELATION_BLOCKS,
-    )
-    max_blocks = max(MIN_RELATION_BLOCKS, max_blocks)
-    layout = _layout_from_max_blocks(max_blocks)
-    last_data = max(len(rows), 1) + max(0, int(spare_rows))
+    layout = _flat_layout()
+    sheet_rows = expand_registry_rows(rows)
+    last_data = max(len(sheet_rows), 1) + max(0, int(spare_rows))
     last_row = last_data + 1
+    link_book = links or RegistryLinks()
 
     wb = Workbook()
     ws = wb.active
     assert ws is not None
     ws.title = REGISTRY_SHEET_NAME
     ws.freeze_panes = "A2"
-    ws.row_dimensions[1].height = 48
+    ws.row_dimensions[1].height = 36
 
     for col, header in enumerate(layout.headers, start=1):
         _apply_header_cell(ws.cell(row=1, column=col), header)
-
-    for col, width in enumerate(_CORE_WIDTHS, start=1):
+    for col, width in enumerate(_FLAT_WIDTHS, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
-    for block in layout.blocks:
-        for offset, width in enumerate(_BLOCK_WIDTHS):
-            ws.column_dimensions[get_column_letter(block.columns()[offset])].width = (
-                width
-            )
 
-    link_book = links or RegistryLinks()
-    for index, row in enumerate(rows):
+    for index, row in enumerate(sheet_rows):
         excel_row = index + 2
+        rel = row.relations[0] if row.relations else None
         _write_text_cell(ws, excel_row, layout.status, row.status)
         _write_text_cell(
             ws, excel_row, layout.source_id, format_registry_ds_number(row.source_id)
         )
         _write_text_cell(ws, excel_row, layout.previous, row.previous_ds)
-        _write_file_links(
+        ds_paths = link_book.ds_files.get(row.source_id, ())
+        if row.ds_file:
+            matched = tuple(
+                path for path in ds_paths if path.name.casefold() == row.ds_file.casefold()
+            )
+            if matched:
+                _write_file_links(ws, excel_row, layout.file_ds, matched[:1])
+            else:
+                _write_text_cell(ws, excel_row, layout.file_ds, row.ds_file)
+        elif len(ds_paths) == 1:
+            _write_file_links(ws, excel_row, layout.file_ds, ds_paths)
+        rfp_key = rel.rfp_key if rel is not None else ""
+        rfp_file = rel.rfp_file if rel is not None else ""
+        _write_text_cell(ws, excel_row, layout.flat_ul, rel.ul_folder if rel else "")
+        _write_text_cell(ws, excel_row, layout.flat_rfp_number, rfp_key)
+        rfp_paths = link_book.rfp_files.get(rfp_key, ()) if rfp_key else ()
+        if rfp_file:
+            matched_rfp = tuple(
+                path for path in rfp_paths if path.name.casefold() == rfp_file.casefold()
+            )
+            if matched_rfp:
+                _write_file_links(ws, excel_row, layout.flat_rfp_file, matched_rfp[:1])
+            else:
+                _write_text_cell(ws, excel_row, layout.flat_rfp_file, rfp_file)
+        elif len(rfp_paths) == 1:
+            _write_file_links(ws, excel_row, layout.flat_rfp_file, rfp_paths)
+        _write_text_cell(
             ws,
             excel_row,
-            layout.file_ds,
-            link_book.ds_files.get(row.source_id, ()),
+            layout.flat_reconcile,
+            link_book.reconcile_by_source.get(row.source_id, ""),
         )
-        for block in layout.blocks:
-            rel = None
-            if block.index <= len(row.relations):
-                rel = row.relations[block.index - 1]
-            _write_text_cell(ws, excel_row, block.group_id, rel.group_id if rel else "")
-            _write_text_cell(ws, excel_row, block.rfp_key, rel.rfp_key if rel else "")
-            rfp_paths = (
-                link_book.rfp_files.get(rel.rfp_key, ())
-                if rel is not None and rel.rfp_key
-                else ()
-            )
-            _write_file_links(ws, excel_row, block.rfp_file, rfp_paths)
-            status_text = ""
-            if rel is not None and rel.rfp_key and link_book.scanned_rfp:
-                status_text = RFP_STATUS_MATCH if rfp_paths else RFP_STATUS_MISS
-            _write_text_cell(ws, excel_row, block.rfp_status, status_text)
-            _write_text_cell(ws, excel_row, block.ul_folder, rel.ul_folder if rel else "")
-            _write_text_cell(ws, excel_row, block.mode, rel.mode if rel else "")
-            _write_text_cell(
-                ws, excel_row, block.title_filter, rel.title_filter if rel else ""
-            )
-            _write_text_cell(
-                ws, excel_row, block.mark_filter, rel.mark_filter if rel else ""
-            )
         ws.row_dimensions[excel_row].height = 18
 
-    for excel_row in range(len(rows) + 2, last_row + 1):
+    for excel_row in range(len(sheet_rows) + 2, last_row + 1):
         for col in range(1, layout.column_count + 1):
             cell = ws.cell(row=excel_row, column=col, value=None)
             cell.alignment = _ALIGN_DATA
             cell.font = _FONT_DATA
-            if col in (
-                layout.status,
-                layout.source_id,
-                *(c for block in layout.blocks for c in (block.group_id, block.rfp_key, block.mode)),
-            ):
-                cell.number_format = "@"
-
-    _apply_block_borders(ws, layout, last_row)
+            cell.number_format = "@"
 
     status_dv = DataValidation(
         type="list",
@@ -2220,26 +2661,10 @@ def write_registry_workbook(
         errorTitle="Статус",
         error="Выберите Активен, История или Отключен.",
     )
-    status_dv.add(f"{get_column_letter(layout.status)}2:{get_column_letter(layout.status)}{last_row}")
-    ws.add_data_validation(status_dv)
-
-    mode_dv = DataValidation(
-        type="list",
-        formula1='"' + ",".join((MODE_WHOLE, MODE_FILTER, MODE_NO_UL, MODE_NEEDS_SPLIT)) + '"',
-        allow_blank=True,
-        showDropDown=False,
-        showErrorMessage=True,
-        errorTitle="Режим распределения",
-        error=(
-            f"Выберите {MODE_WHOLE}, {MODE_FILTER}, {MODE_NO_UL} или {MODE_NEEDS_SPLIT}."
-        ),
+    status_dv.add(
+        f"{get_column_letter(layout.status)}2:{get_column_letter(layout.status)}{last_row}"
     )
-    for block in layout.blocks:
-        mode_dv.add(
-            f"{get_column_letter(block.mode)}2:{get_column_letter(block.mode)}{last_row}"
-        )
-    ws.add_data_validation(mode_dv)
-
+    ws.add_data_validation(status_dv)
     _add_blank_required_cf(ws, layout, last_row)
 
     table_ref = f"A1:{get_column_letter(layout.column_count)}{last_row}"
@@ -2252,12 +2677,9 @@ def write_registry_workbook(
         showColumnStripes=False,
     )
     ws.add_table(table)
-    # Re-apply header fills/comments after the table so colour is stored on cells
-    # (Excel table style is not the only marker: headers keep * / †).
     for col, header in enumerate(layout.headers, start=1):
         _apply_header_cell(ws.cell(row=1, column=col), header)
-    _apply_block_borders(ws, layout, last_row)
-    _paint_human_todo(ws, layout, rows, link_book)
+    _paint_flat_conflicts(ws, layout, sheet_rows, link_book)
     _add_legend_sheet(wb)
     _add_source_info_sheet(wb, rows)
 
@@ -2275,9 +2697,6 @@ def write_registry_workbook(
         raise
 
 
-# ---------------------------------------------------------------------------
-# Canonical reader
-# ---------------------------------------------------------------------------
 
 
 def _parse_original_row(value: object) -> int | None:
@@ -2305,6 +2724,7 @@ def _relation_from_layout(
         title_filter=at(block.title_filter),
         mark_filter=at(block.mark_filter),
         block_index=block.index,
+        rfp_file=at(block.rfp_file) if block.rfp_file else "",
     )
 
 
@@ -2356,6 +2776,7 @@ def _merge_source_info(
                 status=row.status,
                 source_id=row.source_id,
                 previous_ds=row.previous_ds or previous,
+                ds_file=row.ds_file,
                 revision=row.revision or revision,
                 note=row.note or note,
                 relations=row.relations,
@@ -2370,15 +2791,24 @@ def load_registry(
     path: str | Path,
     *,
     ul_root: str | Path | None = None,
+    rfp_root: str | Path | None = None,
+    ds_root: str | Path | None = None,
 ) -> DsRegistryDocument:
     """Strict-read the canonical ``Реестр ДС`` workbook.
 
+    Several sheet rows with the same actual number collapse into one logical
+    DS. An old wide sheet is read the same way. The reconcile column is ignored.
+
     Args:
         path: Canonical (new-format) xlsx.
-        ul_root: Optional TSD root; when set, missing UL folders are errors.
+        ul_root: Optional TSD root. Folders not named on any row become orphans.
+            A named folder that is missing on disk is not an error.
+        rfp_root: Optional RFP root. Files not named on any row become orphans.
+        ds_root: Optional DS folder. The same rule, plus a unique resolved file
+            fills an empty «Файл ДС» cell.
 
     Returns:
-        Document with rows (including invalid ones) and a validation result.
+        Document with logical rows (including invalid ones) and a validation result.
 
     Raises:
         DsRegistryFormatError: File/sheet/headers are not the new contract.
@@ -2418,18 +2848,48 @@ def load_registry(
                 else ""
             )
             note = cell_text(_cell_at(values, layout.note - 1)) if layout.note else ""
+            ds_file = (
+                cell_text(_cell_at(values, layout.file_ds - 1))
+                if layout.file_ds
+                else ""
+            )
             original = (
                 _parse_original_row(_cell_at(values, layout.original_row - 1))
                 if layout.original_row
                 else None
             )
-            relations = tuple(
-                _relation_from_layout(values, block) for block in layout.blocks
-            )
+            if layout.is_flat:
+                rel = DsRegistryRelation(
+                    group_id=canonical_supply_group_id(source_id) if source_id else "",
+                    rfp_key=parse_registry_ds_number(
+                        _cell_at(values, layout.flat_rfp_number - 1)
+                    )
+                    if layout.flat_rfp_number
+                    else "",
+                    ul_folder=cell_text(_cell_at(values, layout.flat_ul - 1))
+                    if layout.flat_ul
+                    else "",
+                    mode="",
+                    rfp_file=cell_text(_cell_at(values, layout.flat_rfp_file - 1))
+                    if layout.flat_rfp_file
+                    else "",
+                    block_index=1,
+                    excel_row=excel_row,
+                )
+                relations = (rel,)
+            else:
+                relations = tuple(
+                    replace(
+                        _relation_from_layout(values, block),
+                        excel_row=excel_row,
+                    )
+                    for block in layout.blocks
+                )
             candidate = DsRegistryRow(
                 status=status,
                 source_id=source_id,
                 previous_ds=previous,
+                ds_file=ds_file,
                 revision=revision,
                 note=note,
                 relations=relations,
@@ -2446,6 +2906,7 @@ def load_registry(
                     status=candidate.status,
                     source_id=candidate.source_id,
                     previous_ds=candidate.previous_ds,
+                    ds_file=candidate.ds_file,
                     revision=candidate.revision,
                     note=candidate.note,
                     relations=tuple(trimmed),
@@ -2457,9 +2918,17 @@ def load_registry(
     finally:
         workbook.close()
 
-    validation = validate_registry_rows(
-        rows, ul_root=ul_root, max_blocks=layout.max_blocks
+    rows, collapse_issues = collapse_registry_rows(rows)
+    rows = fill_unique_ds_files(rows, ds_root)
+    rows.extend(
+        collect_orphan_rows(
+            rows, ul_root=ul_root, rfp_root=rfp_root, ds_root=ds_root
+        )
     )
+    validation = validate_registry_rows(
+        rows, ul_root=ul_root, rfp_root=rfp_root, max_blocks=layout.max_blocks
+    )
+    validation.issues = collapse_issues + validation.issues
     return DsRegistryDocument(
         path=source,
         rows=rows,
