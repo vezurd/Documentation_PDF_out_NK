@@ -11,6 +11,7 @@ from typing import Protocol
 
 DS_PROGRESS_PREFIX = "[ds progress]"
 DS_PROGRESS_SLOW_THRESHOLD_SEC = 30.0
+DS_PROGRESS_HEARTBEAT_SEC = 2.0
 
 
 def ds_progress_format_start(label: str) -> str:
@@ -111,6 +112,46 @@ class DsProgressSession:
         if total <= 0:
             return
         self._emit(ds_progress_format_fraction(current, total))
+
+
+class DsHeartbeat:
+    """Emit a line at least every ``interval_sec`` while a long write runs.
+
+    ``emit`` is the same callback jobs already wrap with ``[ds progress]``.
+    The first automatic tick waits for ``interval_sec`` so a fast phase stays
+    quiet; use ``force=True`` before a blocking save.
+    """
+
+    def __init__(
+        self,
+        emit: Callable[[str], None] | None,
+        label: str,
+        *,
+        interval_sec: float = DS_PROGRESS_HEARTBEAT_SEC,
+    ) -> None:
+        self._emit = emit
+        self._label = label
+        self._interval = max(0.5, interval_sec)
+        self._t0 = time.perf_counter()
+        self._last = self._t0
+
+    def elapsed(self) -> float:
+        return time.perf_counter() - self._t0
+
+    def tick(self, detail: str, *, force: bool = False) -> None:
+        if self._emit is None:
+            return
+        now = time.perf_counter()
+        if not force and now - self._last < self._interval:
+            return
+        self._last = now
+        self._emit(f"{self._label}: {detail}; {now - self._t0:.1f} с")
+
+    def finish(self, detail: str = "готово") -> None:
+        if self._emit is None:
+            return
+        elapsed = time.perf_counter() - self._t0
+        self._emit(f"{self._label}: {detail} — {elapsed:.1f} с")
 
 
 class DsFileProgressTracker:

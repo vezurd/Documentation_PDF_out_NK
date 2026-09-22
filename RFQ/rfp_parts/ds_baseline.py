@@ -2517,8 +2517,7 @@ def build_ds_baseline(
                 index, total, relpath, time.perf_counter() - file_start
             )
 
-    if phase_callback is not None:
-        phase_callback("конвертация единиц измерения")
+    done_convert = _phase_timer(phase_callback, "конвертация единиц измерения")
     if google_index is not None:
         known = set(google_index.units_by_code)
         for item in positions:
@@ -2558,7 +2557,9 @@ def build_ds_baseline(
                 str(exc),
             )
         )
+    done_convert(f"{len(positions)} позиций")
 
+    done_tags = _phase_timer(phase_callback, "дубли тегов между строками")
     cross_tags: dict[str, list[DsBaselinePosition]] = defaultdict(list)
     for item in positions:
         seen: set[str] = set()
@@ -2568,33 +2569,36 @@ def build_ds_baseline(
                 continue
             seen.add(key)
             cross_tags[key].append(item)
+    shared_tag_count = 0
     for tag_key, owners in cross_tags.items():
         if len(owners) < 2:
             continue
-        for item in owners:
-            issues.append(
-                _issue(
-                    ISSUE_TAG_DUPLICATE,
-                    "WARN",
-                    f"дубль тега {item.diagnostic_tags[0] if item.diagnostic_tags else tag_key!r} "
-                    f"в {len(owners)} строках",
-                    path=item.path,
-                    relpath=item.relpath,
-                    sheet=item.sheet,
-                    excel_row=item.excel_row,
-                    source_id=item.source_id,
-                    group_id=item.group_id,
-                )
+        shared_tag_count += 1
+        sample = owners[0]
+        tag_text = _display_tag(owners, tag_key)
+        issues.append(
+            _issue(
+                ISSUE_TAG_DUPLICATE,
+                "WARN",
+                f"дубль тега {tag_text!r} в {len(owners)} строках",
+                path=sample.path,
+                relpath=sample.relpath,
+                sheet=sample.sheet,
+                excel_row=sample.excel_row,
+                source_id=sample.source_id,
+                group_id=sample.group_id,
             )
+        )
+    done_tags(f"{shared_tag_count} уникальных")
 
-    if phase_callback is not None:
-        phase_callback("группы поставки")
+    done_groups = _phase_timer(phase_callback, "группы поставки")
     groups = _build_groups(positions)
     fingerprint = _tree_fingerprint(files, registry=registry)
     blocking_count = sum(1 for item in issues if item.blocking)
     warn_count = sum(1 for item in issues if item.level == "WARN")
     overlay_count = sum(1 for item in issues if item.level == "OVERLAY")
     blocking = blocking_count > 0
+    done_groups(f"{len(groups)} групп")
 
     structure_path = out_dir / f"{STRUCTURE_REPORT_PREFIX}_{stamp_value}.xlsx"
     quality_path = out_dir / f"{QUALITY_REPORT_PREFIX}_{stamp_value}.xlsx"
@@ -2615,10 +2619,11 @@ def build_ds_baseline(
         ("Fingerprint", fingerprint),
         ("Сводка реестра", registry.validation.summary_line()),
     ]
-    if phase_callback is not None:
-        phase_callback(
-            f"отчёт по структуре ({len(files)} файлов, {len(issues)} замечаний)"
-        )
+    _emit_phase(
+        phase_callback,
+        f"отчёт по структуре ({len(files)} файлов, {len(issues)} замечаний, "
+        f"{len(positions)} позиций)",
+    )
     _write_structure_report(
         structure_path,
         result_head=summary_rows,
@@ -2627,17 +2632,19 @@ def build_ds_baseline(
         sheet_scans=sheet_scans,
         column_notes=column_notes,
         issues=issues,
+        progress=phase_callback,
     )
-    if phase_callback is not None:
-        phase_callback(
-            f"отчёт по качеству ({len(positions)} позиций)"
-        )
+    _emit_phase(
+        phase_callback,
+        f"отчёт по качеству ({len(positions)} позиций)",
+    )
     _write_quality_report(
         quality_path,
         result_head=summary_rows,
         positions=positions,
         issues=issues,
         files=files,
+        progress=phase_callback,
     )
 
     empty_code_path = None
@@ -2673,6 +2680,7 @@ def build_ds_baseline(
                 for item in empty_code_rows
             ],
             path_cols=(1, 2),
+            progress=phase_callback,
         )
 
     duplicate_tags_path = None
@@ -2697,6 +2705,7 @@ def build_ds_baseline(
                 for item in dup_tag_issues
             ],
             path_cols=(1, 2),
+            progress=phase_callback,
         )
 
     tag_mismatch_path = None
@@ -2721,6 +2730,7 @@ def build_ds_baseline(
                 for item in mismatch_issues
             ],
             path_cols=(1, 2),
+            progress=phase_callback,
         )
 
     fractional_paths: tuple[Path, ...] = ()
@@ -2731,8 +2741,7 @@ def build_ds_baseline(
 
     baseline_path = None
     if write_baseline and not blocking:
-        if phase_callback is not None:
-            phase_callback(f"запись {BASELINE_XLSX_NAME}")
+        done_baseline = _phase_timer(phase_callback, f"запись {BASELINE_XLSX_NAME}")
         target = out_dir / BASELINE_XLSX_NAME
         tmp_path = target.with_name(
             f".{target.stem}.{os.getpid()}.tmp{target.suffix}"
@@ -2747,6 +2756,7 @@ def build_ds_baseline(
         except Exception:
             tmp_path.unlink(missing_ok=True)
             raise
+        done_baseline(f"{len(net_rows)} строк")
 
     return DsBaselineResult(
         source_root=root,

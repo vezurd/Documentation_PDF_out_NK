@@ -699,6 +699,55 @@ class DsBaselineInflatedSheetSmokeTest(unittest.TestCase):
             self.assertIsNotNone(progress[1][3])
 
 
+class DsBaselineTagDuplicateSmokeTest(unittest.TestCase):
+    def test_shared_tag_emits_one_issue_and_phase_elapsed(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [DS_HEADER + ["Tag"], _ds_row(extra=["T-SHARE"])],
+            )
+            _write_xlsx(
+                ds_root / "ДС_47" / "spec.xlsx",
+                [DS_HEADER + ["Tag"], _ds_row(npp=2, extra=["T-SHARE"])],
+            )
+            phases: list[str] = []
+            registry = load_registry(registry_path)
+            result = build_ds_baseline(
+                ds_root,
+                registry,
+                out_dir,
+                write_baseline=True,
+                converter=IdentityDsUnitsConverter(),
+                google_index=_google_index(),
+                stamp=STAMP,
+                phase_callback=phases.append,
+            )
+            cross = [
+                item
+                for item in result.issues
+                if item.code == ISSUE_TAG_DUPLICATE and "T-SHARE" in item.message
+            ]
+            self.assertEqual(len(cross), 1, cross)
+            self.assertIn("в 2 строках", cross[0].message)
+            self.assertTrue(
+                any("конвертация единиц измерения" in line for line in phases),
+                phases,
+            )
+            self.assertTrue(
+                any("дубли тегов между строками" in line for line in phases),
+                phases,
+            )
+            self.assertTrue(
+                any(" — " in line and " с" in line for line in phases),
+                phases,
+            )
+
+
 class DsBaselinePathUriSmokeTest(unittest.TestCase):
     def test_absolute_uri_does_not_call_resolve(self) -> None:
         _path_uri.cache_clear()
