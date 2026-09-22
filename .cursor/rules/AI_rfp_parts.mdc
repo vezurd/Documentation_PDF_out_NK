@@ -7,6 +7,7 @@ alwaysApply: false
 # RFP parts — сбор сводного из папки частей
 
 > Отдельный контур от боевого step1–4 ([AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc)). Финальный Excel Запуска: [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc).  
+> Доверенный вход из ДС / hybrid overlay: [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc) — не подменять этим правилом `rfp_parts_net.xlsx`.  
 > Дата снимка: **2026-09-03**.
 
 ## Когда читать

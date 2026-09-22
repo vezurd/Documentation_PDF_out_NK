@@ -106,15 +106,22 @@
 ```
 
 Секция `rfp_parts` содержит штатные ключи:
-`auto_update_checklist`, `use_latest_net`, `summary_path`, `checklist_path`,
-`increase_dir`, `decrease_dir`. `use_latest_net=true` (default основного
-профиля) заставляет Step1 читать последний `rfp_parts_net.xlsx` из
-`RFP сводный файл\YYYY.MM.DD_HH.MM` (при `load_tags=false` —
+`auto_update_checklist`, `use_latest_net`, `input_mode`, `ds_source_dir`,
+`ds_registry_path`, `summary_path`, `checklist_path`, `increase_dir`,
+`decrease_dir`. `use_latest_net=true` (default основного профиля) и
+`input_mode=legacy_net` заставляют Step1 читать последний `rfp_parts_net.xlsx`
+из `RFP сводный файл\YYYY.MM.DD_HH.MM` (при `load_tags=false` —
 `rfp_parts_net_no_tags.xlsx`) и перед этим пересобрать свод, если
 в `RFP_Зиновьев` появился новый файл, файл новее свода, или для режима
-без тегов нет sibling-файла; `false` —
-`paths.rfp_path` (as-build). Ключи `auto_update_checklist` / `summary_path` /
-папки increase/decrease в JSON сохраняются, но Запуск их не использует.
+без тегов нет sibling-файла; `use_latest_net=false` —
+`paths.rfp_path` (as-build). `input_mode=ds_only` читает
+`Свод ДС для запуска.xlsx`; `hybrid` — `Свод ДС-RFP для запуска.xlsx`.
+Пустой `ds_source_dir` берёт `last_ds_trusted_folder` с вкладки
+RFP · Сбор частей. Нет нужного свода — явная ошибка, без silent fallback
+на parts net.
+Ключи `auto_update_checklist` / `summary_path` / папки increase/decrease
+в JSON сохраняются, но Запуск их не использует.
+Контракт ДС/hybrid: [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc).
 
 ### `paths.units_convert_matrix`
 

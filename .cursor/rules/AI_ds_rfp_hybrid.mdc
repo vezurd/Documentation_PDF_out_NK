@@ -1,0 +1,195 @@
+---
+description: Доверенный ДС baseline и RFP overlay для RFP · Запуск (реестр, аудит, группы поставки)
+globs: RFQ/rfp_parts/ds_registry.py,RFQ/rfp_parts/ds_baseline.py,RFQ/rfp_parts/ds_rfp_hybrid.py,RFQ/rfp_parts/ds_jobs.py,RFQ/rfp_parts/ds_hybrid_preflight.py,RFQ/tags_rfp_compare/rfp_tags_utils.py,RFQ/tags_rfp_compare/agregate_tags.py,ds_compare_center/rfp_parts_panel.py,ds_compare_center/rfp_settings_panel.py,ds_compare_center/center_window.py,tmp/test_ds_registry_smoke.py,tmp/test_ds_baseline_smoke.py,tmp/test_ds_rfp_hybrid_smoke.py,tmp/test_ds_jobs_smoke.py,tmp/test_ds_hybrid_preflight_smoke.py,tmp/test_rfp_effective_path_smoke.py
+alwaysApply: false
+---
+
+# ДС baseline + RFP overlay
+
+> Узкий контур входа Step1 из закупочных ДС. Не путать с grouped ДС vs MTO
+> ([AI_ds_compare.mdc](.cursor/rules/AI_ds_compare.mdc)) и со сбором частей
+> `rfp_parts_net.xlsx` ([AI_rfp_parts.mdc](.cursor/rules/AI_rfp_parts.mdc)).
+> Снимок: **2026-09-22**.
+
+## Когда читать
+
+- реестр `Реестр_ДС_УЛ.xlsx`, миграция формата, группы поставки
+- рекурсивный аудит папки ДС, `Свод ДС для запуска.xlsx`
+- сверка корневого `RFP_Зиновьев` vs ДС, `Свод ДС-RFP для запуска.xlsx`
+- вкладка **RFP · Сбор частей** в режиме ДС/hybrid
+- `rfp_parts.input_mode` = `ds_only` | `hybrid` | `legacy_net`
+
+Не это правило: финальная раскладка Step4, посадка УЛ, grouped DS vs MTO.
+
+## Сущности
+
+| Имя | Смысл |
+|---|---|
+| `source_id` | ID ДС источника, строка: `13`, `47`, `4905_1` |
+| `group_id` | ID группы поставки. Обычно имя папки УЛ или `NO_UL:{source_id}` |
+| `rfp_key` | Ключ корневого RFP: `parse_rfp_ds_identity(name).actual` |
+| Overlay | атомарно на **всю группу**: все строки RFP или все строки ДС |
+
+Реестр — одна строка на `source_id`. Справа нумерованные блоки «Связь N».
+Списки через `;` в новом формате запрещены.
+
+## Контракт реестра
+
+Лист `Реестр ДС`, Excel Table. Заголовки:
+
+- обязательные `*`: насыщенный синий + белый текст
+- условные `†`: жёлтый
+- вспомогательные: серый
+
+Блок ДС: `Статус *`, `ID ДС источника *`, `Предыдущий / старый ДС`, `Ревизия`,
+`Примечание`, `Исходная строка реестра`.
+
+Блок N: `ID группы поставки N *`, `Фактический ДС / ключ RFP N *`,
+`Папка УЛ N †`, `Режим распределения N *`, `Фильтр титула N †`,
+`Фильтр марки N †`.
+
+Статусы: `Активен` / `История` / `Отключен`.
+Режимы: `Вся ДС` / `По фильтру` / `Нет УЛ` / `Требует распределения`.
+
+Правила:
+
+- активный `source_id` уникален
+- блоки без дыр и без частично заполненного блока
+- одинаковый `group_id` обязан повторять те же `rfp_key` + папку УЛ
+- один `rfp_key` → одна группа
+- `Нет УЛ` — папка пуста; иначе папка обязательна
+- `По фильтру` — оба фильтра обязательны
+- две+ связи без полных непересекающихся фильтров → overlay blocked
+  (`Требует распределения`)
+- робот обычным запуском реестр **не пишет**
+- UNC-замена только `backup_and_replace_registry(..., confirm=True)`
+- открытый Excel не перезаписывать
+
+Канон: UNC `\\bcc\eng\...\ _RFP\Реестр_ДС_УЛ.xlsx`.
+Не локальная копия в папке ДС.
+
+## Аудит ДС
+
+Канон колонок — `ColNames.DsSpecification` A…L. В памяти снимаются
+**только полностью пустые** ведущие колонки. Внутренний сдвиг и чужая
+семантика — ERROR, baseline не пишется.
+
+Читается active-лист. Второй позиционный лист — ERROR.
+Формула/пустой/NaN/Inf/отрицательный qty, пустой CODE — ERROR.
+Zero qty и код вне Google — WARN (как units gate).
+Теги ДС только в отчёт; в своде `TAGS=""`.
+
+Identity файла: `source_id` из папки `ДС_N` / префикса имени против
+активных ID реестра. **Не** `find_ds_pattern` (`ДС\d{1,2}`) и
+**не** `parse_rfp_ds_identity` на `ДС_88_…_ДС 37`.
+
+Пропуск: `~$`, реестр, ручной СВОД, lock.
+
+## Overlay
+
+Ключ сверки: `(group_id, normalize_code, canonical_unit)` после той же
+матрицы, что части. Qty — `Decimal`. Нулевые итоги из bag убираются,
+в отчёте остаются.
+
+- полное равенство кодов+ЕИ+qty → группа из RFP (теги RFP)
+- иначе вся группа из ДС
+- RFP-only в свод не попадает
+- «Исключен из поставки» входит в bag (вариант A)
+- RFP только **корень** `RFP_Зиновьев`; подпапки не читаются
+- несколько файлов одной группы суммируются; exact-дубли — блокер группы
+
+## Вход Step1
+
+`rfp_parts.input_mode`:
+
+| Режим | Файл | Когда |
+|---|---|---|
+| `legacy_net` | `rfp_parts_net.xlsx` / no-tags | default, текущий production |
+| `ds_only` | `Свод ДС для запуска.xlsx` | нет блокеров аудита |
+| `hybrid` | `Свод ДС-RFP для запуска.xlsx` | overlay свежий |
+
+As-build: `use_latest_net=false` → `paths.rfp_path`, режимы ДС не трогают.
+Нет нужного файла — явная ошибка, без silent fallback на parts net.
+`load_tags` не обнуляет теги hybrid глобально.
+
+Папка ДС: `rfp_parts.ds_source_dir`, если пусто — GUI
+`last_ds_trusted_folder`. Реестр: `ds_registry_path`, иначе
+`last_ds_registry_file`, иначе UNC-канон.
+
+Стабильные папки Запуска (кнопки вкладки пишут сюда же):
+
+- `RFP сводный файл/_ds_baseline/`
+- `RFP сводный файл/_ds_hybrid/`
+
+## Артефакты (русские имена)
+
+Рядом со штампом / `_ds_baseline`:
+
+- `Свод ДС для запуска.xlsx`
+- `Свод ДС-RFP для запуска.xlsx`
+- `Отчет по структуре файлов - ДС_<штамп>.xlsx`
+- `Отчет по качеству данных - ДС_<штамп>.xlsx`
+- `Отчет по позициям без кода - ДС_<штамп>.xlsx`
+- `Отчет по дублям тегов - ДС_<штамп>.xlsx`
+- `Отчет по несоответствию тегов - ДС_<штамп>.xlsx`
+- `дробные значения после конвертации ДС.xlsx`
+- `Отчет по сверке ДС-RFP-УЛ_<штамп>.xlsx`
+- `Отчет по миграции реестра ДС_*.xlsx`
+
+Копировать свежие sidecar в `_результат_проверки_*` Запуска
+(как `Отчет по позициям без кода - сбор частей.xlsx`).
+
+## Модули
+
+| Файл | Роль |
+|---|---|
+| [ds_registry.py](RFQ/rfp_parts/ds_registry.py) | формат, валидация, миграция |
+| [ds_baseline.py](RFQ/rfp_parts/ds_baseline.py) | аудит + свод ДС |
+| [ds_rfp_hybrid.py](RFQ/rfp_parts/ds_rfp_hybrid.py) | root RFP + overlay |
+| [ds_hybrid_preflight.py](RFQ/rfp_parts/ds_hybrid_preflight.py) | freshness Запуска, sidecar copy |
+| [ds_jobs.py](RFQ/rfp_parts/ds_jobs.py) | GUI jobs вкладки **RFP · Сбор частей** |
+| [ds_identity.py](RFQ/rfp_parts/ds_identity.py) | actual/sequential **только для RFP/УЛ** |
+
+Публичные входы: `load_registry`, `migrate_registry`,
+`backup_and_replace_registry`, `build_ds_baseline`, `build_ds_rfp_hybrid`,
+`ensure_ds_baseline_current`, `ensure_ds_hybrid_current`,
+`run_ds_baseline_job`, `run_ds_hybrid_job`, `run_ds_coverage_job`,
+`run_ds_registry_check_job`.
+
+Jobs **не** вызывают `backup_and_replace_registry`. Миграция из GUI пишет
+новый файл в папку отчётов.
+
+Не вызывать `merge_ds_folder` / `load_ds_data` как production-loader
+этого дерева.
+
+## Ловушки
+
+- Join RFP только по `actual` без реестра вешает `ДС16_75` на мёртвый 16
+- Корневой RFP13 ≈ ДС13+ДС47 (одна папка УЛ). Сверять **группу**, не kit
+- `ДС8` — две папки УЛ; без фильтров overlay запрещён
+- 4905 / 4905_1 / 4905_2 — разные `source_id`
+- Не включать рекурсию в `RFP_Зиновьев` (задвоение qty)
+- Не подменять `rfp_parts_net.xlsx` и grouped `DS_summary*.xlsx`
+
+## Смоуки
+
+```powershell
+$env:PYTHONUTF8='1'
+python tmp/test_ds_registry_smoke.py
+python tmp/test_ds_baseline_smoke.py
+python tmp/test_ds_rfp_hybrid_smoke.py
+python tmp/test_ds_jobs_smoke.py
+python tmp/test_rfp_effective_path_smoke.py
+python tmp/test_ds_hybrid_preflight_smoke.py
+```
+
+UNC-замену канона и полный прогон 89 книг не делать из чата без запроса.
+
+## Следующему чату (правки, не дизайн)
+
+- Production остаётся `input_mode=legacy_net`, пока оператор не
+  заполнит папку ДС и не переключит combo.
+- Канон UNC-реестра из чата не перезаписывать.
+- Live-вехи `ds_audit` / overlay в мониторе Запуска и Stop job — ещё нет.
+- 12 нестандартных книг ДС блокируют baseline, пока не выровняют layout.
+- Полный аудит 89 книг / миграция живого UNC — только по явной просьбе.

@@ -25,7 +25,7 @@ alwaysApply: false
 - **RFQ TPK / этап 2:** `RFQTPK`, `load_rfq_tpk_data`, **`ds_rfq_grouped_compare.py`**, **`ds_units_normalize.py`**, RFQ-only строки, колонки RFQ в grouped Excel
 - **кэш grouped compare:** `grouped_compare_cache.py`, `cache_ds_mto_result`
 - **настройки колонок Excel:** вкладка «Столбцы Excel», `ds_vs_mto_output.columns` в JSON, `column_config_from_output_settings`
-- **Не это правило:** финальный xlsx **RFP · Запуск** (Step4 столбцы/цвета/УЛ) → `AI_rfp_step4_excel.mdc`; зачем/как VPN Cursor → `.cursor/rules/AI_cursor_vpn.mdc`
+- **Не это правило:** финальный xlsx **RFP · Запуск** (Step4 столбцы/цвета/УЛ) → `AI_rfp_step4_excel.mdc`; доверенный ДС baseline / overlay RFP → `AI_ds_rfp_hybrid.mdc`; зачем/как VPN Cursor → `.cursor/rules/AI_cursor_vpn.mdc`
 
 ## Точки входа
 
@@ -855,7 +855,8 @@ Grouped smoke **с RFQ:** `python -m ds_compare_center` → «ДС vs MTO vs RFQ
 
 - `AI_rfq_context.mdc` — RFP/MTO/VO step4, `_COPY_COLS`, производительность
 - `AI_rfp_step4_excel.mdc` — финальный Excel RFP · Запуск (столбцы, цвета, УЛ)
-- `AI_rfp_parts.mdc` — сбор свода из `RFP_Зиновьев` (сумма); checklist preflight Step1 по-прежнему increase/decrease; production parts-loader не реализован
+- `AI_rfp_parts.mdc` — сбор свода из `RFP_Зиновьев` (сумма); increase/decrease в боевом сборе вырезаны
+- `AI_ds_rfp_hybrid.mdc` — доверенный ДС baseline и overlay RFP; не путать с `merge_ds_folder` / grouped Excel
 - `AI_memory.mdc` §16 — UNC, кодировки, пути
 - `AI_v2_monitor.mdc` — паттерн standalone control center (subprocess, PySide6, job monitor)
 - `AI_project_standards.mdc` — маркировка планов [C2]/[PREMIUM]

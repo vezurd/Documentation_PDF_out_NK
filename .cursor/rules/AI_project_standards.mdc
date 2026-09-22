@@ -90,6 +90,7 @@ alwaysApply: true
 | RFQ / tags_rfp_compare / base / кэш | `AI_rfq_context.mdc`, при необходимости `AI_performance.mdc` |
 | RFP Запуск — финальный Excel Step4 (столбцы, цвета, УЛ, ед. изм.) | `AI_rfp_step4_excel.mdc` |
 | RFP из частей (`RFP_Зиновьев`, сумма) | `AI_rfp_parts.mdc` |
+| Доверенный ДС baseline + overlay RFP | `AI_ds_rfp_hybrid.mdc` |
 | DS vs MTO (`analyze_ds_specification`) | `AI_ds_compare.mdc` |
 | Cursor split-tunnel VPN (Amnezia / 3proxy / ProxiFyre) | `AI_cursor_vpn.mdc` |
 | Каталог версий РД / готовность MTO робота | `AI_rd_catalog.mdc` |

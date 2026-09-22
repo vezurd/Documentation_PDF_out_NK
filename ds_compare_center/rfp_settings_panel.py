@@ -23,6 +23,12 @@ from PySide6.QtWidgets import (
 )
 
 from RFQ.packing_list_provider import load_packing_dataset
+from RFQ.rfp_parts.ds_hybrid_preflight import (
+    INPUT_MODE_DS_ONLY,
+    INPUT_MODE_HYBRID,
+    INPUT_MODE_LEGACY_NET,
+)
+from RFQ.rfp_parts.ds_registry import DEFAULT_REGISTRY_PATH
 from RFQ.tags_rfp_compare.rfp_tags_utils import (
     DEFAULT_UNITS_SPLIT_BAN,
     RFP_PIPELINE_MODE_MTO_VO_ONLY,
@@ -36,7 +42,7 @@ from RFQ.tags_rfp_compare.rfp_tags_utils import (
 )
 
 
-FieldKind = Literal["bool", "text", "int", "list"]
+FieldKind = Literal["bool", "text", "int", "list", "choice"]
 
 
 class _PackingStatusLoader(QObject):
@@ -62,6 +68,7 @@ class _FieldSpec:
     minimum: int = 0
     maximum: int = 100
     help_text: str = ""
+    choices: tuple[tuple[str, str], ...] = ()
 
 
 _PIPELINE_ITEMS = (
@@ -88,18 +95,75 @@ _ASBUILD_FIXED: dict[str, bool] = {
     "rfp_parts.use_latest_net": False,
 }
 
+_ASBUILD_SOURCE_DISABLED: tuple[str, ...] = (
+    "rfp_parts.input_mode",
+    "rfp_parts.ds_source_dir",
+    "rfp_parts.ds_registry_path",
+)
+
+_INPUT_MODE_ITEMS: tuple[tuple[str, str], ...] = (
+    (
+        "Свод частей RFP (rfp_parts_net)",
+        INPUT_MODE_LEGACY_NET,
+    ),
+    (
+        "Свод ДС для запуска",
+        INPUT_MODE_DS_ONLY,
+    ),
+    (
+        "Свод ДС-RFP для запуска",
+        INPUT_MODE_HYBRID,
+    ),
+)
+
 _RFP_SOURCE_SPECS: tuple[_FieldSpec, ...] = (
+    _FieldSpec(
+        "rfp_parts.input_mode",
+        "Режим свода для Запуска",
+        "choice",
+        INPUT_MODE_LEGACY_NET,
+        help_text=(
+            "legacy_net — последний rfp_parts_net.xlsx (текущий production). "
+            "ds_only — «Свод ДС для запуска.xlsx» из «RFP сводный файл\\_ds_baseline». "
+            "hybrid — «Свод ДС-RFP для запуска.xlsx» из «_ds_hybrid». "
+            "Нет нужного файла — явная ошибка, без подстановки свода частей. "
+            "При выключенной галке ниже (as-build) режимы ДС не используются."
+        ),
+        choices=_INPUT_MODE_ITEMS,
+    ),
     _FieldSpec(
         "rfp_parts.use_latest_net",
         "Брать последний свод частей",
         default=True,
         help_text=(
-            "Вкл.: Step1 читает самый новый rfp_parts_net.xlsx из "
+            "Вкл.: Step1 читает свод по режиму выше (части / ДС / hybrid). "
+            "Для частей — самый новый rfp_parts_net.xlsx из "
             "«RFP сводный файл\\YYYY.MM.DD_HH.MM». "
             "При выключенных тегах — соседний rfp_parts_net_no_tags.xlsx. "
             "Если в RFP_Зиновьев появился новый файл или файла свода нет — "
             "свод пересобирается сам (как кнопка «Сбор частей»). "
-            "Выкл.: используется поле «Файл RFP» ниже."
+            "Выкл.: используется поле «Файл RFP» ниже; режимы ДС не трогают."
+        ),
+    ),
+    _FieldSpec(
+        "rfp_parts.ds_source_dir",
+        "Папка закупочных ДС",
+        "text",
+        "",
+        help_text=(
+            "Корень рекурсивного аудита ДС для режимов ds_only / hybrid. "
+            "JSON: rfp_parts.ds_source_dir. Пусто — берётся "
+            "last_ds_trusted_folder с вкладки RFP · Сбор частей."
+        ),
+    ),
+    _FieldSpec(
+        "rfp_parts.ds_registry_path",
+        "Реестр ДС / УЛ",
+        "text",
+        str(DEFAULT_REGISTRY_PATH),
+        help_text=(
+            "Канон «Реестр_ДС_УЛ.xlsx». Робот обычным запуском файл не пишет. "
+            "JSON: rfp_parts.ds_registry_path."
         ),
     ),
     _FieldSpec(
@@ -559,13 +623,17 @@ class RfpSettingsPanel(QWidget):
         layout = QVBoxLayout(box)
         comment = QLabel(
             "Как выбирается файл для кнопки «RFP · Запуск»:\n"
-            "• Галка включена — берётся самый новый rfp_parts_net.xlsx из папки "
-            "«RFP сводный файл\\YYYY.MM.DD_HH.MM» (его собирает вкладка "
-            "«RFP · Сбор частей» после проверки частей). Если в настройках "
+            "• Режим «Свод частей» + галка включена — берётся самый новый "
+            "rfp_parts_net.xlsx из папки «RFP сводный файл\\YYYY.MM.DD_HH.MM» "
+            "(его собирает вкладка «RFP · Сбор частей»). Если в настройках "
             "снята галка тегов — читается соседний rfp_parts_net_no_tags.xlsx "
             "(лот как в ДС; боевой net не затирается).\n"
+            "• Режим «Свод ДС» / «Свод ДС-RFP» + галка включена — "
+            "«Свод ДС для запуска.xlsx» или «Свод ДС-RFP для запуска.xlsx» "
+            "из «RFP сводный файл\\_ds_baseline» / «_ds_hybrid». Нет файла — "
+            "ошибка, без подстановки свода частей.\n"
             "• Галка снята — читается путь «Файл RFP» ниже (как раньше: "
-            "отдельная сводная книга).\n"
+            "отдельная сводная книга). Режимы ДС не используются.\n"
             "Если галка включена, а свода ещё нет, запуск остановится с ошибкой, "
             "а не подставит старый файл. В профиле As-build галка всегда выключена: "
             "там свой файл as-build.",
@@ -617,6 +685,11 @@ class RfpSettingsPanel(QWidget):
             widget = QSpinBox(parent)
             widget.setRange(spec.minimum, spec.maximum)
             return widget
+        if spec.kind == "choice":
+            widget = QComboBox(parent)
+            for label, value in spec.choices:
+                widget.addItem(label, value)
+            return widget
         return QLineEdit(parent)
 
     def _load_current_config(self) -> dict[str, Any]:
@@ -644,6 +717,9 @@ class RfpSettingsPanel(QWidget):
                     widget.setValue(int(value))
                 except (TypeError, ValueError):
                     widget.setValue(int(spec.default))
+            elif isinstance(widget, QComboBox):
+                index = widget.findData(str(value or spec.default))
+                widget.setCurrentIndex(max(0, index))
             elif isinstance(widget, QLineEdit):
                 if spec.kind == "list":
                     if isinstance(value, (list, tuple)):
@@ -661,6 +737,9 @@ class RfpSettingsPanel(QWidget):
             return widget.isChecked()
         if isinstance(widget, QSpinBox):
             return widget.value()
+        if isinstance(widget, QComboBox):
+            data = widget.currentData()
+            return str(data if data is not None else spec.default)
         if isinstance(widget, QLineEdit):
             return (
                 _parse_comma_list(widget.text())
@@ -740,6 +819,22 @@ class RfpSettingsPanel(QWidget):
                 )
             else:
                 spec = self._specs[key]
+                tooltip = f"JSON: {key}"
+                if spec.help_text:
+                    tooltip += f"\n{spec.help_text}"
+                widget.setToolTip(tooltip)
+        for key in _ASBUILD_SOURCE_DISABLED:
+            widget = self._widgets.get(key)
+            if widget is None:
+                continue
+            widget.setEnabled(not asbuild)
+            spec = self._specs.get(key)
+            if asbuild:
+                widget.setToolTip(
+                    f"JSON: {key}\nПрофиль As-build всегда читает «Файл RFP»; "
+                    "режимы ДС не используются (use_latest_net=false)."
+                )
+            elif spec is not None:
                 tooltip = f"JSON: {key}"
                 if spec.help_text:
                     tooltip += f"\n{spec.help_text}"

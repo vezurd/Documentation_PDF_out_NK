@@ -65,6 +65,16 @@ from RFQ.tags_rfp_compare.column_optimization import (
 )
 from RFQ.tags_rfp_compare.rfp_progress import emit_milestone
 from RFQ.rfp_parts.parts_net_preflight import ensure_rfp_parts_net_current
+from RFQ.rfp_parts.ds_hybrid_preflight import (
+    INPUT_MODE_DS_ONLY,
+    INPUT_MODE_HYBRID,
+    DsBaselineBlockedError,
+    DsHybridBlockedError,
+    copy_ds_sidecars_to_result_dir,
+    ensure_ds_baseline_current,
+    ensure_ds_hybrid_current,
+    resolve_input_mode,
+)
 from RFQ.rfp_parts.file_status import (
     DUPLICATE_TAGS_XLSX_NAME,
     EMPTY_CODE_XLSX_NAME,
@@ -250,10 +260,100 @@ def main(config_override: Optional[Dict[str, Any]] = None):
             emit_milestone("ds_mp_check", "Error", detail)
             print(f"Соответствие ДС RFP↔МП: {detail}")
 
+    input_mode = resolve_input_mode(config)
     if skip_rfp_load:
         emit_milestone("parts_preflight", "Skipped", "mto_vo_only")
     elif not use_latest_net:
         emit_milestone("parts_preflight", "Skipped", "use_latest_net=false")
+    elif input_mode == INPUT_MODE_DS_ONLY:
+        emit_milestone("parts_preflight", "Running", "input_mode=ds_only")
+        try:
+            net_path, freshness = ensure_ds_baseline_current(
+                config=config,
+                matrix_path=str(paths.get("units_convert_matrix") or "").strip()
+                or None,
+                progress=True,
+            )
+        except DsBaselineBlockedError as exc:
+            copy_ds_sidecars_to_result_dir(exc.output_dir, result_dir)
+            emit_milestone("parts_preflight", "Error", str(exc).splitlines()[0])
+            emit_milestone("complete", "Error", "DS baseline blocked")
+            print(str(exc))
+            raise SystemExit(1) from exc
+        except Exception as exc:
+            emit_milestone("parts_preflight", "Error", str(exc))
+            emit_milestone("complete", "Error", "DS baseline refresh failed")
+            print(
+                "Не удалось проверить или пересобрать свод ДС "
+                f"(rfp_parts.ds_source_dir → Свод ДС для запуска.xlsx): {exc}"
+            )
+            raise SystemExit(1) from exc
+        action = "rebuilt" if freshness.needs_rebuild else "unchanged"
+        print(f"Свод ДС: {action}; {freshness.reason}")
+        print(f"{os.path.basename(str(net_path))}: {net_path}")
+        copied = copy_ds_sidecars_to_result_dir(
+            os.path.dirname(str(net_path)), result_dir
+        )
+        for dest in copied:
+            print(f"Отчёт ДС: {dest.name}")
+        emit_milestone(
+            "parts_preflight",
+            "Done",
+            f"{action}; {freshness.reason}",
+        )
+    elif input_mode == INPUT_MODE_HYBRID:
+        emit_milestone("parts_preflight", "Running", "input_mode=hybrid")
+        try:
+            net_path, freshness = ensure_ds_hybrid_current(
+                config=config,
+                matrix_path=str(paths.get("units_convert_matrix") or "").strip()
+                or None,
+                progress=True,
+            )
+        except DsBaselineBlockedError as exc:
+            copy_ds_sidecars_to_result_dir(exc.output_dir, result_dir)
+            emit_milestone("parts_preflight", "Error", str(exc).splitlines()[0])
+            emit_milestone("complete", "Error", "DS baseline blocked")
+            print(str(exc))
+            raise SystemExit(1) from exc
+        except DsHybridBlockedError as exc:
+            copy_ds_sidecars_to_result_dir(exc.output_dir, result_dir)
+            emit_milestone(
+                "parts_preflight",
+                "Error",
+                str(exc).splitlines()[0],
+            )
+            emit_milestone("complete", "Error", "DS-RFP hybrid blocked")
+            print(str(exc))
+            raise SystemExit(1) from exc
+        except Exception as exc:
+            emit_milestone("parts_preflight", "Error", str(exc))
+            emit_milestone("complete", "Error", "DS-RFP hybrid refresh failed")
+            print(
+                "Не удалось проверить или пересобрать свод ДС-RFP "
+                f"(без fallback на rfp_parts_net.xlsx): {exc}"
+            )
+            raise SystemExit(1) from exc
+        action = "rebuilt" if freshness.needs_rebuild else "unchanged"
+        hybrid_detail = freshness.summary or freshness.reason
+        print(f"Свод ДС-RFP: {action}; {hybrid_detail}")
+        print(f"{os.path.basename(str(net_path))}: {net_path}")
+        copied = copy_ds_sidecars_to_result_dir(
+            os.path.dirname(str(net_path)), result_dir
+        )
+        if freshness.baseline_freshness is not None:
+            copied.extend(
+                copy_ds_sidecars_to_result_dir(
+                    freshness.baseline_freshness.output_dir, result_dir
+                )
+            )
+        for dest in copied:
+            print(f"Отчёт ДС-RFP: {dest.name}")
+        emit_milestone(
+            "parts_preflight",
+            "Done",
+            f"{action}; {hybrid_detail}",
+        )
     else:
         emit_milestone("parts_preflight", "Running")
         try:

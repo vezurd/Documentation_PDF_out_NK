@@ -1,0 +1,1047 @@
+"""FunctionJobRunner jobs for the RFP · Сбор частей DS/hybrid cockpit.
+
+Ordinary runs only read the canonical UNC registry. Migration writes a *new*
+workbook under the reports folder. ``backup_and_replace_registry`` is never
+imported or called from this module.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Literal
+
+from RFQ.ds_compare.ds_compare_config import (
+    load_ds_compare_config,
+    normalize_gui_paths,
+)
+from RFQ.rfp_parts.analyze_rfp_parts import (
+    DEFAULT_PARTS_DIR,
+    DEFAULT_REPORTS_BASE_DIR,
+    make_reports_out_dir,
+)
+from RFQ.rfp_parts.ds_baseline import (
+    BASELINE_XLSX_NAME,
+    ISSUE_EMPTY_CODE,
+    ISSUE_EXACT_DUPLICATE,
+    ISSUE_QTY_EMPTY,
+    ISSUE_QTY_FORMULA,
+    ISSUE_QTY_NEGATIVE,
+    ISSUE_QTY_NON_FINITE,
+    ISSUE_QTY_NON_NUMERIC,
+    ISSUE_QTY_ZERO,
+    ISSUE_TAG_DUPLICATE,
+    ISSUE_TAG_MISMATCH,
+    ISSUE_UNKNOWN_GOOGLE,
+    DsBaselineResult,
+    build_ds_baseline,
+    collect_ds_workbooks,
+    resolve_ds_source_id,
+)
+from RFQ.rfp_parts.ds_identity import parse_rfp_ds_identity
+from RFQ.rfp_parts.ds_registry import (
+    DEFAULT_REGISTRY_PATH,
+    FORMAT_VERSION,
+    MIGRATION_REPORT_PREFIX,
+    MODE_NO_UL,
+    DsRegistryDocument,
+    DsRegistryError,
+    detect_registry_format,
+    load_registry,
+    migrate_registry,
+)
+from RFQ.rfp_parts.ds_rfp_hybrid import (
+    HYBRID_XLSX_NAME,
+    STATUS_MATCH,
+    DsRfpHybridResult,
+    build_ds_rfp_hybrid,
+    collect_rfp_workbooks,
+    rfp_identity_key,
+)
+
+Tone = Literal["error", "warn", "match", "ok"]
+JobKind = Literal["registry", "baseline", "hybrid", "coverage"]
+
+_QTY_ISSUE_CODES = frozenset(
+    {
+        ISSUE_QTY_EMPTY,
+        ISSUE_QTY_FORMULA,
+        ISSUE_QTY_NEGATIVE,
+        ISSUE_QTY_NON_FINITE,
+        ISSUE_QTY_NON_NUMERIC,
+        ISSUE_QTY_ZERO,
+    }
+)
+_TAG_ISSUE_CODES = frozenset({ISSUE_TAG_DUPLICATE, ISSUE_TAG_MISMATCH})
+
+
+@dataclass(frozen=True, slots=True)
+class DsJobResult:
+    """Duck-typed ``FunctionJobRunner`` result (no GUI import)."""
+
+    success: bool
+    message: str
+    result_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CockpitRow:
+    """One table row with a traffic-light tone for the GUI."""
+
+    cells: tuple[str, ...]
+    tone: Tone = "ok"
+
+
+@dataclass
+class DsCockpitSnapshot:
+    """Last DS/hybrid job outcome for the RFP · Сбор частей tab."""
+
+    kind: JobKind
+    summary: str
+    registry_path: Path
+    registry_format: str = "unknown"
+    format_version: int = FORMAT_VERSION
+    output_dir: Path | None = None
+    rfp_root: Path | None = None
+    source_root: Path | None = None
+    ul_root: Path | None = None
+    baseline_path: Path | None = None
+    hybrid_path: Path | None = None
+    report_path: Path | None = None
+    migrated_registry_path: Path | None = None
+    active_count: int = 0
+    group_count: int = 0
+    error_count: int = 0
+    warn_count: int = 0
+    overlay_count: int = 0
+    match_count: int = 0
+    mismatch_count: int = 0
+    ds_only_count: int = 0
+    rfp_only_count: int = 0
+    blocked_count: int = 0
+    file_count: int = 0
+    rfp_file_count: int = 0
+    empty_code: int = 0
+    qty_errors: int = 0
+    unknown_google: int = 0
+    tag_warnings: int = 0
+    duplicates: int = 0
+    registry_rows: list[CockpitRow] = field(default_factory=list)
+    group_rows: list[CockpitRow] = field(default_factory=list)
+    file_rows: list[CockpitRow] = field(default_factory=list)
+    coverage_rows: list[CockpitRow] = field(default_factory=list)
+
+    @property
+    def banner_tone(self) -> Tone:
+        if self.error_count or self.blocked_count:
+            return "error"
+        if self.warn_count or self.overlay_count or self.mismatch_count:
+            return "warn"
+        if self.match_count:
+            return "match"
+        return "ok"
+
+
+_last_cockpit: DsCockpitSnapshot | None = None
+
+
+def get_last_ds_cockpit() -> DsCockpitSnapshot | None:
+    """Return the last cockpit snapshot from a DS job, if any."""
+    return _last_cockpit
+
+
+def _emit(message: str) -> None:
+    text = message + "\n"
+    stream = sys.stdout
+    try:
+        stream.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        payload = text.encode(encoding, errors="backslashreplace")
+        buf = getattr(stream, "buffer", None)
+        if buf is not None:
+            buf.write(payload)
+        else:
+            stream.write(payload.decode(encoding, errors="replace"))
+    try:
+        stream.flush()
+    except Exception:
+        pass
+
+
+def _is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+def _is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        a = str(left).replace("/", "\\").casefold()
+        b = str(right).replace("/", "\\").casefold()
+        return a == b
+
+
+def _gui_paths() -> dict[str, str]:
+    cfg = load_ds_compare_config()
+    return dict(normalize_gui_paths(cfg.get("gui_paths")))
+
+
+def _resolve_source_root(source_root: str | Path | None) -> Path | None:
+    if source_root:
+        text = str(source_root).strip()
+        return Path(text) if text else None
+    text = _gui_paths().get("last_ds_trusted_folder", "").strip()
+    return Path(text) if text else None
+
+
+def _resolve_registry_path(registry_path: str | Path | None) -> Path:
+    if registry_path:
+        text = str(registry_path).strip()
+        if text:
+            return Path(text)
+    text = _gui_paths().get("last_ds_registry_file", "").strip()
+    return Path(text) if text else DEFAULT_REGISTRY_PATH
+
+
+def _resolve_ul_root(ul_root: str | Path | None) -> Path | None:
+    text = str(ul_root).strip() if ul_root else ""
+    if not text:
+        text = _gui_paths().get("last_tsd_packing_folder", "").strip()
+    if not text:
+        return None
+    path = Path(text)
+    return path if _is_dir(path) else path
+
+
+def _resolve_rfp_root(rfp_root: str | Path | None) -> Path:
+    if rfp_root:
+        text = str(rfp_root).strip()
+        if text:
+            return Path(text)
+    return DEFAULT_PARTS_DIR
+
+
+def _resolve_output_dir(output_dir: str | Path | None) -> Path:
+    if output_dir:
+        return Path(output_dir)
+    return make_reports_out_dir()
+
+
+def _ensure_output_dir(output_dir: Path) -> str | None:
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return f"не удалось создать папку отчётов: {exc}"
+    return None
+
+
+def _optional_ul_for_validate(ul_root: Path | None) -> Path | None:
+    if ul_root is None:
+        return None
+    return ul_root if _is_dir(ul_root) else None
+
+
+def _load_new_registry(
+    path: Path, *, ul_root: Path | None
+) -> tuple[DsRegistryDocument | None, str | None]:
+    try:
+        document = load_registry(path, ul_root=_optional_ul_for_validate(ul_root))
+    except DsRegistryError as exc:
+        return None, str(exc)
+    except OSError as exc:
+        return None, f"не удалось прочитать реестр: {exc}"
+    return document, None
+
+
+def _tone_from_levels(levels: set[str], *, match: bool = False) -> Tone:
+    if "ERROR" in levels:
+        return "error"
+    if "WARN" in levels or "OVERLAY" in levels:
+        return "warn"
+    if match:
+        return "match"
+    return "ok"
+
+
+def _issue_note(messages: list[str], *, limit: int = 2) -> str:
+    if not messages:
+        return ""
+    head = messages[:limit]
+    extra = len(messages) - len(head)
+    text = "; ".join(head)
+    if extra > 0:
+        text = f"{text} (+ ещё {extra})"
+    return text
+
+
+def _registry_tables(
+    document: DsRegistryDocument,
+    *,
+    ds_files_by_id: dict[str, list[str]] | None = None,
+    rfp_files_by_key: dict[str, list[str]] | None = None,
+    ul_root: Path | None = None,
+    group_status: dict[str, str] | None = None,
+) -> tuple[list[CockpitRow], list[CockpitRow], list[CockpitRow]]:
+    ds_files_by_id = ds_files_by_id or {}
+    rfp_files_by_key = rfp_files_by_key or {}
+    group_status = group_status or {}
+    issues_by_source: dict[str, list[Any]] = defaultdict(list)
+    issues_by_group: dict[str, list[Any]] = defaultdict(list)
+    for item in document.validation.issues:
+        if item.source_id:
+            issues_by_source[item.source_id].append(item)
+        if item.group_id:
+            issues_by_group[item.group_id].append(item)
+
+    registry_rows: list[CockpitRow] = []
+    for row in document.rows:
+        if not row.source_id and not row.relations:
+            continue
+        rels = [rel for rel in row.relations if not rel.is_empty()]
+        groups = "; ".join(rel.group_id for rel in rels if rel.group_id) or "—"
+        keys = "; ".join(rel.rfp_key for rel in rels if rel.rfp_key) or "—"
+        folders = "; ".join(rel.ul_folder for rel in rels if rel.ul_folder) or "—"
+        modes = "; ".join(rel.mode for rel in rels if rel.mode) or "—"
+        items = issues_by_source.get(row.source_id, [])
+        levels = {str(item.level) for item in items}
+        note = _issue_note([item.message for item in items])
+        registry_rows.append(
+            CockpitRow(
+                cells=(
+                    row.source_id or "—",
+                    row.status or "—",
+                    groups,
+                    keys,
+                    folders,
+                    modes,
+                    note,
+                ),
+                tone=_tone_from_levels(levels),
+            )
+        )
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in document.active_rows:
+        for rel in row.relations:
+            if rel.is_empty() or not rel.group_id:
+                continue
+            bucket = grouped.setdefault(
+                rel.group_id,
+                {
+                    "sources": [],
+                    "rfp_key": rel.rfp_key,
+                    "ul_folder": rel.ul_folder,
+                    "mode": rel.mode,
+                },
+            )
+            if row.source_id and row.source_id not in bucket["sources"]:
+                bucket["sources"].append(row.source_id)
+
+    group_rows: list[CockpitRow] = []
+    coverage_rows: list[CockpitRow] = []
+    for group_id, bucket in sorted(grouped.items(), key=lambda item: item[0]):
+        sources: list[str] = bucket["sources"]
+        rfp_key = str(bucket["rfp_key"] or "")
+        ul_folder = str(bucket["ul_folder"] or "")
+        mode = str(bucket["mode"] or "")
+        ds_names = [
+            name for source_id in sources for name in ds_files_by_id.get(source_id, [])
+        ]
+        rfp_names = rfp_files_by_key.get(rfp_key, [])
+        ul_ok = True
+        if mode == MODE_NO_UL:
+            ul_label = "Нет УЛ"
+        elif not ul_folder:
+            ul_ok = False
+            ul_label = "нет папки в реестре"
+        elif ul_root is None:
+            ul_label = ul_folder
+        else:
+            ul_ok = _is_dir(ul_root / ul_folder)
+            ul_label = ul_folder if ul_ok else f"нет: {ul_folder}"
+        status = group_status.get(group_id, "")
+        missing_ds = [sid for sid in sources if sid not in ds_files_by_id]
+        missing_rfp = bool(rfp_key) and not rfp_names
+        notes: list[str] = []
+        levels: set[str] = set()
+        for item in issues_by_group.get(group_id, []):
+            levels.add(str(item.level))
+            notes.append(item.message)
+        if missing_ds:
+            levels.add("WARN")
+            notes.append("нет файла ДС: " + ", ".join(missing_ds))
+        if missing_rfp:
+            levels.add("WARN")
+            notes.append("нет файла RFP")
+        if not ul_ok:
+            levels.add("WARN")
+            notes.append("нет папки УЛ")
+        match = status == STATUS_MATCH
+        if status:
+            notes.insert(0, status)
+        tone = _tone_from_levels(levels, match=match)
+        if match and tone == "ok":
+            tone = "match"
+        group_rows.append(
+            CockpitRow(
+                cells=(
+                    group_id,
+                    "; ".join(sources) or "—",
+                    rfp_key or "—",
+                    ul_label or "—",
+                    "да" if any(item.blocks_overlay for item in issues_by_group.get(group_id, [])) else "нет",
+                    status or "—",
+                ),
+                tone=tone,
+            )
+        )
+        coverage_rows.append(
+            CockpitRow(
+                cells=(
+                    group_id,
+                    ", ".join(ds_names) or ("нет ДС" if missing_ds else "—"),
+                    ", ".join(rfp_names) or ("нет RFP" if missing_rfp else "—"),
+                    ul_label or "—",
+                    "; ".join(notes[:3]) or "OK",
+                ),
+                tone=tone,
+            )
+        )
+    return registry_rows, group_rows, coverage_rows
+
+
+def _file_rows_from_collects(
+    *,
+    ds_files: list[Any],
+    ds_skipped: list[Any],
+    rfp_files: list[Any],
+    rfp_skipped: list[Any],
+    ds_files_by_id: dict[str, list[str]],
+    rfp_files_by_key: dict[str, list[str]],
+) -> list[CockpitRow]:
+    id_by_name = {
+        name: source_id
+        for source_id, names in ds_files_by_id.items()
+        for name in names
+    }
+    key_by_name = {
+        name: key for key, names in rfp_files_by_key.items() for name in names
+    }
+    rows: list[CockpitRow] = []
+    for item in ds_files:
+        name = item.path.name
+        rows.append(
+            CockpitRow(
+                cells=("ДС", item.relpath or name, id_by_name.get(name, "—"), "OK"),
+                tone="ok",
+            )
+        )
+    for item in ds_skipped:
+        rows.append(
+            CockpitRow(
+                cells=("ДС", item.relpath or item.path.name, "—", item.reason),
+                tone="warn",
+            )
+        )
+    for item in rfp_files:
+        name = item.path.name
+        key = key_by_name.get(name, "")
+        tone: Tone = "ok" if key else "warn"
+        rows.append(
+            CockpitRow(
+                cells=("RFP", name, key or "не разобран", "OK" if key else "нет ключа"),
+                tone=tone,
+            )
+        )
+    for item in rfp_skipped:
+        rows.append(
+            CockpitRow(
+                cells=("RFP", item.relpath or item.path.name, "—", item.reason),
+                tone="warn",
+            )
+        )
+    return rows
+
+
+def _count_baseline_quality(baseline: DsBaselineResult) -> dict[str, int]:
+    empty_code = sum(1 for item in baseline.issues if item.code == ISSUE_EMPTY_CODE)
+    qty_errors = sum(1 for item in baseline.issues if item.code in _QTY_ISSUE_CODES)
+    unknown_google = sum(
+        1 for item in baseline.issues if item.code == ISSUE_UNKNOWN_GOOGLE
+    )
+    tag_warnings = sum(1 for item in baseline.issues if item.code in _TAG_ISSUE_CODES)
+    duplicates = sum(1 for item in baseline.issues if item.code == ISSUE_EXACT_DUPLICATE)
+    return {
+        "empty_code": empty_code,
+        "qty_errors": qty_errors,
+        "unknown_google": unknown_google,
+        "tag_warnings": tag_warnings,
+        "duplicates": duplicates,
+    }
+
+
+def _map_ds_files(
+    files: list[Any], active_ids: list[str]
+) -> dict[str, list[str]]:
+    mapped: dict[str, list[str]] = defaultdict(list)
+    for item in files:
+        resolved = resolve_ds_source_id(item.relpath, active_ids)
+        if resolved.source_id:
+            mapped[resolved.source_id].append(item.path.name)
+    return dict(mapped)
+
+
+def _map_rfp_files(files: list[Any]) -> dict[str, list[str]]:
+    mapped: dict[str, list[str]] = defaultdict(list)
+    for item in files:
+        key = rfp_identity_key(parse_rfp_ds_identity(item.path.name)) or ""
+        if key:
+            mapped[key].append(item.path.name)
+    return dict(mapped)
+
+
+def _snapshot_from_registry(
+    *,
+    kind: JobKind,
+    document: DsRegistryDocument,
+    registry_format: str,
+    output_dir: Path | None = None,
+    source_root: Path | None = None,
+    rfp_root: Path | None = None,
+    ul_root: Path | None = None,
+    baseline: DsBaselineResult | None = None,
+    hybrid: DsRfpHybridResult | None = None,
+    migrated_registry_path: Path | None = None,
+    extra_warn: int = 0,
+) -> DsCockpitSnapshot:
+    ul_for_cov = _optional_ul_for_validate(ul_root)
+    active_ids = [row.source_id for row in document.active_rows if row.source_id]
+    ds_files: list[Any] = []
+    ds_skipped: list[Any] = []
+    rfp_files: list[Any] = []
+    rfp_skipped: list[Any] = []
+    if source_root is not None and _is_dir(source_root):
+        ds_files, ds_skipped = collect_ds_workbooks(
+            source_root, registry_path=document.path
+        )
+    if rfp_root is not None and _is_dir(rfp_root):
+        rfp_files, rfp_skipped = collect_rfp_workbooks(rfp_root)
+    ds_files_by_id = _map_ds_files(ds_files, active_ids)
+    rfp_files_by_key = _map_rfp_files(rfp_files)
+    group_status = {}
+    if hybrid is not None:
+        group_status = {item.group_id: item.status for item in hybrid.groups}
+    registry_rows, group_rows, coverage_rows = _registry_tables(
+        document,
+        ds_files_by_id=ds_files_by_id,
+        rfp_files_by_key=rfp_files_by_key,
+        ul_root=ul_for_cov,
+        group_status=group_status,
+    )
+    file_rows = _file_rows_from_collects(
+        ds_files=ds_files,
+        ds_skipped=ds_skipped,
+        rfp_files=rfp_files,
+        rfp_skipped=rfp_skipped,
+        ds_files_by_id=ds_files_by_id,
+        rfp_files_by_key=rfp_files_by_key,
+    )
+    quality = (
+        _count_baseline_quality(baseline)
+        if baseline is not None
+        else {
+            "empty_code": 0,
+            "qty_errors": 0,
+            "unknown_google": 0,
+            "tag_warnings": 0,
+            "duplicates": 0,
+        }
+    )
+    error_count = document.validation.error_count
+    warn_count = sum(1 for item in document.validation.issues if item.level == "WARN")
+    overlay_count = sum(
+        1 for item in document.validation.issues if item.blocks_overlay
+    )
+    if baseline is not None:
+        error_count = baseline.blocking_issue_count
+        warn_count = baseline.warn_count
+        overlay_count = baseline.overlay_count
+    match_count = hybrid.match_count if hybrid is not None else 0
+    mismatch_count = hybrid.mismatch_count if hybrid is not None else 0
+    ds_only_count = hybrid.ds_only_count if hybrid is not None else 0
+    rfp_only_count = hybrid.rfp_only_count if hybrid is not None else 0
+    blocked_count = hybrid.blocked_count if hybrid is not None else 0
+    warn_count += extra_warn
+    if kind == "baseline" and baseline is not None:
+        summary = baseline.summary_line()
+    elif kind == "hybrid" and hybrid is not None:
+        summary = hybrid.summary_line()
+    elif kind == "coverage":
+        missing_rfp = sum(
+            1
+            for row in coverage_rows
+            if any("нет файла RFP" in cell or "нет RFP" in cell for cell in row.cells)
+        )
+        summary = (
+            f"Покрытие: групп={len(group_rows)}, файлов ДС={len(ds_files)}, "
+            f"RFP={len(rfp_files)}, без RFP={missing_rfp}, "
+            f"ERROR={error_count}, WARN={warn_count}"
+        )
+    else:
+        summary = document.validation.summary_line()
+        summary = (
+            f"{summary}; формат={registry_format} v{document.format_version}; "
+            f"активных={len(document.active_rows)}; групп={len(group_rows)}"
+        )
+    return DsCockpitSnapshot(
+        kind=kind,
+        summary=summary,
+        registry_path=document.path,
+        registry_format=registry_format,
+        format_version=document.format_version,
+        output_dir=output_dir,
+        rfp_root=rfp_root,
+        source_root=source_root,
+        ul_root=ul_root,
+        baseline_path=baseline.baseline_path if baseline is not None else None,
+        hybrid_path=hybrid.hybrid_path if hybrid is not None else None,
+        report_path=hybrid.report_path if hybrid is not None else None,
+        migrated_registry_path=migrated_registry_path,
+        active_count=len(document.active_rows),
+        group_count=len(group_rows),
+        error_count=error_count,
+        warn_count=warn_count,
+        overlay_count=overlay_count,
+        match_count=match_count,
+        mismatch_count=mismatch_count,
+        ds_only_count=ds_only_count,
+        rfp_only_count=rfp_only_count,
+        blocked_count=blocked_count,
+        file_count=len(ds_files),
+        rfp_file_count=len(rfp_files),
+        empty_code=quality["empty_code"],
+        qty_errors=quality["qty_errors"],
+        unknown_google=quality["unknown_google"],
+        tag_warnings=quality["tag_warnings"],
+        duplicates=quality["duplicates"],
+        registry_rows=registry_rows,
+        group_rows=group_rows,
+        file_rows=file_rows,
+        coverage_rows=coverage_rows,
+    )
+
+
+def _print_snapshot(snapshot: DsCockpitSnapshot) -> None:
+    _emit(snapshot.summary)
+    _emit(f"Реестр: {snapshot.registry_path} ({snapshot.registry_format})")
+    if snapshot.source_root is not None:
+        _emit(f"ДС: {snapshot.source_root}")
+    if snapshot.rfp_root is not None:
+        _emit(f"RFP: {snapshot.rfp_root}")
+    if snapshot.ul_root is not None:
+        _emit(f"УЛ: {snapshot.ul_root}")
+    if snapshot.output_dir is not None:
+        _emit(f"Отчёты: {snapshot.output_dir}")
+    if snapshot.baseline_path is not None:
+        _emit(f"{BASELINE_XLSX_NAME}: {snapshot.baseline_path}")
+    if snapshot.hybrid_path is not None:
+        _emit(f"{HYBRID_XLSX_NAME}: {snapshot.hybrid_path}")
+    if snapshot.report_path is not None:
+        _emit(f"{snapshot.report_path.name}: {snapshot.report_path}")
+    if snapshot.migrated_registry_path is not None:
+        _emit(f"Копия реестра (не UNC): {snapshot.migrated_registry_path}")
+    _emit(
+        "Счётчики: "
+        f"ERROR={snapshot.error_count}, WARN={snapshot.warn_count}, "
+        f"OVERLAY={snapshot.overlay_count}, MATCH={snapshot.match_count}, "
+        f"без кода={snapshot.empty_code}, qty={snapshot.qty_errors}, "
+        f"вне Google={snapshot.unknown_google}, теги={snapshot.tag_warnings}, "
+        f"дубли={snapshot.duplicates}"
+    )
+
+
+def _fail(message: str, result_path: Path | None = None) -> DsJobResult:
+    _emit(message)
+    return DsJobResult(
+        success=False,
+        message=message,
+        result_path=str(result_path) if result_path is not None else None,
+    )
+
+
+def _store(snapshot: DsCockpitSnapshot) -> DsCockpitSnapshot:
+    global _last_cockpit
+    _last_cockpit = snapshot
+    _print_snapshot(snapshot)
+    return snapshot
+
+
+def _open_registry_for_job(
+    registry_path: Path,
+    *,
+    ul_root: Path | None,
+    output_dir: Path | None,
+    migrate_legacy: bool,
+) -> tuple[DsRegistryDocument | None, str, Path | None, str | None, int]:
+    """Load new-format registry, or migrate legacy into ``output_dir``.
+
+    Returns:
+        ``(document, format, migrated_path, error_message, extra_warn)``.
+    """
+    extra_warn = 0
+    if not _is_file(registry_path):
+        return None, "unknown", None, f"файл реестра не найден: {registry_path}", 0
+    try:
+        fmt = detect_registry_format(registry_path)
+    except Exception as exc:
+        return None, "unknown", None, f"не удалось определить формат реестра: {exc}", 0
+    if fmt == "new":
+        document, err = _load_new_registry(registry_path, ul_root=ul_root)
+        return document, fmt, None, err, extra_warn
+    if fmt != "legacy":
+        return (
+            None,
+            fmt,
+            None,
+            (
+                "формат реестра не распознан "
+                "(нужен лист «Реестр ДС» или legacy 4 колонки)"
+            ),
+            extra_warn,
+        )
+    if not migrate_legacy:
+        return (
+            None,
+            fmt,
+            None,
+            (
+                "реестр в старом формате; проверка без миграции невозможна. "
+                "Запустите «Проверить реестр» — копия будет записана в папку отчётов."
+            ),
+            extra_warn,
+        )
+    if output_dir is None:
+        return None, fmt, None, "для миграции нужна папка отчётов", extra_warn
+    err = _ensure_output_dir(output_dir)
+    if err:
+        return None, fmt, None, err, extra_warn
+    migrated = output_dir / "Реестр_ДС_УЛ_migrated.xlsx"
+    if _same_file(migrated, DEFAULT_REGISTRY_PATH) or _same_file(
+        migrated, registry_path
+    ):
+        return (
+            None,
+            fmt,
+            None,
+            "миграция отказана: выход совпадает с каноническим/исходным реестром",
+            extra_warn,
+        )
+    try:
+        result = migrate_registry(registry_path, migrated)
+    except DsRegistryError as exc:
+        return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
+    extra_warn += 1
+    _emit(
+        "Legacy-реестр скопирован в новый формат (канон UNC не заменён): "
+        f"{result.output_path}"
+    )
+    if result.report_path:
+        _emit(f"{MIGRATION_REPORT_PREFIX}: {result.report_path}")
+    document, err = _load_new_registry(result.output_path, ul_root=ul_root)
+    return document, fmt, result.output_path, err, extra_warn
+
+
+def run_ds_registry_check_job(
+    registry_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    ul_root: str | Path | None = None,
+) -> DsJobResult:
+    """Validate the registry; migrate a *copy* into reports if the file is legacy.
+
+    Args:
+        registry_path: Registry xlsx. Default ``gui_paths.last_ds_registry_file``.
+        output_dir: Reports folder for an optional migrated copy.
+        ul_root: TSD root for UL-folder existence. Default
+            ``gui_paths.last_tsd_packing_folder``.
+
+    Returns:
+        Russian summary. ``success`` is false when the file cannot be loaded.
+        Never writes ``DEFAULT_REGISTRY_PATH``.
+    """
+    os.environ.setdefault("PYTHONUTF8", "1")
+    path = _resolve_registry_path(registry_path)
+    reports = _resolve_output_dir(output_dir)
+    ul_path = _resolve_ul_root(ul_root)
+    _emit("Проверка реестра ДС…")
+    document, fmt, migrated, err, extra_warn = _open_registry_for_job(
+        path,
+        ul_root=ul_path,
+        output_dir=reports,
+        migrate_legacy=True,
+    )
+    if document is None:
+        return _fail(err or "реестр не прочитан")
+    snapshot = _store(
+        _snapshot_from_registry(
+            kind="registry",
+            document=document,
+            registry_format=fmt,
+            output_dir=reports if migrated is not None else None,
+            ul_root=ul_path,
+            migrated_registry_path=migrated,
+            extra_warn=extra_warn,
+        )
+    )
+    success = document.validation.is_ok
+    result_path = migrated or document.path
+    return DsJobResult(success=success, message=snapshot.summary, result_path=str(result_path))
+
+
+def run_ds_baseline_job(
+    source_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    ul_root: str | Path | None = None,
+    **kwargs: Any,
+) -> DsJobResult:
+    """Audit trusted DS workbooks and write ``Свод ДС для запуска.xlsx``.
+
+    Args:
+        source_root: Recursive DS folder. Default ``last_ds_trusted_folder``.
+        registry_path: Canonical registry.
+        output_dir: Stamp folder for reports and the baseline.
+        ul_root: Optional TSD root for registry UL checks.
+        **kwargs: Forwarded to ``build_ds_baseline`` (converter, google_index).
+
+    Returns:
+        Russian summary. ``success`` follows ``not baseline.blocking``.
+    """
+    os.environ.setdefault("PYTHONUTF8", "1")
+    source = _resolve_source_root(source_root)
+    if source is None or not _is_dir(source):
+        return _fail(f"папка доверенных ДС не найдена: {source or '—'}")
+    path = _resolve_registry_path(registry_path)
+    reports = _resolve_output_dir(output_dir)
+    err = _ensure_output_dir(reports)
+    if err:
+        return _fail(err)
+    ul_path = _resolve_ul_root(ul_root)
+    _emit("Сбор входа Только ДС…")
+    document, fmt, migrated, load_err, extra_warn = _open_registry_for_job(
+        path,
+        ul_root=ul_path,
+        output_dir=reports,
+        migrate_legacy=True,
+    )
+    if document is None:
+        return _fail(load_err or "реестр не прочитан")
+    _emit("Аудит ДС и запись свода…")
+    try:
+        baseline = build_ds_baseline(source, document, reports, **kwargs)
+    except Exception as exc:
+        return _fail(f"свод ДС не собран: {type(exc).__name__}: {exc}", reports)
+    snapshot = _store(
+        _snapshot_from_registry(
+            kind="baseline",
+            document=document,
+            registry_format=fmt,
+            output_dir=reports,
+            source_root=source,
+            ul_root=ul_path,
+            baseline=baseline,
+            migrated_registry_path=migrated,
+            extra_warn=extra_warn,
+        )
+    )
+    result_path = baseline.baseline_path or reports
+    return DsJobResult(
+        success=not baseline.blocking,
+        message=snapshot.summary,
+        result_path=str(result_path),
+    )
+
+
+def run_ds_hybrid_job(
+    source_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    ul_root: str | Path | None = None,
+    rfp_root: str | Path | None = None,
+    **kwargs: Any,
+) -> DsJobResult:
+    """Build DS baseline then overlay root RFP into the hybrid workbook.
+
+    Args:
+        source_root: Recursive DS folder.
+        registry_path: Canonical registry.
+        output_dir: Stamp folder for baseline, hybrid and the audit report.
+        ul_root: Optional TSD root.
+        rfp_root: Root-only ``RFP_Зиновьев``. Default ``DEFAULT_PARTS_DIR``.
+        **kwargs: ``converter`` (DS), ``rfp_converter``, ``loader`` and other
+            ``build_ds_baseline`` / ``build_ds_rfp_hybrid`` extras.
+
+    Returns:
+        Russian summary. Missing RFP root is a warning inside hybrid, not a
+        crash. ``success`` is false when hybrid is blocked.
+    """
+    os.environ.setdefault("PYTHONUTF8", "1")
+    source = _resolve_source_root(source_root)
+    if source is None or not _is_dir(source):
+        return _fail(f"папка доверенных ДС не найдена: {source or '—'}")
+    path = _resolve_registry_path(registry_path)
+    reports = _resolve_output_dir(output_dir)
+    err = _ensure_output_dir(reports)
+    if err:
+        return _fail(err)
+    ul_path = _resolve_ul_root(ul_root)
+    rfp_path = _resolve_rfp_root(rfp_root)
+    extra_warn = 0
+    if not _is_dir(rfp_path):
+        extra_warn += 1
+        _emit(f"WARN: корень RFP не найден: {rfp_path}")
+    _emit("Проверка RFP и наложение на ДС…")
+    document, fmt, migrated, load_err, migrate_warn = _open_registry_for_job(
+        path,
+        ul_root=ul_path,
+        output_dir=reports,
+        migrate_legacy=True,
+    )
+    extra_warn += migrate_warn
+    if document is None:
+        return _fail(load_err or "реестр не прочитан")
+    ds_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key in {"converter", "google_index", "matrix_path", "write_baseline", "stamp", "equipment_by_code"}
+    }
+    rfp_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key in {"google_index", "matrix_path", "stamp", "equipment_by_code", "write_hybrid"}
+    }
+    if "rfp_converter" in kwargs:
+        rfp_kwargs["converter"] = kwargs["rfp_converter"]
+    if "loader" in kwargs:
+        rfp_kwargs["loader"] = kwargs["loader"]
+    _emit("Аудит ДС…")
+    try:
+        baseline = build_ds_baseline(source, document, reports, **ds_kwargs)
+    except Exception as exc:
+        return _fail(f"свод ДС не собран: {type(exc).__name__}: {exc}", reports)
+    _emit("Сверка корневого RFP и overlay…")
+    try:
+        hybrid = build_ds_rfp_hybrid(baseline, document, rfp_path, reports, **rfp_kwargs)
+    except Exception as exc:
+        return _fail(f"гибрид ДС-RFP не собран: {type(exc).__name__}: {exc}", reports)
+    snapshot = _store(
+        _snapshot_from_registry(
+            kind="hybrid",
+            document=document,
+            registry_format=fmt,
+            output_dir=reports,
+            source_root=source,
+            rfp_root=rfp_path,
+            ul_root=ul_path,
+            baseline=baseline,
+            hybrid=hybrid,
+            migrated_registry_path=migrated,
+            extra_warn=extra_warn,
+        )
+    )
+    result_path = hybrid.hybrid_path or hybrid.report_path or reports
+    return DsJobResult(
+        success=not hybrid.blocking,
+        message=snapshot.summary,
+        result_path=str(result_path),
+    )
+
+
+def run_ds_coverage_job(
+    source_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    ul_root: str | Path | None = None,
+    rfp_root: str | Path | None = None,
+) -> DsJobResult:
+    """Name-only coverage: registry ↔ DS files ↔ root RFP ↔ UL folders.
+
+    Args:
+        source_root: Recursive DS folder.
+        registry_path: Canonical registry.
+        output_dir: Unused for writes; accepted for a uniform job signature.
+        ul_root: TSD root.
+        rfp_root: Root-only RFP folder.
+
+    Returns:
+        Russian summary. Missing RFP is a WARN and does not fail the job.
+        ``success`` is false only when the registry cannot be loaded.
+    """
+    del output_dir
+    os.environ.setdefault("PYTHONUTF8", "1")
+    source = _resolve_source_root(source_root)
+    path = _resolve_registry_path(registry_path)
+    ul_path = _resolve_ul_root(ul_root)
+    rfp_path = _resolve_rfp_root(rfp_root)
+    extra_warn = 0
+    _emit("Только покрытие реестр ↔ ДС ↔ RFP ↔ УЛ…")
+    if source is None or not _is_dir(source):
+        extra_warn += 1
+        _emit(f"WARN: папка доверенных ДС не найдена: {source or '—'}")
+    if not _is_dir(rfp_path):
+        extra_warn += 1
+        _emit(f"WARN: корень RFP не найден: {rfp_path}")
+    document, fmt, migrated, load_err, migrate_warn = _open_registry_for_job(
+        path,
+        ul_root=ul_path,
+        output_dir=None,
+        migrate_legacy=False,
+    )
+    extra_warn += migrate_warn
+    if document is None:
+        return _fail(load_err or "реестр не прочитан")
+    snapshot = _store(
+        _snapshot_from_registry(
+            kind="coverage",
+            document=document,
+            registry_format=fmt,
+            source_root=source if source is not None and _is_dir(source) else None,
+            rfp_root=rfp_path,
+            ul_root=ul_path,
+            migrated_registry_path=migrated,
+            extra_warn=extra_warn,
+        )
+    )
+    return DsJobResult(
+        success=True,
+        message=snapshot.summary,
+        result_path=str(document.path),
+    )
+
+
+__all__ = [
+    "CockpitRow",
+    "DEFAULT_PARTS_DIR",
+    "DEFAULT_REGISTRY_PATH",
+    "DEFAULT_REPORTS_BASE_DIR",
+    "DsCockpitSnapshot",
+    "DsJobResult",
+    "get_last_ds_cockpit",
+    "run_ds_baseline_job",
+    "run_ds_coverage_job",
+    "run_ds_hybrid_job",
+    "run_ds_registry_check_job",
+]

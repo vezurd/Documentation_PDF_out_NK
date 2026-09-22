@@ -25,6 +25,7 @@ from RFQ.rfp_parts.ds_checklist import (
     DEFAULT_DECREASE_DIR,
     DEFAULT_INCREASE_DIR,
 )
+from RFQ.rfp_parts.ds_registry import DEFAULT_REGISTRY_PATH
 from utils.path import make_dir
 
 _tracemalloc_started: bool = False
@@ -143,6 +144,9 @@ def get_default_config() -> Dict[str, Any]:
         "rfp_parts": {
             "auto_update_checklist": True,
             "use_latest_net": True,
+            "input_mode": "legacy_net",
+            "ds_source_dir": "",
+            "ds_registry_path": str(DEFAULT_REGISTRY_PATH),
             "summary_path": str(
                 DEFAULT_BASE / "Сводная таблица ДС по вед.договорам.xlsx"
             ),
@@ -305,19 +309,23 @@ class EffectiveRfpPath:
 
 
 def resolve_effective_rfp_path(config: Dict[str, Any] | None) -> EffectiveRfpPath:
-    """Choose parts net (tagged or no-tags) or ``paths.rfp_path`` from config.
+    """Choose parts net, DS/hybrid stamp, or ``paths.rfp_path`` from config.
 
     Args:
         config: Loaded RFP profile. ``rfp_parts.use_latest_net`` defaults to
-            True (main profile). As-build must force the flag off before call.
-            ``load_tags=false`` selects ``rfp_parts_net_no_tags.xlsx``.
+            True (main profile). As-build must force the flag off before call;
+            then this function always returns ``paths.rfp_path`` and ignores
+            ``input_mode``. ``load_tags=false`` selects
+            ``rfp_parts_net_no_tags.xlsx`` only in ``legacy_net``.
 
     Returns:
         Resolved filesystem path and a short source label.
+        ``used_latest_net`` is True for stamp modes (parts / DS / hybrid).
 
     Raises:
-        FileNotFoundError: Latest net is requested but missing, or the
-            fallback ``paths.rfp_path`` is empty.
+        FileNotFoundError: Latest stamp workbook is requested but missing, or
+            the fallback ``paths.rfp_path`` is empty. Hybrid never falls back
+            to parts net.
     """
     cfg = config if isinstance(config, dict) else {}
     parts = cfg.get("rfp_parts") if isinstance(cfg.get("rfp_parts"), dict) else {}
@@ -334,6 +342,49 @@ def resolve_effective_rfp_path(config: Dict[str, Any] | None) -> EffectiveRfpPat
             used_latest_net=False,
             detail="paths.rfp_path",
         )
+    from RFQ.rfp_parts.ds_hybrid_preflight import (
+        INPUT_MODE_DS_ONLY,
+        INPUT_MODE_HYBRID,
+        resolve_ds_baseline_xlsx,
+        resolve_ds_hybrid_xlsx,
+        resolve_input_mode,
+    )
+
+    input_mode = resolve_input_mode(cfg)
+    if input_mode == INPUT_MODE_DS_ONLY:
+        latest = resolve_ds_baseline_xlsx()
+        if latest is None:
+            raise FileNotFoundError(
+                "Не найден «Свод ДС для запуска.xlsx» в папке "
+                "«RFP сводный файл\\_ds_baseline». На вкладке "
+                "RFP · Сбор частей выполните «Собрать вход Только ДС» "
+                "или запустите RFP · Запуск в режиме «Свод ДС» "
+                "(preflight пересоберёт свод). Либо снимите галку "
+                "и укажите «Файл RFP»."
+            )
+        return EffectiveRfpPath(
+            path=str(latest),
+            used_latest_net=True,
+            detail="latest Свод ДС для запуска.xlsx",
+        )
+    if input_mode == INPUT_MODE_HYBRID:
+        latest = resolve_ds_hybrid_xlsx()
+        if latest is None:
+            raise FileNotFoundError(
+                "Не найден «Свод ДС-RFP для запуска.xlsx» в папке "
+                "«RFP сводный файл\\_ds_hybrid». Нет подстановки свода "
+                "частей rfp_parts_net.xlsx. На вкладке RFP · Сбор частей "
+                "выполните «Проверить RFP и наложить» или запустите "
+                "RFP · Запуск в режиме «Свод ДС-RFP» (preflight "
+                "пересоберёт гибрид). Либо снимите галку и укажите "
+                "«Файл RFP»."
+            )
+        return EffectiveRfpPath(
+            path=str(latest),
+            used_latest_net=True,
+            detail="latest Свод ДС-RFP для запуска.xlsx",
+        )
+
     from RFQ.rfp_parts.analyze_rfp_parts import (
         resolve_latest_rfp_parts_net_no_tags_xlsx,
         resolve_latest_rfp_parts_net_xlsx,

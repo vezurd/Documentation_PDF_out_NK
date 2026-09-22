@@ -482,44 +482,46 @@
     "last_tsd_packing_folder": "\\\\bcc\\root\\CurProjects\\di_manegers\\Пятницкий_П\\Амурский ГХК\\Поставки\\ТСД по всем ДС",
     "last_tsd_summary_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\УЛ сводный файл\\tsd_packing_summary_2026.08.12_10.30.20.xlsx",
     "last_upd_folder": "\\\\bcc\\root\\CurProjects\\di_manegers\\Пятницкий_П\\Амурский ГХК\\Поставки\\Файл закачки УПД по всем ДС",
-    "last_upd_summary_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\УПД сводный файл\\upd_summary_2026.09.14_16.43.10.xlsx"
+    "last_upd_summary_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\УПД сводный файл\\upd_summary_2026.09.14_16.43.10.xlsx",
+    "last_ds_trusted_folder": "C:\\Users\\ydruzev\\PycharmProjects\\ДС_дляРобота _уменьшение_2026.09.21",
+    "last_ds_registry_file": "\\\\bcc\\eng\\PrDoc\\377_НИПИГАЗ\\АГХК\\КСБ\\RFP_MTO_VO\\_RFP\\Реестр_ДС_УЛ.xlsx"
   },
   "gui_window": {
-    "width": 2420,
-    "height": 1253,
-    "maximized": true,
+    "width": 2319,
+    "height": 1094,
+    "maximized": false,
     "splitters": {
       "run": [
-        240,
-        420
+        777,
+        1359
       ],
       "packing": [
-        240,
-        420
+        771,
+        1349
       ],
       "rfp_run": [
-        917,
-        1605
+        240,
+        420
       ],
       "rfp_parts": [
         520,
         770
       ],
       "rfp_ds_id": [
-        240,
-        420
+        829,
+        1452
       ],
       "rfp_ds_mp": [
-        240,
-        420
+        771,
+        1349
       ],
       "misc_run": [
-        918,
-        1604
+        772,
+        1348
       ],
       "upd": [
-        240,
-        420
+        771,
+        1349
       ]
     }
   }

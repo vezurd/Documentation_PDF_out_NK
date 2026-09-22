@@ -7,6 +7,7 @@ import os
 import re
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, NotRequired, TypedDict
 
 from RFQ.ds_compare.ds_vs_mto_excel_columns import (
@@ -77,6 +78,8 @@ class GuiPathsDict(TypedDict):
     last_tsd_summary_file: str
     last_upd_folder: str
     last_upd_summary_file: str
+    last_ds_trusted_folder: str
+    last_ds_registry_file: str
 
 
 class GuiWindowDict(TypedDict):
@@ -89,6 +92,13 @@ class GuiWindowDict(TypedDict):
 
 
 _WATCH_SPLIT_RE = re.compile(r"[,;\n]+")
+
+_LOCAL_DS_TRUSTED_CANDIDATE = Path(
+    r"C:\Users\ydruzev\PycharmProjects\ДС_дляРобота _уменьшение_2026.09.21"
+)
+_DEFAULT_DS_REGISTRY_FILE = (
+    r"\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\Реестр_ДС_УЛ.xlsx"
+)
 
 # Defaults match CenterWindow / split_layout initial sizes.
 _GUI_WINDOW_DEFAULT_W = 1410
@@ -146,6 +156,16 @@ def normalize_excel_export_mode(raw: object) -> str:
     return EXCEL_EXPORT_MODE_BOTH
 
 
+def _default_ds_trusted_folder() -> str:
+    """Local trusted-DS tree when present; otherwise empty (user picks a folder)."""
+    try:
+        if _LOCAL_DS_TRUSTED_CANDIDATE.is_dir():
+            return str(_LOCAL_DS_TRUSTED_CANDIDATE)
+    except OSError:
+        pass
+    return ""
+
+
 def get_default_gui_paths() -> GuiPathsDict:
     return {
         "last_ds_file": "",
@@ -163,6 +183,8 @@ def get_default_gui_paths() -> GuiPathsDict:
             r"\Амурский ГХК\Поставки\Файл закачки УПД по всем ДС"
         ),
         "last_upd_summary_file": "",
+        "last_ds_trusted_folder": _default_ds_trusted_folder(),
+        "last_ds_registry_file": _DEFAULT_DS_REGISTRY_FILE,
     }
 
 
@@ -191,6 +213,15 @@ def normalize_gui_paths(raw: Any) -> GuiPathsDict:
         "last_upd_summary_file": str(
             raw.get("last_upd_summary_file", "")
         ).strip(),
+        "last_ds_trusted_folder": (
+            str(raw["last_ds_trusted_folder"]).strip()
+            if "last_ds_trusted_folder" in raw
+            else base["last_ds_trusted_folder"]
+        ),
+        "last_ds_registry_file": str(
+            raw.get("last_ds_registry_file", base["last_ds_registry_file"])
+        ).strip()
+        or base["last_ds_registry_file"],
     }
 
 

@@ -178,6 +178,8 @@ class RfpNativeSettingsSmokeTest(unittest.TestCase):
         latest_net = self.panel._widgets["rfp_parts.use_latest_net"]
         self.assertFalse(latest_net.isChecked())
         self.assertFalse(latest_net.isEnabled())
+        mode_widget = self.panel._widgets["rfp_parts.input_mode"]
+        self.assertFalse(mode_widget.isEnabled())
 
         goto = next(
             button
@@ -191,6 +193,12 @@ class RfpNativeSettingsSmokeTest(unittest.TestCase):
     def test_latest_net_widget_maps_to_rfp_parts_use_latest_net(self) -> None:
         self.assertIn("rfp_parts.use_latest_net", self.panel._widgets)
         self.assertIn("paths.rfp_path", self.panel._widgets)
+        self.assertIn("rfp_parts.input_mode", self.panel._widgets)
+        mode_widget = self.panel._widgets["rfp_parts.input_mode"]
+        self.assertEqual(mode_widget.currentData(), "legacy_net")
+        self.assertEqual(
+            get_default_config()["rfp_parts"]["input_mode"], "legacy_net"
+        )
         widget = self.panel._widgets["rfp_parts.use_latest_net"]
         self.assertTrue(widget.isChecked())
         widget.setChecked(False)

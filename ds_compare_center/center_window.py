@@ -40,6 +40,12 @@ from RFQ.ds_compare.ds_grouped_compare import (
     get_last_rfq_quantity_audit,
 )
 from RFQ.rfp_parts.ds_id_coverage import run_ds_id_coverage_job
+from RFQ.rfp_parts.ds_jobs import (
+    run_ds_baseline_job,
+    run_ds_coverage_job,
+    run_ds_hybrid_job,
+    run_ds_registry_check_job,
+)
 from RFQ.tags_rfp_compare.ds_manager_roster import (
     get_last_ds_roster_compare,
     resolve_ds_manager_matrix_path,
@@ -125,6 +131,18 @@ _JOB_TITLE_UPD = "УПД (файлы закачки)"
 _JOB_TITLE_RFP = "Сопоставление RFP / MTO / РКД / УЛ"
 _JOB_TITLE_ASBUILD = "Сопоставление as-build RFP / MTO / РКД"
 _JOB_TITLE_RFP_PARTS = "Сбор RFP из частей — только отчёты"
+_JOB_TITLE_DS_BASELINE = "ДС: собрать вход Только ДС"
+_JOB_TITLE_DS_HYBRID = "ДС: проверить RFP и наложить"
+_JOB_TITLE_DS_COVERAGE = "ДС: только покрытие"
+_JOB_TITLE_DS_REGISTRY = "ДС: проверить реестр"
+_JOB_TITLES_DS_COCKPIT = frozenset(
+    {
+        _JOB_TITLE_DS_BASELINE,
+        _JOB_TITLE_DS_HYBRID,
+        _JOB_TITLE_DS_COVERAGE,
+        _JOB_TITLE_DS_REGISTRY,
+    }
+)
 _JOB_TITLE_RFP_DS_ID = "Соответствие ДС: RFP ↔ УЛ"
 _JOB_TITLE_RFP_DS_MP = "Соответствие ДС: RFP ↔ фамилии МП"
 
@@ -231,6 +249,10 @@ class CenterWindow(QWidget):
         )
         self._rfp_parts_panel = RfpPartsPanel(
             on_run=self._run_rfp_parts,
+            on_ds_baseline=self._run_ds_baseline,
+            on_ds_hybrid=self._run_ds_hybrid,
+            on_ds_coverage=self._run_ds_coverage,
+            on_ds_registry=self._run_ds_registry,
         )
         self._rfp_ds_id_panel = RfpDsIdPanel(
             on_run=self._run_rfp_ds_id,
@@ -645,6 +667,8 @@ class CenterWindow(QWidget):
             self._tsd_packing_panel.reload_paths_from_config()
         if hasattr(self, "_upd_panel"):
             self._upd_panel.reload_paths_from_config()
+        if hasattr(self, "_rfp_parts_panel"):
+            self._rfp_parts_panel.reload_paths_from_config()
 
     def _refresh_mto_combo(self) -> None:
         cfg = load_ds_compare_config()
@@ -755,6 +779,10 @@ class CenterWindow(QWidget):
             self._function_job_tab = "misc"
             self._misc_run_panel.monitor.start_job(title)
             self._tabs.setCurrentIndex(_TAB_INDEX_MISC_RUN)
+        elif title in _JOB_TITLES_DS_COCKPIT or job_tab == "rfp_parts":
+            self._function_job_tab = "rfp_parts"
+            self._rfp_parts_panel.monitor.start_job(title)
+            self._tabs.setCurrentIndex(_TAB_INDEX_RFP_PARTS)
         elif title == _JOB_TITLE_RFP_DS_ID:
             self._function_job_tab = "ds_id"
             self._rfp_ds_id_panel.monitor.start_job(title)
@@ -917,6 +945,70 @@ class CenterWindow(QWidget):
             _JOB_TITLE_RFP_PARTS, argv, tab_index=_TAB_INDEX_RFP_PARTS
         )
 
+    def _ds_job_paths(self) -> dict[str, str]:
+        return self._rfp_parts_panel.ds_job_paths()
+
+    def _run_ds_baseline(self) -> None:
+        from RFQ.rfp_parts.ds_hybrid_preflight import ds_baseline_output_dir
+
+        paths = self._ds_job_paths()
+        out_dir = ds_baseline_output_dir()
+        self._rfp_parts_panel.set_last_reports_dir(out_dir)
+        self._start_job(
+            _JOB_TITLE_DS_BASELINE,
+            run_ds_baseline_job,
+            paths["source_root"],
+            paths["registry_path"],
+            out_dir,
+            paths["ul_root"],
+            job_tab="rfp_parts",
+        )
+
+    def _run_ds_hybrid(self) -> None:
+        from RFQ.rfp_parts.ds_hybrid_preflight import ds_hybrid_output_dir
+
+        paths = self._ds_job_paths()
+        out_dir = ds_hybrid_output_dir()
+        self._rfp_parts_panel.set_last_reports_dir(out_dir)
+        self._start_job(
+            _JOB_TITLE_DS_HYBRID,
+            run_ds_hybrid_job,
+            paths["source_root"],
+            paths["registry_path"],
+            out_dir,
+            paths["ul_root"],
+            paths["rfp_root"],
+            job_tab="rfp_parts",
+        )
+
+    def _run_ds_coverage(self) -> None:
+        paths = self._ds_job_paths()
+        self._start_job(
+            _JOB_TITLE_DS_COVERAGE,
+            run_ds_coverage_job,
+            paths["source_root"],
+            paths["registry_path"],
+            None,
+            paths["ul_root"],
+            paths["rfp_root"],
+            job_tab="rfp_parts",
+        )
+
+    def _run_ds_registry(self) -> None:
+        from RFQ.rfp_parts.analyze_rfp_parts import make_reports_out_dir
+
+        paths = self._ds_job_paths()
+        out_dir = make_reports_out_dir()
+        self._rfp_parts_panel.set_last_reports_dir(out_dir)
+        self._start_job(
+            _JOB_TITLE_DS_REGISTRY,
+            run_ds_registry_check_job,
+            paths["registry_path"],
+            out_dir,
+            paths["ul_root"],
+            job_tab="rfp_parts",
+        )
+
     def _run_rfp_ds_id(self) -> None:
         self._start_job(_JOB_TITLE_RFP_DS_ID, run_ds_id_coverage_job)
 
@@ -985,6 +1077,8 @@ class CenterWindow(QWidget):
     def _function_job_monitor(self) -> JobMonitorPanel:
         if self._function_job_tab == "misc":
             return self._misc_run_panel.monitor
+        if self._function_job_tab == "rfp_parts":
+            return self._rfp_parts_panel.monitor
         if self._function_job_tab == "ds_id":
             return self._rfp_ds_id_panel.monitor
         if self._function_job_tab == "ds_mp":
@@ -1006,6 +1100,10 @@ class CenterWindow(QWidget):
     @Slot(bool, str, object)
     def _on_finished(self, success: bool, message: str, result_path: object) -> None:
         rp = str(result_path) if result_path else None
+        if self._last_job_title in _JOB_TITLES_DS_COCKPIT:
+            self._rfp_parts_panel.monitor.finish_job(success, message, rp)
+            self._rfp_parts_panel.on_ds_job_finished(success, message, rp)
+            return
         if self._last_job_title == _JOB_TITLE_RFP_DS_ID:
             self._rfp_ds_id_panel.monitor.finish_job(success, message, None)
             self._rfp_ds_id_panel.on_job_finished(success, message)
