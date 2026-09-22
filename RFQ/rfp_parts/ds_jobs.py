@@ -65,6 +65,9 @@ from RFQ.rfp_parts.ds_rfp_hybrid import (
 Tone = Literal["error", "warn", "match", "ok"]
 JobKind = Literal["registry", "baseline", "hybrid", "coverage"]
 
+DS_REGISTRY_DIR_NAME = "_ds_registry"
+ROBOT_REGISTRY_COPY_NAME = "Реестр_ДС_УЛ_migrated.xlsx"
+
 _QTY_ISSUE_CODES = frozenset(
     {
         ISSUE_QTY_EMPTY,
@@ -112,6 +115,7 @@ class DsCockpitSnapshot:
     hybrid_path: Path | None = None
     report_path: Path | None = None
     migrated_registry_path: Path | None = None
+    next_step: str = ""
     active_count: int = 0
     group_count: int = 0
     error_count: int = 0
@@ -233,6 +237,13 @@ def _resolve_rfp_root(rfp_root: str | Path | None) -> Path:
         if text:
             return Path(text)
     return DEFAULT_PARTS_DIR
+
+
+def ds_registry_robot_dir(reports_base: str | Path | None = None) -> Path:
+    """Stable folder for the robot-facing registry copy. Not the UNC canon."""
+    from RFQ.rfp_parts.analyze_rfp_parts import DEFAULT_REPORTS_BASE_DIR
+
+    return Path(reports_base or DEFAULT_REPORTS_BASE_DIR) / DS_REGISTRY_DIR_NAME
 
 
 def _resolve_output_dir(output_dir: str | Path | None) -> Path:
@@ -514,6 +525,60 @@ def _map_rfp_files(files: list[Any]) -> dict[str, list[str]]:
     return dict(mapped)
 
 
+def _overlay_blocking_labels(document: DsRegistryDocument) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for item in document.validation.issues:
+        if not item.blocks_overlay:
+            continue
+        label = (item.source_id or item.group_id or "").strip()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels
+
+
+def _registry_next_step(
+    document: DsRegistryDocument,
+    *,
+    migrated_path: Path | None,
+    registry_format: str,
+) -> str:
+    """Build the Russian next-step sentence for a registry-kind snapshot."""
+    labels = _overlay_blocking_labels(document)
+    labels_text = ", ".join(labels)
+    if migrated_path is not None:
+        path = str(migrated_path)
+        if labels:
+            return (
+                "Канон UNC не заменён. Для робота записана копия нового формата: "
+                f"{path}. Ошибок нет. Пока нельзя заменить на RFP связи: {labels_text} "
+                "(режим «Требует распределения» — нет фильтров титула и марки). "
+                "Остальные группы робот уже может читать. Дальше: откройте копию, "
+                "проверьте жёлтые строки, затем «Подставить копию роботу» — путь в "
+                "этом окне сменится, файл на UNC останется."
+            )
+        return (
+            "Канон UNC не заменён. Для робота записана копия нового формата: "
+            f"{path}. Замечаний, которые блокируют overlay, нет. Дальше: "
+            "«Подставить копию роботу», чтобы сбор ДС читал этот файл, а не старый UNC."
+        )
+    if registry_format == "new":
+        if labels:
+            return (
+                "Реестр уже нового формата, канон не перезаписывался. "
+                f"Связи без фильтров: {labels_text}. Их группы останутся из ДС, "
+                "пока в реестре не заполнены фильтр титула и фильтр марки. "
+                "Остальное можно собирать кнопкой «Собрать свод только из ДС»."
+            )
+        return (
+            "Реестр нового формата, замечаний нет. Дальше: "
+            "«Собрать свод только из ДС» или «Наложить RFP на группы»."
+        )
+    return ""
+
+
 def _snapshot_from_registry(
     *,
     kind: JobKind,
@@ -603,9 +668,20 @@ def _snapshot_from_registry(
         )
     else:
         summary = document.validation.summary_line()
+        if migrated_registry_path is not None:
+            format_label = "new, скопирован из старого"
+        else:
+            format_label = registry_format
         summary = (
-            f"{summary}; формат={registry_format} v{document.format_version}; "
+            f"{summary}; формат={format_label} v{document.format_version}; "
             f"активных={len(document.active_rows)}; групп={len(group_rows)}"
+        )
+    next_step = ""
+    if kind == "registry":
+        next_step = _registry_next_step(
+            document,
+            migrated_path=migrated_registry_path,
+            registry_format=registry_format,
         )
     return DsCockpitSnapshot(
         kind=kind,
@@ -621,6 +697,7 @@ def _snapshot_from_registry(
         hybrid_path=hybrid.hybrid_path if hybrid is not None else None,
         report_path=hybrid.report_path if hybrid is not None else None,
         migrated_registry_path=migrated_registry_path,
+        next_step=next_step,
         active_count=len(document.active_rows),
         group_count=len(group_rows),
         error_count=error_count,
@@ -672,6 +749,8 @@ def _print_snapshot(snapshot: DsCockpitSnapshot) -> None:
         f"вне Google={snapshot.unknown_google}, теги={snapshot.tag_warnings}, "
         f"дубли={snapshot.duplicates}"
     )
+    if snapshot.next_step:
+        _emit(snapshot.next_step)
 
 
 def _fail(message: str, result_path: Path | None = None) -> DsJobResult:
@@ -739,7 +818,7 @@ def _open_registry_for_job(
     err = _ensure_output_dir(output_dir)
     if err:
         return None, fmt, None, err, extra_warn
-    migrated = output_dir / "Реестр_ДС_УЛ_migrated.xlsx"
+    migrated = output_dir / ROBOT_REGISTRY_COPY_NAME
     if _same_file(migrated, DEFAULT_REGISTRY_PATH) or _same_file(
         migrated, registry_path
     ):
@@ -754,7 +833,6 @@ def _open_registry_for_job(
         result = migrate_registry(registry_path, migrated)
     except DsRegistryError as exc:
         return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
-    extra_warn += 1
     _emit(
         "Legacy-реестр скопирован в новый формат (канон UNC не заменён): "
         f"{result.output_path}"
@@ -762,7 +840,7 @@ def _open_registry_for_job(
     if result.report_path:
         _emit(f"{MIGRATION_REPORT_PREFIX}: {result.report_path}")
     document, err = _load_new_registry(result.output_path, ul_root=ul_root)
-    return document, fmt, result.output_path, err, extra_warn
+    return document, "new", result.output_path, err, extra_warn
 
 
 def run_ds_registry_check_job(
@@ -784,7 +862,7 @@ def run_ds_registry_check_job(
     """
     os.environ.setdefault("PYTHONUTF8", "1")
     path = _resolve_registry_path(registry_path)
-    reports = _resolve_output_dir(output_dir)
+    reports = Path(output_dir) if output_dir else ds_registry_robot_dir()
     ul_path = _resolve_ul_root(ul_root)
     _emit("Проверка реестра ДС…")
     document, fmt, migrated, err, extra_warn = _open_registry_for_job(
@@ -1039,6 +1117,7 @@ __all__ = [
     "DEFAULT_REPORTS_BASE_DIR",
     "DsCockpitSnapshot",
     "DsJobResult",
+    "ds_registry_robot_dir",
     "get_last_ds_cockpit",
     "run_ds_baseline_job",
     "run_ds_coverage_job",

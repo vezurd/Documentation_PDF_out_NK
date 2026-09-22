@@ -23,6 +23,7 @@ from RFQ.rfp_parts.ds_baseline import IdentityDsUnitsConverter
 from RFQ.rfp_parts.ds_jobs import (
     CockpitRow,
     DsCockpitSnapshot,
+    get_last_ds_cockpit,
     run_ds_baseline_job,
     run_ds_coverage_job,
     run_ds_hybrid_job,
@@ -175,7 +176,12 @@ class DsJobsSmokeTest(unittest.TestCase):
             self.assertTrue(
                 any(path.name.startswith(MIGRATION_REPORT_PREFIX) for path in reports.iterdir())
             )
-            self.assertIn("формат=legacy", result.message)
+            self.assertIn("формат=new", result.message)
+            self.assertIn("скопирован из старого", result.message)
+            cockpit = get_last_ds_cockpit()
+            self.assertIsNotNone(cockpit)
+            self.assertIn("Канон UNC не заменён", cockpit.next_step)
+            self.assertIn(migrated.name, cockpit.next_step)
 
     def test_coverage_warns_if_rfp_missing(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
