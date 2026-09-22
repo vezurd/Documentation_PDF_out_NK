@@ -421,6 +421,17 @@ class RfpPartsPanel(QWidget):
         v = QVBoxLayout(box)
         v.setContentsMargins(8, 4, 8, 6)
         v.setSpacing(4)
+        folder_row = QHBoxLayout()
+        folder_row.setContentsMargins(0, 0, 0, 0)
+        btn_registry_folder = QPushButton("Папка реестра", box)
+        btn_registry_folder.setMinimumWidth(0)
+        btn_registry_folder.setToolTip(
+            "Открыть папку, в которой лежит файл из поля «Реестр, который читает робот»."
+        )
+        btn_registry_folder.clicked.connect(self._open_registry_folder)
+        folder_row.addWidget(btn_registry_folder, alignment=Qt.AlignmentFlag.AlignLeft)
+        folder_row.addStretch(1)
+        v.addLayout(folder_row)
         self._cockpit_summary = QLabel("Нет данных cockpit.", box)
         self._cockpit_summary.setWordWrap(True)
         self._cockpit_summary.setTextFormat(Qt.TextFormat.RichText)
@@ -935,6 +946,21 @@ class RfpPartsPanel(QWidget):
         self._edit_registry.setText(str(path))
         self._persist_ds_paths()
         self._refresh_paths()
+
+    def _open_registry_folder(self) -> None:
+        """Open the folder that contains the registry the robot reads."""
+        text = self._edit_registry.text().strip() or str(DEFAULT_REGISTRY_PATH)
+        path = Path(text)
+        folder = path if _safe_is_dir(path) else path.parent
+        if not str(folder):
+            QMessageBox.information(self, "Папка реестра", "Путь реестра не задан.")
+            return
+        try:
+            open_dir(str(folder))
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Папка реестра", f"Не удалось открыть:\n{folder}\n\n{exc}"
+            )
 
     def _open_registry(self) -> None:
         path = Path(

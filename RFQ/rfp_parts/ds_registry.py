@@ -1574,6 +1574,38 @@ def _add_legend_sheet(workbook: Workbook) -> None:
     sheet.print_title_rows = "1:3"
 
 
+def _publish_workbook(tmp_path: Path, target: Path) -> Path:
+    """Replace ``target`` with ``tmp_path``.
+
+    If Excel holds ``target`` open, write ``<имя>_новый_<штамп>.xlsx`` beside it
+    and leave the locked file untouched.
+
+    Returns:
+        The path that now contains the workbook.
+
+    Raises:
+        DsRegistryError: The locked name and the sibling both cannot be written.
+    """
+
+    try:
+        os.replace(tmp_path, target)
+        return target
+    except PermissionError:
+        pass
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    sibling = target.with_name(f"{target.stem}_новый_{stamp}{target.suffix}")
+    try:
+        os.replace(tmp_path, sibling)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        raise DsRegistryError(
+            f"{target.name} открыт в Excel, заменить его нельзя, "
+            f"и соседний файл тоже не записался. Закройте {target.name} "
+            "и повторите проверку."
+        )
+    return sibling
+
+
 def ensure_registry_legend(path: str | Path) -> bool:
     """Add «Как заполнять» when the new-format workbook does not have it.
 
@@ -1762,11 +1794,10 @@ def write_registry_workbook(
     tmp_path = target.with_name(f".{target.stem}.{os.getpid()}.tmp.xlsx")
     try:
         tmp_path.write_bytes(buffer.getvalue())
-        os.replace(tmp_path, target)
+        return _publish_workbook(tmp_path, target)
     except OSError:
         tmp_path.unlink(missing_ok=True)
         raise
-    return target
 
 
 # ---------------------------------------------------------------------------
@@ -2092,15 +2123,15 @@ def migrate_registry(
         )
     legacy_rows = read_legacy_registry(source)
     new_rows, migrate_issues = migrate_legacy_rows(legacy_rows)
-    write_registry_workbook(output, new_rows)
-    loaded = load_registry(output)
+    written = write_registry_workbook(output, new_rows)
+    loaded = load_registry(written)
     # Re-number excel_row to the written file; keep original_excel_row.
     validation = loaded.validation
-    report = Path(report_path) if report_path else default_migration_report_path(output)
+    report = Path(report_path) if report_path else default_migration_report_path(written)
     _write_migration_report(
         report,
         source_path=source,
-        output_path=output,
+        output_path=written,
         legacy_rows=legacy_rows,
         new_rows=loaded.rows,
         issues=migrate_issues,
@@ -2114,7 +2145,7 @@ def migrate_registry(
     ]
     return DsRegistryMigrationResult(
         source_path=source,
-        output_path=output,
+        output_path=written,
         report_path=report,
         rows=loaded.rows,
         validation=validation,

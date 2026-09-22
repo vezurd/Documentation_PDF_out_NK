@@ -862,6 +862,12 @@ def _open_registry_for_job(
         result = migrate_registry(registry_path, migrated)
     except DsRegistryError as exc:
         return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
+    if result.output_path.name != migrated.name:
+        _emit(
+            f"{migrated.name} открыт в Excel, заменить его нельзя. "
+            f"Новая копия с листом «{LEGEND_SHEET_NAME}»: {result.output_path}. "
+            "Закройте старый файл. «Подставить копию роботу» укажет на новый."
+        )
     _emit(
         "Legacy-реестр скопирован в новый формат (канон UNC не заменён): "
         f"{result.output_path}"

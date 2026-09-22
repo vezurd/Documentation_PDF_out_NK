@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -632,6 +633,41 @@ class DsRegistrySmokeTest(unittest.TestCase):
             self.assertIn("занят", str(locked.exception))
             self.assertEqual(target.read_bytes(), original_after)
             self.assertEqual(load_registry(target).rows[0].source_id, "2")
+
+
+class LockedRegistryCopySmokeTest(unittest.TestCase):
+    def test_open_excel_writes_sibling(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            target = Path(raw) / "Реестр_ДС_УЛ_migrated.xlsx"
+            target.write_bytes(b"locked")
+            real_replace = os.replace
+
+            def fake_replace(src, dst):
+                if Path(dst) == target:
+                    raise PermissionError("locked")
+                return real_replace(src, dst)
+
+            row = DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="13",
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС13",
+                        rfp_key="13",
+                        ul_folder="согл УЛ ДС13",
+                        mode=MODE_WHOLE,
+                        block_index=1,
+                    ),
+                ),
+            )
+            with patch(
+                "RFQ.rfp_parts.ds_registry.os.replace", side_effect=fake_replace
+            ):
+                written = write_registry_workbook(target, [row])
+            self.assertNotEqual(written.resolve(), target.resolve())
+            self.assertIn("_новый_", written.name)
+            self.assertEqual(target.read_bytes(), b"locked")
+            self.assertEqual(load_registry(written).rows[0].source_id, "13")
 
 
 if __name__ == "__main__":

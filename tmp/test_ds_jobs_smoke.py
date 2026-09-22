@@ -265,6 +265,7 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
         self.assertIn("Проверить реестр", texts)
         self.assertIn("Собрать свод частей RFP", texts)
         self.assertIn("Подставить копию роботу", texts)
+        self.assertIn("Папка реестра", texts)
         panel.show()
         self.app.processEvents()
         use_btns = [
