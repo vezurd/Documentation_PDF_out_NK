@@ -257,9 +257,9 @@ class RfpPartsPanel(QWidget):
 
     def _build_left(self, left: QWidget, left_layout: QVBoxLayout) -> None:
         left_layout.addWidget(self._build_actions_group(left), stretch=0)
+        left_layout.addWidget(self._build_indicators_group(left), stretch=1)
         left_layout.addWidget(self._build_registry_next_group(left), stretch=0)
         left_layout.addWidget(self._build_source_group(left), stretch=0)
-        left_layout.addWidget(self._build_indicators_group(left), stretch=1)
         left_layout.addWidget(self._build_open_group(left), stretch=0)
 
     def _add_action_with_comment(
@@ -431,6 +431,7 @@ class RfpPartsPanel(QWidget):
 
         tabs = QTabWidget(box)
         tabs.setDocumentMode(True)
+        tabs.setMinimumHeight(560)
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._table_registry = self._make_table(box, _REGISTRY_HEADERS)
         self._table_groups = self._make_table(box, _GROUP_HEADERS)
@@ -464,7 +465,7 @@ class RfpPartsPanel(QWidget):
         table.verticalHeader().setMinimumSectionSize(_FILE_STATUS_ROW_HEIGHT)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         table.setSortingEnabled(False)
-        table.setMinimumHeight(220)
+        table.setMinimumHeight(520)
         table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -522,7 +523,7 @@ class RfpPartsPanel(QWidget):
         table.verticalHeader().setMinimumSectionSize(_FILE_STATUS_ROW_HEIGHT)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         table.setSortingEnabled(False)
-        table.setMinimumHeight(220)
+        table.setMinimumHeight(520)
         table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )

@@ -45,11 +45,13 @@ from RFQ.rfp_parts.ds_identity import parse_rfp_ds_identity
 from RFQ.rfp_parts.ds_registry import (
     DEFAULT_REGISTRY_PATH,
     FORMAT_VERSION,
+    LEGEND_SHEET_NAME,
     MIGRATION_REPORT_PREFIX,
     MODE_NO_UL,
     DsRegistryDocument,
     DsRegistryError,
     detect_registry_format,
+    ensure_registry_legend,
     load_registry,
     migrate_registry,
 )
@@ -769,6 +771,27 @@ def _store(snapshot: DsCockpitSnapshot) -> DsCockpitSnapshot:
     return snapshot
 
 
+def _ensure_legend_on_copy(path: Path) -> None:
+    """Add the how-to sheet to a non-canon copy. A locked Excel file is a warning."""
+
+    try:
+        added = ensure_registry_legend(path)
+    except OSError as exc:
+        _emit(
+            f"Не удалось дописать лист «{LEGEND_SHEET_NAME}» "
+            f"(закройте файл в Excel, если он открыт): {exc}"
+        )
+        return
+    except Exception as exc:
+        _emit(f"Лист «{LEGEND_SHEET_NAME}» не добавлен: {exc}")
+        return
+    if added:
+        _emit(
+            f"Добавлен лист «{LEGEND_SHEET_NAME}»: что обязательно и на что влияет. "
+            "Канон UNC не менялся."
+        )
+
+
 def _open_registry_for_job(
     registry_path: Path,
     *,
@@ -790,6 +813,12 @@ def _open_registry_for_job(
         return None, "unknown", None, f"не удалось определить формат реестра: {exc}", 0
     if fmt == "new":
         document, err = _load_new_registry(registry_path, ul_root=ul_root)
+        if (
+            document is not None
+            and err is None
+            and not _same_file(registry_path, DEFAULT_REGISTRY_PATH)
+        ):
+            _ensure_legend_on_copy(registry_path)
         return document, fmt, None, err, extra_warn
     if fmt != "legacy":
         return (

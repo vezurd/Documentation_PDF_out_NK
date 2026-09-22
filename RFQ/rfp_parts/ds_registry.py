@@ -37,6 +37,7 @@ RegistryFormat = Literal["new", "legacy", "unknown"]
 
 FORMAT_VERSION = 1
 REGISTRY_SHEET_NAME = "Реестр ДС"
+LEGEND_SHEET_NAME = "Как заполнять"
 REGISTRY_TABLE_NAME = "ReestrDS"
 MIGRATION_REPORT_PREFIX = "Отчет по миграции реестра ДС"
 BACKUP_SUFFIX_FORMAT = "%Y%m%d_%H%M%S"
@@ -1381,13 +1382,243 @@ def _add_blank_required_cf(ws: Worksheet, layout: _HeaderLayout, last_row: int) 
             )
 
 
+def _legend_rows() -> list[tuple[str, str, str, str]]:
+    """How-to rows: field, obligation, when to fill, what the robot does."""
+
+    star = "всегда, синий *"
+    yellow = "иногда, жёлтый †"
+    grey = "не обязательно, серый"
+    return [
+        (
+            "Одна строка",
+            star,
+            "Один ДС — одна строка на листе «Реестр ДС».",
+            "Робот собирает свод по этой строке. Вторую поставку того же ДС "
+            "пишите в Связь 2, не через точку с запятой.",
+        ),
+        (
+            "Статус",
+            star,
+            "Активен, История или Отключен.",
+            "В свод попадают только «Активен». История и Отключен робот пропускает.",
+        ),
+        (
+            "ID ДС источника",
+            star,
+            "Номер ДС как в папке: 13, 47, 4905_1. У активных строк номер не повторяется.",
+            "По нему робот находит файл ДС. Чужой номер привяжет не ту спецификацию.",
+        ),
+        (
+            "Предыдущий / старый ДС",
+            grey,
+            "Если знаете, какой ДС заменён.",
+            "Только пометка для человека. На свод и на RFP не влияет.",
+        ),
+        (
+            "Ревизия",
+            grey,
+            "Если ведёте ревизию строки.",
+            "Только пометка. На расчёт не влияет.",
+        ),
+        (
+            "Примечание",
+            grey,
+            "Свободный текст.",
+            "Только пометка. На расчёт не влияет.",
+        ),
+        (
+            "Исходная строка реестра",
+            grey,
+            "Не меняйте: номер строки старого файла.",
+            "Чтобы сверить миграцию. Робот по ней ничего не выбирает.",
+        ),
+        (
+            "Связь 1, Связь 2…",
+            star,
+            "Связь 1 заполните всегда. Связь 2 — только если у этого ДС вторая "
+            "поставка (другая папка УЛ или другой RFP). Пустых дыр не оставляйте: "
+            "нельзя заполнить Связь 2, оставив Связь 1 пустой.",
+            "Каждая связь — отдельная поставка. Робот не смешивает их в одной ячейке.",
+        ),
+        (
+            "ID группы поставки",
+            star,
+            "Обычно точное имя папки УЛ. Если два ДС делят одну поставку "
+            "(например 13 и 47), у обоих одинаковые группа, ключ RFP и папка УЛ.",
+            "Сверка с RFP идёт по группе целиком, не по одному ДС. "
+            "Совпали код, единица и количество — в запуск попадает RFP. "
+            "Нет — вся группа остаётся из ДС.",
+        ),
+        (
+            "Фактический ДС / ключ RFP",
+            star,
+            "Номер, который робот ищет в имени файла в корне RFP_Зиновьев. Пример: 13. "
+            "Один ключ принадлежит только одной группе.",
+            "Подпапки RFP робот не читает. Чужой ключ наложит чужой файл или не найдёт RFP.",
+        ),
+        (
+            "Папка УЛ",
+            yellow,
+            "Точное имя папки в ТСД. Пустой можно оставить только в режиме «Нет УЛ».",
+            "Робот проверяет, что папка есть. Неверное имя — ошибка реестра.",
+        ),
+        (
+            "Режим «Вся ДС»",
+            star,
+            "Все строки этого ДС входят в связь. Фильтры оставьте пустыми. Папку УЛ заполните.",
+            "Обычный случай: один ДС — одна поставка.",
+        ),
+        (
+            "Режим «По фильтру»",
+            yellow,
+            "Заполните и фильтр титула, и фильтр марки. Так один ДС делится на несколько папок УЛ.",
+            "В связь попадут только строки с этим титулом и маркой. "
+            "Пустой фильтр — ошибка, группу на RFP не заменят.",
+        ),
+        (
+            "Режим «Нет УЛ»",
+            star,
+            "Папку УЛ оставьте пустой.",
+            "У поставки нет папки УЛ. Группа получит имя NO_UL: и номер ДС.",
+        ),
+        (
+            "Режим «Требует распределения»",
+            yellow,
+            "Так робот помечает несколько связей без полных фильтров. "
+            "Исправьте: либо одна связь «Вся ДС», либо у каждой связи оба фильтра.",
+            "Пока режим такой, эту группу нельзя заменить на RFP. В своде останется ДС.",
+        ),
+        (
+            "Строки только из RFP",
+            grey,
+            "В реестре их не пишут.",
+            "Если позиции нет в ДС, в свод для запуска она не попадёт.",
+        ),
+    ]
+
+
+def _add_legend_sheet(workbook: Workbook) -> None:
+    """Add or replace the second sheet «Как заполнять»."""
+
+    if LEGEND_SHEET_NAME in workbook.sheetnames:
+        del workbook[LEGEND_SHEET_NAME]
+    sheet = workbook.create_sheet(LEGEND_SHEET_NAME)
+    names = workbook.sheetnames
+    if names.index(LEGEND_SHEET_NAME) != 1 and REGISTRY_SHEET_NAME in names:
+        sheet_index = names.index(LEGEND_SHEET_NAME)
+        workbook.move_sheet(sheet, offset=1 - sheet_index)
+
+    title_font = Font(bold=True, name="Calibri", size=16, color="1B4F72")
+    intro_font = Font(name="Calibri", size=12)
+    header_font = Font(bold=True, name="Calibri", size=11, color="FFFFFF")
+    header_fill = PatternFill(fill_type="solid", fgColor="1B4F72")
+    section_fill = {
+        "всегда, синий *": _FILL_REQUIRED,
+        "иногда, жёлтый †": _FILL_CONDITIONAL,
+        "не обязательно, серый": _FILL_AUX,
+    }
+    section_font = {
+        "всегда, синий *": _FONT_REQUIRED,
+        "иногда, жёлтый †": _FONT_CONDITIONAL,
+        "не обязательно, серый": _FONT_AUX,
+    }
+
+    sheet["A1"] = "Как заполнять реестр"
+    sheet["A1"].font = title_font
+    sheet.merge_cells("A1:D1")
+    sheet.row_dimensions[1].height = 24
+
+    sheet["A2"] = (
+        "Лист «Реестр ДС» читает робот. Этот лист — памятка, на расчёт он не влияет. "
+        "Синий заголовок со * заполняйте всегда. Жёлтый с † — только когда в столбце "
+        "«Когда заполнять» сказано, что поле нужно. Серый можно не трогать."
+    )
+    sheet["A2"].font = intro_font
+    sheet["A2"].alignment = Alignment(wrap_text=True, vertical="center")
+    sheet.merge_cells("A2:D2")
+    sheet.row_dimensions[2].height = 48
+
+    headers = ("Поле", "Обязательность", "Когда заполнять", "На что влияет")
+    for col, text in enumerate(headers, start=1):
+        cell = sheet.cell(row=3, column=col, value=text)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = _ALIGN_HEADER
+    sheet.row_dimensions[3].height = 22
+    sheet.freeze_panes = "A4"
+    sheet.auto_filter.ref = f"A3:D{3 + len(_legend_rows())}"
+
+    for offset, (field_name, duty, when, effect) in enumerate(_legend_rows()):
+        excel_row = 4 + offset
+        values = (field_name, duty, when, effect)
+        for col, text in enumerate(values, start=1):
+            cell = sheet.cell(row=excel_row, column=col, value=text)
+            cell.alignment = _ALIGN_DATA
+            cell.font = _FONT_DATA
+            cell.border = Border(
+                left=_THIN, right=_THIN, top=_THIN, bottom=_THIN
+            )
+        duty_cell = sheet.cell(row=excel_row, column=2)
+        duty_cell.fill = section_fill.get(duty, _FILL_AUX)
+        duty_cell.font = section_font.get(duty, _FONT_AUX)
+        sheet.row_dimensions[excel_row].height = 48
+
+    sheet.column_dimensions["A"].width = 32
+    sheet.column_dimensions["B"].width = 28
+    sheet.column_dimensions["C"].width = 62
+    sheet.column_dimensions["D"].width = 62
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 1
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.print_title_rows = "1:3"
+
+
+def ensure_registry_legend(path: str | Path) -> bool:
+    """Add «Как заполнять» when the new-format workbook does not have it.
+
+    Args:
+        path: Registry xlsx to update in place.
+
+    Returns:
+        True when the sheet was added.
+
+    Raises:
+        OSError: The workbook is open or cannot be replaced.
+        DsRegistryFormatError: The file has no sheet «Реестр ДС».
+    """
+
+    target = Path(path)
+    workbook = load_workbook(target)
+    try:
+        if REGISTRY_SHEET_NAME not in workbook.sheetnames:
+            raise DsRegistryFormatError(
+                f"нет листа «{REGISTRY_SHEET_NAME}»: {target.name}"
+            )
+        if LEGEND_SHEET_NAME in workbook.sheetnames:
+            return False
+        _add_legend_sheet(workbook)
+        buffer = BytesIO()
+        workbook.save(buffer)
+    finally:
+        workbook.close()
+    tmp_path = target.with_name(f".{target.stem}.{os.getpid()}.tmp.xlsx")
+    try:
+        tmp_path.write_bytes(buffer.getvalue())
+        os.replace(tmp_path, target)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return True
+
+
 def write_registry_workbook(
     path: str | Path,
     rows: Sequence[DsRegistryRow],
     *,
     spare_rows: int = DEFAULT_SPARE_ROWS,
 ) -> Path:
-    """Write the canonical one-sheet registry (Excel Table, filters, dropdowns).
+    """Write the registry plus the second sheet «Как заполнять».
 
     Args:
         path: Destination xlsx. Parent directories are created.
@@ -1521,6 +1752,7 @@ def write_registry_workbook(
     for col, header in enumerate(layout.headers, start=1):
         _apply_header_cell(ws.cell(row=1, column=col), header)
     _apply_block_borders(ws, layout, last_row)
+    _add_legend_sheet(wb)
 
     buffer = BytesIO()
     try:

@@ -205,7 +205,17 @@ class DsRegistrySmokeTest(unittest.TestCase):
             )
             wb = _load_xlsx(path)
             try:
-                self.assertEqual(wb.sheetnames, [REGISTRY_SHEET_NAME])
+                self.assertEqual(
+                    wb.sheetnames, [REGISTRY_SHEET_NAME, "Как заполнять"]
+                )
+                legend = wb["Как заполнять"]
+                self.assertIn("Как заполнять реестр", str(legend["A1"].value))
+                names = [
+                    str(legend.cell(row, 1).value or "")
+                    for row in range(4, 20)
+                ]
+                self.assertIn("Режим «Требует распределения»", names)
+                self.assertIn("Режим «Вся ДС»", names)
                 ws = wb[REGISTRY_SHEET_NAME]
                 self.assertEqual(ws.freeze_panes, "A2")
                 self.assertIn(REGISTRY_TABLE_NAME, ws.tables)
