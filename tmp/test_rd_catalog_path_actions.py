@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +10,11 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rd_catalog.path_actions import open_containing_folder, open_directory, open_path
+
+_POS2 = (
+    r"\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\РД\8950\22_POS2"
+    r"\Для передачи\13_рев.03-AN04_от_2026.07.16"
+)
 
 
 def test_open_path_falls_back_to_explorer_on_startfile_error() -> None:
@@ -23,8 +28,9 @@ def test_open_path_falls_back_to_explorer_on_startfile_error() -> None:
     assert message.endswith("folder")
     popen.assert_called_once()
     args = popen.call_args[0][0]
-    assert args[0] == "explorer"
-    assert args[1].startswith("/root,")
+    assert args[0] == "explorer.exe"
+    assert args[1] == r"\\bcc\eng\PrDoc\folder"
+    assert "/root," not in subprocess.list2cmdline(args)
 
 
 def test_open_path_reports_failure_when_explorer_also_fails() -> None:
@@ -41,20 +47,32 @@ def test_open_path_reports_failure_when_explorer_also_fails() -> None:
     assert "Не удалось открыть" in message
 
 
-def test_open_directory_uses_explorer_first() -> None:
+def test_open_directory_uses_startfile() -> None:
     with (
+        patch("rd_catalog.path_actions.os.startfile", return_value=None) as startfile,
+        patch("rd_catalog.path_actions.subprocess.Popen") as popen,
+    ):
+        ok, message = open_directory(_POS2)
+    assert ok is True
+    assert message == _POS2
+    startfile.assert_called_once_with(_POS2)
+    popen.assert_not_called()
+
+
+def test_open_directory_fallback_keeps_spaces_out_of_switches() -> None:
+    with (
+        patch("rd_catalog.path_actions.os.startfile", side_effect=OSError("nope")),
         patch("rd_catalog.path_actions.subprocess.Popen") as popen,
         patch("rd_catalog.path_actions.os.name", "nt"),
-        patch("rd_catalog.path_actions.os.startfile") as startfile,
     ):
-        ok, message = open_directory(r"\\bcc\eng\PrDoc\377_x\05_рев.03_AGCC.287‐6160‐SOS")
+        ok, message = open_directory(_POS2)
     assert ok is True
-    startfile.assert_not_called()
-    popen.assert_called_once()
+    assert message == _POS2
     args = popen.call_args[0][0]
-    assert args[0] == "explorer"
-    assert args[1].startswith("/root,")
-    assert "\u2010" in args[1]
+    assert args == ["explorer.exe", _POS2]
+    cmdline = subprocess.list2cmdline(args)
+    assert "/root," not in cmdline
+    assert '"\\\\bcc\\eng\\' in cmdline or cmdline.startswith("explorer.exe ")
 
 
 def test_open_containing_folder_is_lexical() -> None:
@@ -75,6 +93,7 @@ def test_open_containing_folder_is_lexical() -> None:
 if __name__ == "__main__":
     test_open_path_falls_back_to_explorer_on_startfile_error()
     test_open_path_reports_failure_when_explorer_also_fails()
-    test_open_directory_uses_explorer_first()
+    test_open_directory_uses_startfile()
+    test_open_directory_fallback_keeps_spaces_out_of_switches()
     test_open_containing_folder_is_lexical()
     print("ok")

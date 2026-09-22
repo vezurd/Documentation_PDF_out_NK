@@ -75,11 +75,11 @@ def containing_folder(path: str | None) -> str:
 
 
 def _open_with_explorer(path: str) -> bool:
-    """Open *path* with ``explorer.exe``.
+    """Open *path* with ``explorer.exe`` when ShellExecute failed.
 
-    UNC folders with Unicode dashes (U+2010) sometimes make
-    ``os.startfile`` / ShellExecute do nothing. ``/root,`` keeps Explorer
-    from treating ``\\\\server`` as a switch.
+    The path is its own argument. ``/root,`` is an Explorer switch: a space
+    in ``Для передачи`` makes Python quote the whole switch, and Explorer
+    then opens Documents.
 
     Args:
         path: Normalized local or UNC path.
@@ -91,33 +91,35 @@ def _open_with_explorer(path: str) -> bool:
     if os.name != "nt" or not path:
         return False
     try:
-        subprocess.Popen(["explorer", f"/root,{path}"])
+        subprocess.Popen(["explorer.exe", path])
     except OSError:
         return False
     return True
 
 
 def open_directory(path: str | None) -> tuple[bool, str]:
-    """Open a folder in Explorer without probing the UNC source.
+    """Open a folder without probing the UNC source.
 
-    Prefer ``explorer.exe`` for issued RD packages: ``os.startfile`` can
-    silently fail on UNC names that contain Unicode dashes.
+    ShellExecute (``os.startfile``) is the primary call. It does not parse
+    ``/`` switches, so a space in the issued folder name stays part of the
+    path. ``explorer.exe`` with the bare path is only the fallback.
 
     Args:
         path: Directory path (already a folder, not a file).
 
     Returns:
-        ``(True, path)`` when Explorer was started, otherwise an error.
+        ``(True, path)`` when the folder was handed to Windows, otherwise
+        an error.
     """
 
     normalized = normalize_path(path)
     if not normalized:
         return False, "Путь не указан."
-    if _open_with_explorer(normalized):
-        return True, normalized
     try:
         os.startfile(normalized)  # type: ignore[attr-defined]
     except OSError as exc:
+        if _open_with_explorer(normalized):
+            return True, normalized
         return False, f"Не удалось открыть {normalized}: {exc}"
     return True, normalized
 
