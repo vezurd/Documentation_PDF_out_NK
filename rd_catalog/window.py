@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import webbrowser
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator, Sequence
@@ -86,6 +87,15 @@ from rd_catalog.rd_dump_scan import (
 )
 from rd_catalog.rd_dump_scan_thread import RdDumpScanThread
 from rd_catalog.rd_dump_tab import RdDumpTab
+from rd_catalog.rd_freshness import (
+    AUTO_REFRESH_MAX_FOLDERS,
+    AUTO_REFRESH_PERIOD_S,
+    AUTO_REFRESH_TICK_MS,
+    google_snapshot_fingerprint,
+    stamps_from_records,
+    take_rescan_batch,
+)
+from rd_catalog.rd_freshness_thread import RdFreshnessThread
 from rd_catalog.handoff_export import (
     HANDOFF_LAYOUT_FLAT,
     HandoffKitInput,
@@ -104,6 +114,7 @@ from rd_catalog.customer_pi_auto_mto import (
     AutoMtoFile,
     auto_mto_compare_status,
     auto_mto_path,
+    auto_mto_rd_path_key,
     cached_auto_mto_rd_paths_by_kit,
     format_auto_mto_cell_text,
     kits_with_moved_cached_rd_mto_path,
@@ -231,6 +242,7 @@ from rd_catalog.parse import (
     constructed_kit_rd_title_folder,
     is_transfer_gate_folder_name,
     issued_package_dir,
+    kit_rd_mark_folder_from_path,
     parse_transfer_folder,
     record_has_canonical_layout,
     transfer_name_is_void,
@@ -437,6 +449,7 @@ _NODE_REVISION = "revision"
 _SETTINGS_ORGANIZATION = "Documentation_PDF_out_NK"
 _SETTINGS_APPLICATION = "rd_catalog"
 _WEB_AUTOSTART_KEY = "window/web_server_autostart"
+_AUTO_REFRESH_KEY = "window/auto_refresh_enabled"
 _KITS_DETAIL_TAB_KEY = "window/kits_detail_tab_v2"
 _KITS_DETAIL_PLACEMENT_KEY = "window/kits_detail_placement"
 _KITS_DETAIL_PLACEMENT_BOTTOM = "bottom"
@@ -1248,6 +1261,15 @@ class CatalogWindow(QMainWindow):
         self._deferred_widgets: set[str] = set()
         self._startup_timer: QTimer | None = None
         self._secondary_timer: QTimer | None = None
+        self._census_thread: RdFreshnessThread | None = None
+        self._auto_refresh_armed = False
+        self._google_from_auto = False
+        self._scan_from_auto = False
+        self._google_fingerprint = ""
+        self._auto_google_due = 0.0
+        self._auto_census_due = 0.0
+        self._auto_urgent_folders: list[str] = []
+        self._auto_census_folders: list[str] = []
 
         self.setWindowTitle("Каталог РД · AGCC")
         self.setMinimumSize(1050, 700)
@@ -1266,6 +1288,9 @@ class CatalogWindow(QMainWindow):
             self._on_export_pins_changed
         )
         self._revision_matrix_tab.pair_compare_log.connect(self._append_log)
+        self._revision_matrix_tab.auto_mto_rd_missing.connect(
+            self._on_auto_mto_rd_missing
+        )
         self._auto_mto_compare_refresh_timer = QTimer(self)
         self._auto_mto_compare_refresh_timer.setSingleShot(True)
         self._auto_mto_compare_refresh_timer.setInterval(400)
@@ -1387,6 +1412,10 @@ class CatalogWindow(QMainWindow):
         self._restore_web_autostart()
         self._update_web_label()
         self._startup_timer.start(0)
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setInterval(AUTO_REFRESH_TICK_MS)
+        self._auto_refresh_timer.timeout.connect(self._kick_auto_refresh)
+        self._update_auto_refresh_label()
         QTimer.singleShot(0, self._maybe_autostart_web)
 
     def _build_toolbar(self) -> None:
@@ -1433,6 +1462,28 @@ class CatalogWindow(QMainWindow):
         self._last_scan_label = QLabel("Успешных сканов нет", toolbar)
         self._last_scan_label.setContentsMargins(12, 0, 4, 0)
         toolbar.addWidget(self._last_scan_label)
+        toolbar.addSeparator()
+        self._auto_refresh_cb = QCheckBox("Автоперескан", toolbar)
+        self._auto_refresh_cb.setToolTip(
+            "Раз в 75 минут проверяет Google (два CSV) и список файлов РД "
+            "по размеру и дате, без чтения xlsx и pdf. Изменившиеся папки "
+            "марок пересканируются точечно, не больше 4 за цикл. "
+            "Пропавший файл MTO РД ставит папку марки в очередь сразу. "
+            "По умолчанию включено."
+        )
+        self._auto_refresh_cb.blockSignals(True)
+        self._auto_refresh_cb.setChecked(
+            _settings_bool(self._settings, _AUTO_REFRESH_KEY, True)
+        )
+        self._auto_refresh_cb.blockSignals(False)
+        self._auto_refresh_cb.toggled.connect(self._on_auto_refresh_toggled)
+        toolbar.addWidget(self._auto_refresh_cb)
+        self._auto_refresh_label = QLabel("выкл", toolbar)
+        self._auto_refresh_label.setMinimumWidth(110)
+        self._auto_refresh_label.setToolTip(
+            "Состояние автоперескана: ждёт, Google, список РД или перескан папки."
+        )
+        toolbar.addWidget(self._auto_refresh_label)
         toolbar.addSeparator()
         self._web_autostart_cb = QCheckBox("Автозапуск WEB", toolbar)
         self._web_autostart_cb.setToolTip(
@@ -2812,6 +2863,7 @@ class CatalogWindow(QMainWindow):
             if not self._catalog_workers_busy():
                 self.statusBar().clearMessage()
         self._resume_pending_mto_compare()
+        self._arm_auto_refresh()
 
     def _apply_startup_snapshot(self, snapshot: StartupSnapshot) -> None:
         """Install the worker snapshot and paint only the Комплекты table."""
@@ -2847,6 +2899,7 @@ class CatalogWindow(QMainWindow):
             self._an_files_by_kit = snapshot.an_by_kit
             self._rd_dump_files = snapshot.rd_dump_files
             self._robot_mto_accepts = dict(snapshot.robot_mto_accepts)
+            self._remember_google_fingerprint()
             self._mto_content_by_kit = snapshot.mto_content_by_kit
             self._export_pins_by_key = snapshot.export_pins
             self._set_mto_worklist_rows(snapshot.worklist_rows)
@@ -5327,6 +5380,7 @@ class CatalogWindow(QMainWindow):
 
         if not hasattr(self, "_revision_matrix_tab"):
             return
+        self._forget_resolved_auto_mto_errors()
         self._revision_matrix_tab.set_auto_mto_queue_paused(
             self._catalog_workers_busy()
         )
@@ -9278,7 +9332,7 @@ class CatalogWindow(QMainWindow):
         self._update_layout_report_action()
 
     def _catalog_workers_busy(self) -> bool:
-        """Return True when a scan / АН / РД dump / Google / robot / SQ / export / PI worker is active.
+        """Return True when a scan / census / АН / РД dump / Google / robot / SQ / export / PI worker is active.
 
         AutoMTO, AN content compares, and transfer-review MTO compares are
         not catalog workers: scan and Google stay available while those
@@ -9296,6 +9350,7 @@ class CatalogWindow(QMainWindow):
         )
         return (
             self._scan_thread is not None
+            or self._census_thread is not None
             or self._an_scan_thread is not None
             or self._rd_dump_scan_thread is not None
             or self._google_thread is not None
@@ -9393,6 +9448,7 @@ class CatalogWindow(QMainWindow):
         keep_view: bool = False,
         restore_kit: tuple[str, str] | None = None,
         restore_tree: tuple[str, str, str | None] | None = None,
+        interactive: bool = True,
     ) -> None:
         """Start one source scan unless a worker is already active.
 
@@ -9405,14 +9461,17 @@ class CatalogWindow(QMainWindow):
             restore_kit: Title/mark to reselect on Комплекты.
             restore_tree: Title, mark, and transfer key to reselect in
                 «Все документы».
+            interactive: When False, a busy catalog returns without a dialog.
+                Used by the quiet auto-rescan.
         """
 
         if self._busy():
-            QMessageBox.information(
-                self,
-                "Сканирование",
-                "Дождитесь завершения текущей загрузки или сканирования.",
-            )
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "Сканирование",
+                    "Дождитесь завершения текущей загрузки или сканирования.",
+                )
             return
         with perf_span(
             "gui.start_scan",
@@ -9553,6 +9612,273 @@ class CatalogWindow(QMainWindow):
         self.statusBar().showMessage("Загрузка комплектов Google…")
         thread.start()
 
+    def _auto_refresh_enabled(self) -> bool:
+        box = getattr(self, "_auto_refresh_cb", None)
+        return bool(box is not None and box.isChecked())
+
+    def _update_auto_refresh_label(self, text: str | None = None) -> None:
+        label = getattr(self, "_auto_refresh_label", None)
+        if label is None:
+            return
+        if text is None:
+            if not self._auto_refresh_enabled():
+                text = "выкл"
+            elif self._census_thread is not None:
+                text = "список РД…"
+            elif self._google_from_auto:
+                text = "Google…"
+            elif self._scan_from_auto:
+                text = "перескан…"
+            else:
+                text = "ждёт"
+        label.setText(text)
+
+    def _remember_google_fingerprint(self) -> None:
+        self._google_fingerprint = google_snapshot_fingerprint(
+            self._google_kits, self._issuance_sends
+        )
+
+    def _release_auto_mto_pause(self) -> None:
+        if hasattr(self, "_revision_matrix_tab"):
+            self._revision_matrix_tab.set_auto_mto_queue_paused(
+                self._catalog_workers_busy()
+            )
+
+    def _forget_resolved_auto_mto_errors(self) -> None:
+        tab = getattr(self, "_revision_matrix_tab", None)
+        if tab is None:
+            return
+        present = {
+            auto_mto_rd_path_key(record.path)
+            for record in self._all_records
+            if record.source is SourceKind.RD and record.present and record.path
+        }
+        tab.forget_auto_mto_missing_file_errors(present)
+
+    def _arm_auto_refresh(self) -> None:
+        """Start the idle timer; the first Google and RD pass wait 75 minutes."""
+
+        if self._auto_refresh_armed:
+            self._update_auto_refresh_label()
+            return
+        self._auto_refresh_armed = True
+        due = time.monotonic() + AUTO_REFRESH_PERIOD_S
+        self._auto_google_due = due
+        self._auto_census_due = due
+        timer = getattr(self, "_auto_refresh_timer", None)
+        if timer is not None and not timer.isActive():
+            timer.start()
+        if self._auto_refresh_enabled():
+            self._append_log("Автоперескан: включён, первая проверка через 75 мин")
+        self._update_auto_refresh_label()
+
+    @Slot(bool)
+    def _on_auto_refresh_toggled(self, checked: bool) -> None:
+        self._settings.setValue(_AUTO_REFRESH_KEY, bool(checked))
+        self._settings.sync()
+        if checked:
+            self._append_log("Автоперескан: включён")
+            self._update_auto_refresh_label()
+            self._kick_auto_refresh()
+            return
+        self._append_log("Автоперескан: выключен")
+        self._auto_urgent_folders.clear()
+        self._auto_census_folders.clear()
+        census = self._census_thread
+        if census is not None:
+            census.request_cancel()
+        if self._scan_from_auto and self._scan_thread is not None:
+            self._scan_thread.request_cancel()
+            self._append_log("Автоперескан: отмена текущего перескана")
+        self._update_auto_refresh_label("выкл")
+
+    def _enqueue_auto_folder(self, folder: str, *, urgent: bool) -> None:
+        text = str(folder or "").strip()
+        rd_root = str(self.config.rd_root)
+        if not text or not path_is_under(text, rd_root) or path_is_under(rd_root, text):
+            return
+        key = make_path_key(text)
+        queued = [
+            make_path_key(item)
+            for item in (*self._auto_urgent_folders, *self._auto_census_folders)
+        ]
+        if key in queued:
+            return
+        if urgent:
+            self._auto_urgent_folders.append(text)
+        else:
+            self._auto_census_folders.append(text)
+
+    @Slot(str, str, str)
+    def _on_auto_mto_rd_missing(self, title: str, mark: str, path: str) -> None:
+        """Queue one mark-folder rescan after an Auto MTO missing-file error."""
+
+        _target, _revision, pinned = self._auto_mto_rd_target(title, mark)
+        if pinned:
+            self._append_log(
+                f"Автоперескан: {title}-{mark} — нет файла пина, перескан не запускался"
+            )
+            return
+        if not self._auto_refresh_enabled():
+            self._append_log(
+                f"Автоперескан: {title}-{mark} — нет файла MTO РД, автоперескан выключен"
+            )
+            return
+        row = next(
+            (
+                item
+                for item in self._kit_rows
+                if kit_identity_key(item.title, item.mark) == kit_identity_key(title, mark)
+            ),
+            None,
+        )
+        folders: tuple[str, ...]
+        if row is not None:
+            folders = self._rd_rescan_subtrees_for_kit(row)
+        else:
+            folder = kit_rd_mark_folder_from_path(
+                path, self.config.rd_root, title=title
+            )
+            folders = (folder,) if folder else ()
+        if not folders:
+            self._append_log(
+                f"Автоперескан: {title}-{mark} — нет файла MTO РД, папка марки не найдена"
+            )
+            return
+        for folder in folders:
+            self._enqueue_auto_folder(folder, urgent=True)
+        self._append_log(
+            f"Автоперескан: {title}-{mark} — нет файла MTO РД, перескан "
+            + folders[0]
+        )
+        self._kick_auto_refresh()
+
+    def _begin_auto_rescan(self, folder: str) -> None:
+        self._scan_from_auto = True
+        self._append_log(f"Автоперескан: перескан {folder}")
+        self._update_auto_refresh_label(f"перескан {Path(folder).name}")
+        if hasattr(self, "_revision_matrix_tab"):
+            self._revision_matrix_tab.set_auto_mto_queue_paused(True)
+        self.start_scan(
+            (SourceKind.RD,),
+            rd_subtree=folder,
+            keep_view=True,
+            interactive=False,
+        )
+        if self._scan_thread is None:
+            self._scan_from_auto = False
+            self._append_log("Автоперескан: перескан не стартовал")
+            self._release_auto_mto_pause()
+            return
+        self.statusBar().showMessage(f"Автоперескан: {folder}", 10_000)
+
+    def _begin_auto_google(self) -> None:
+        self._google_from_auto = True
+        self._auto_google_due = time.monotonic() + AUTO_REFRESH_PERIOD_S
+        self._append_log("Автоперескан: проверка Google…")
+        self._update_auto_refresh_label("Google…")
+        if hasattr(self, "_revision_matrix_tab"):
+            self._revision_matrix_tab.set_auto_mto_queue_paused(True)
+        thread = KitLoadThread(self.config, self)
+        thread.log.connect(self._append_log)
+        thread.error.connect(self._on_google_error)
+        thread.finished.connect(self._on_google_finished)
+        self._google_thread = thread
+        self._set_workers_enabled(False)
+        self._cancel_action.setEnabled(False)
+        thread.start()
+
+    def _begin_auto_census(self) -> None:
+        baseline = stamps_from_records(self._all_records)
+        if not baseline:
+            self._auto_census_due = time.monotonic() + AUTO_REFRESH_PERIOD_S
+            self._append_log(
+                "Автоперескан: нет снимка РД, список файлов пропущен"
+            )
+            self._update_auto_refresh_label()
+            return
+        if not str(self.config.rd_root).strip():
+            self._auto_census_due = time.monotonic() + AUTO_REFRESH_PERIOD_S
+            self._append_log("Автоперескан: корень РД не задан")
+            return
+        self._append_log("Автоперескан: список файлов РД (размер и дата)…")
+        self._update_auto_refresh_label("список РД…")
+        if hasattr(self, "_revision_matrix_tab"):
+            self._revision_matrix_tab.set_auto_mto_queue_paused(True)
+        thread = RdFreshnessThread(self.config, baseline, self)
+        thread.log.connect(self._append_log)
+        thread.finished.connect(self._on_census_finished)
+        self._census_thread = thread
+        self._set_workers_enabled(False)
+        self._cancel_action.setEnabled(True)
+        self._auto_census_due = time.monotonic() + AUTO_REFRESH_PERIOD_S
+        thread.start()
+
+    @Slot()
+    def _on_census_finished(self) -> None:
+        thread = self._census_thread
+        self._census_thread = None
+        if thread is not None:
+            thread.deleteLater()
+        self._set_workers_enabled(True)
+        self._cancel_action.setEnabled(False)
+        if not self._auto_refresh_enabled():
+            self._release_auto_mto_pause()
+            self._update_auto_refresh_label("выкл")
+            self._update_action_states()
+            return
+        if thread is None or thread.failure:
+            detail = thread.failure if thread is not None else "нет потока"
+            self._append_log(f"Автоперескан: список РД — {detail}")
+        elif thread.cancelled:
+            self._append_log("Автоперескан: список РД отменён")
+        else:
+            batch, left = take_rescan_batch(
+                thread.folders, limit=AUTO_REFRESH_MAX_FOLDERS
+            )
+            for folder in batch:
+                self._enqueue_auto_folder(folder, urgent=False)
+            self._append_log(
+                f"Автоперескан: список РД, файлов {thread.seen}, "
+                f"папок к перескану {len(batch)}"
+                + (f", ещё {left} в следующем цикле" if left else "")
+            )
+        self._release_auto_mto_pause()
+        self._update_action_states()
+        self._kick_auto_refresh()
+
+    def _kick_auto_refresh(self) -> None:
+        """Start the next quiet Google check, RD listing, or mark-folder rescan."""
+
+        if not self._auto_refresh_enabled():
+            self._update_auto_refresh_label("выкл")
+            return
+        if not self._auto_refresh_armed:
+            self._update_auto_refresh_label("ждёт")
+            return
+        if self._census_thread is not None or self._google_from_auto or self._scan_from_auto:
+            self._update_auto_refresh_label()
+            return
+        if self._busy():
+            self._update_auto_refresh_label("ждёт")
+            return
+        if self._auto_urgent_folders:
+            folder = self._auto_urgent_folders.pop(0)
+            self._begin_auto_rescan(folder)
+            return
+        if self._auto_census_folders:
+            folder = self._auto_census_folders.pop(0)
+            self._begin_auto_rescan(folder)
+            return
+        now = time.monotonic()
+        if now >= self._auto_google_due:
+            self._begin_auto_google()
+            return
+        if now >= self._auto_census_due:
+            self._begin_auto_census()
+            return
+        self._update_auto_refresh_label("ждёт")
+
     @Slot()
     def cancel_scan(self) -> None:
         """Request cancellation of the active scan or MTO compare."""
@@ -9560,6 +9886,10 @@ class CatalogWindow(QMainWindow):
         if self._scan_thread is not None:
             self._cancel_action.setEnabled(False)
             self._scan_thread.request_cancel()
+        elif self._census_thread is not None:
+            self._cancel_action.setEnabled(False)
+            self._census_thread.request_cancel()
+            self._append_log("Автоперескан: отмена списка РД")
         elif self._an_scan_thread is not None:
             self._cancel_action.setEnabled(False)
             self._an_scan_thread.request_cancel()
@@ -10031,6 +10361,8 @@ class CatalogWindow(QMainWindow):
             sq=getattr(thread, "_sq_subtree", "") or "",
             robot=getattr(thread, "_robot_subtree", "") or "",
         ):
+            auto_scan = self._scan_from_auto
+            self._scan_from_auto = False
             failure = thread.failure
             compare_scope = thread.compare_enqueue_scope
             touched_mto_keys = tuple(thread.touched_mto_keys)
@@ -10089,6 +10421,12 @@ class CatalogWindow(QMainWindow):
                 )
             self._start_mto_compare_after_scan(compare_scope, touched_mto_keys)
             self._update_action_states()
+            if auto_scan:
+                if failure:
+                    self._append_log(f"Автоперескан: перескан не завершён — {failure}")
+                else:
+                    self._append_log("Автоперескан: перескан папки завершён")
+                self._kick_auto_refresh()
 
     @Slot(str)
     def _on_google_error(self, message: str) -> None:
@@ -10101,6 +10439,8 @@ class CatalogWindow(QMainWindow):
         if thread is None:
             return
         with perf_span("gui.google_finished"):
+            auto = self._google_from_auto
+            self._google_from_auto = False
             result = thread.result
             failure = thread.failure
             self._set_workers_enabled(True)
@@ -10108,7 +10448,33 @@ class CatalogWindow(QMainWindow):
             self._progress.setValue(1)
             self._google_thread = None
             thread.deleteLater()
+            if auto and (result is None or result.error):
+                detail = failure or (result.error if result is not None else "нет ответа")
+                self._append_log(f"Автоперескан: Google — {detail}")
+                self._release_auto_mto_pause()
+                self._kick_auto_refresh()
+                self._update_action_states()
+                return
             if result is not None and not result.error:
+                fingerprint = google_snapshot_fingerprint(
+                    result.kits, result.issuance_sends
+                )
+                if (
+                    auto
+                    and self._google_fingerprint
+                    and fingerprint == self._google_fingerprint
+                ):
+                    self._append_log("Автоперескан: Google без изменений")
+                    self._release_auto_mto_pause()
+                    self.statusBar().showMessage(
+                        "Автоперескан: Google без изменений", 8_000
+                    )
+                    self._kick_auto_refresh()
+                    self._update_action_states()
+                    return
+                self._google_fingerprint = fingerprint
+                if auto:
+                    self._append_log("Автоперескан: Google изменился")
                 self._google_kits = result.kits
                 self._issuance_kits = result.issuance_kits
                 self._issuance_sends = result.issuance_sends
@@ -10157,6 +10523,8 @@ class CatalogWindow(QMainWindow):
                     10_000,
                 )
             self._update_action_states()
+            if auto:
+                self._kick_auto_refresh()
 
     def _confirm_robot_mto_sync(self, row: KitMatrixRow) -> None:
         """Confirm copying the newest RD/SQ MTO into the robot folder."""
@@ -11038,6 +11406,11 @@ class CatalogWindow(QMainWindow):
             self._doc_filter_timer.stop()
         if hasattr(self, "_auto_mto_compare_refresh_timer"):
             self._auto_mto_compare_refresh_timer.stop()
+        if hasattr(self, "_auto_refresh_timer"):
+            self._auto_refresh_timer.stop()
+        census = getattr(self, "_census_thread", None)
+        if census is not None:
+            census.request_cancel()
         startup_thread = getattr(self, "_startup_thread", None)
         if startup_thread is not None:
             try:
@@ -11109,6 +11482,18 @@ class CatalogWindow(QMainWindow):
                     self,
                     "Сканирование",
                     "Сканирование ещё завершается. Повторите закрытие через несколько секунд.",
+                )
+                self._restore_deferred_load_timers(startup_pending, secondary_pending)
+                event.ignore()
+                return
+        census_thread = getattr(self, "_census_thread", None)
+        if census_thread is not None and census_thread.isRunning():
+            census_thread.request_cancel()
+            if not census_thread.wait(3000):
+                QMessageBox.information(
+                    self,
+                    "Автоперескан",
+                    "Список файлов РД ещё завершается. Повторите закрытие через несколько секунд.",
                 )
                 self._restore_deferred_load_timers(startup_pending, secondary_pending)
                 event.ignore()
@@ -11234,6 +11619,10 @@ class CatalogWindow(QMainWindow):
         if hasattr(self, "_web_autostart_cb"):
             self._settings.setValue(
                 _WEB_AUTOSTART_KEY, self._web_autostart_cb.isChecked()
+            )
+        if hasattr(self, "_auto_refresh_cb"):
+            self._settings.setValue(
+                _AUTO_REFRESH_KEY, self._auto_refresh_cb.isChecked()
             )
         if hasattr(self, "_web_server"):
             for signal, slot in (

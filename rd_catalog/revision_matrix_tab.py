@@ -60,6 +60,7 @@ from rd_catalog.customer_pi_auto_mto import (
     auto_mto_rd_paths_match,
     needs_auto_mto_compare,
 )
+from rd_catalog.rd_freshness import rd_read_error_is_missing
 from rd_catalog.config import CatalogConfig
 from rd_catalog.context_menu_qt import exec_tracked_menu
 from rd_catalog.context_menu_usage import MENU_HEATMAP
@@ -201,6 +202,7 @@ _AUTO_MTO_COMPARE_KIND_ORDER = {
     "soft": 2,
     "rev_match": 3,
     "not_compared": 4,
+    "error": 4,
     "no_match": 5,
     "stale": 6,
     "no_rd": 7,
@@ -392,6 +394,7 @@ class RevisionMatrixTab(QWidget):
     export_pins_changed = Signal()
     pair_compare_log = Signal(str)
     auto_mto_compare_finished = Signal()
+    auto_mto_rd_missing = Signal(str, str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1907,6 +1910,10 @@ class RevisionMatrixTab(QWidget):
             return
         key, rd_path = context
         self.apply_auto_mto_compare_result(key[0], key[1], rd_path, result)
+        if result.match_kind == "not_compared" and rd_read_error_is_missing(
+            result.error or ""
+        ):
+            self.auto_mto_rd_missing.emit(key[0], key[1], rd_path)
         if result.match_kind == "single":
             grade = (
                 "ПоКоду и Кол-ву"
@@ -1956,7 +1963,32 @@ class RevisionMatrixTab(QWidget):
         stored_path, result = cached
         if not auto_mto_rd_paths_match(stored_path, rd_path):
             return False
+        if result.match_kind == "not_compared" and result.error:
+            return True
         return result.match_kind in _PERSISTABLE_COMPARE_KINDS
+
+    def forget_auto_mto_missing_file_errors(
+        self, present_path_keys: set[str]
+    ) -> None:
+        """Drop a missing-file error once that RD path is present again.
+
+        Args:
+            present_path_keys: ``auto_mto_rd_path_key`` values of present
+                RD files. A still-absent path keeps the error so the queue
+                does not retry it.
+        """
+
+        drop: list[tuple[str, str]] = []
+        for key, (path, result) in self._auto_mto_comparisons.items():
+            if result.match_kind != "not_compared" or not result.error:
+                continue
+            if not rd_read_error_is_missing(result.error):
+                continue
+            if auto_mto_rd_path_key(path) in present_path_keys:
+                drop.append(key)
+        for key in drop:
+            self._auto_mto_comparisons.pop(key, None)
+            self._auto_mto_comparison_sigs.pop(key, None)
 
     def _auto_mto_job_queued(self, key: tuple[str, str], rd_path: str) -> bool:
         return any(
@@ -2164,6 +2196,18 @@ class RevisionMatrixTab(QWidget):
             if not files:
                 continue
             current = self._selection_rd_path(key)
+            if (
+                result.match_kind == "not_compared"
+                and rd_read_error_is_missing(result.error or "")
+                and (not current or auto_mto_rd_paths_match(rd_path, current))
+            ):
+                _remember(
+                    key,
+                    current or rd_path,
+                    result,
+                    sig=self._auto_mto_comparison_sigs.get(key),
+                )
+                continue
             if current and not auto_mto_rd_paths_match(rd_path, current):
                 continue
             if not self._in_memory_comparison_current(key, result, files):

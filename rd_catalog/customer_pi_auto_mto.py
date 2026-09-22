@@ -452,10 +452,15 @@ def auto_mto_compare_status(
                 text="не совпало",
                 tooltip="\n".join(tips),
             )
-        text = "ошибка" if comparison.error else "не сверялось"
+        if comparison.error:
+            return AutoMtoCompareStatus(
+                kind="error",
+                text="ошибка",
+                tooltip="\n".join(tips),
+            )
         return AutoMtoCompareStatus(
             kind="not_compared",
-            text=text,
+            text="не сверялось",
             tooltip="\n".join(tips),
         )
     auto = pick_auto_mto_file(files, rd_revision)
@@ -497,6 +502,7 @@ def needs_auto_mto_compare(status: AutoMtoCompareStatus) -> bool:
 
     Returns:
         True for ``not_compared``, ``rev_match``, or ``stale``.
+        A stored read error (``error`` / «ошибка») is not queued again.
     """
 
     return status.kind in {"not_compared", "rev_match", "stale"}
