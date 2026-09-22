@@ -71,7 +71,7 @@ from RFQ.units_convert.models import (
 
 IssueLevel = Literal["ERROR", "WARN", "OVERLAY"]
 
-ALGORITHM_VERSION = "ds_baseline_v1"
+ALGORITHM_VERSION = "ds_baseline_v2"
 BASELINE_XLSX_NAME = "Свод ДС для запуска.xlsx"
 STRUCTURE_REPORT_PREFIX = "Отчет по структуре файлов - ДС"
 QUALITY_REPORT_PREFIX = "Отчет по качеству данных - ДС"
@@ -100,6 +100,32 @@ CORE_ROLES: tuple[str, ...] = (
     "qty",
 )
 ROLE_INDEX = {role: index for index, role in enumerate(CORE_ROLES)}
+_ROLE_SHORT_RU: dict[str, str] = {
+    "npp": "№ п/п",
+    "title": "Титул",
+    "system": "Раздел",
+    "specification": "Спецификация",
+    "rfq": "RFQ",
+    "name": "Наименование",
+    "code_1c": "Код 1С",
+    "code": "Код РД",
+    "supplier": "Поставщик",
+    "type": "Техтребования",
+    "units": "Ед. изм.",
+    "qty": "Кол-во",
+}
+_LAYOUT_HINT_MAX_CHARS = 500
+_LAYOUT_HINT_MAX_PARTS = 6
+_QTY_SLOT_SAMPLE_ROWS = 40
+_QTY_SLOT_UNIT_WORDS: tuple[str, ...] = (
+    "шт",
+    "м2",
+    "м3",
+    "кг",
+    "компл",
+    "упак",
+    "м",
+)
 
 ISSUE_UNRESOLVED_ID = "unresolved_source_id"
 ISSUE_AMBIGUOUS_ID = "ambiguous_source_id"
@@ -156,6 +182,19 @@ _HEAD_REPEAT_NEEDLES = (
     "код 1с соу",
     "технические требования",
     "ед. изм.",
+)
+_FOOTER_NEEDLES = (
+    "итого",
+    "всего",
+    "на сумму",
+    "общая сумма",
+    "передан через диадок",
+    "банковские реквизиты",
+    "инн ",
+    "кпп ",
+    "р/счет",
+    "р/счёт",
+    "бик:",
 )
 
 # More specific roles first so «Наименование … Поставщика» is not NAME.
@@ -801,10 +840,12 @@ def classify_header_role(text: object) -> str | None:
 
 
 def _is_tag_header(text: object) -> bool:
+    """True for a dedicated Tag column, not a core role that merely mentions TAG."""
+
     label = _norm_header(text)
     if not label:
         return False
-    if classify_header_role(label) == "rfq":
+    if classify_header_role(label) is not None:
         return False
     return bool(_TAG_HEADER_RE.search(label))
 
@@ -850,6 +891,50 @@ def _is_repeated_header(shifted: Sequence[object]) -> bool:
 def _units_party_label(shifted: Sequence[object]) -> bool:
     units = _cell_text(shifted[ROLE_INDEX["units"]] if len(shifted) > ROLE_INDEX["units"] else "")
     return units.strip() in {"ПОКУПАТЕЛЬ", "ПОСТАВЩИК", "Покупатель", "Поставщик"}
+
+
+def _core_text_blob(shifted: Sequence[object]) -> str:
+    parts = [
+        _cell_text(shifted[index] if index < len(shifted) else "")
+        for index in range(CORE_WIDTH)
+    ]
+    return " ".join(parts).casefold()
+
+
+def _has_footer_needle(text: object) -> bool:
+    folded = _cell_text(text).casefold()
+    if not folded:
+        return False
+    return any(needle in folded for needle in _FOOTER_NEEDLES)
+
+
+def _qty_formula_is_aggregate(text: object) -> bool:
+    folded = _cell_text(text).strip().casefold().replace(" ", "")
+    return folded.startswith("=sum") or folded.startswith("=subtotal")
+
+
+def _all_core_ref(shifted: Sequence[object]) -> bool:
+    if CORE_WIDTH <= 0:
+        return False
+    for index in range(CORE_WIDTH):
+        value = shifted[index] if index < len(shifted) else None
+        if _cell_text(value).strip().casefold() != "#ref!":
+            return False
+    return True
+
+
+def _unit_words_in_text(text: object) -> tuple[str, ...]:
+    folded = normalize_units_text(_cell_text(text)).casefold()
+    if not folded:
+        return ()
+    found: list[str] = []
+    for word in _QTY_SLOT_UNIT_WORDS:
+        if word == "м":
+            if re.search(r"(?<![0-9a-zа-яё])м(?![0-9a-zа-яё23])", folded):
+                found.append(word)
+        elif word in folded:
+            found.append(word)
+    return tuple(found)
 
 
 # ---------------------------------------------------------------------------
@@ -1194,57 +1279,80 @@ def _core_duplicate_key(shifted: Sequence[object]) -> tuple[str, ...]:
     return tuple(_cell_text(shifted[i]) for i in range(width))
 
 
-def _validate_core_roles(
-    shifted_header: Sequence[object],
+def _header_is_canon(shifted_header: Sequence[object]) -> bool:
+    """True when shifted A–L classify to ``CORE_ROLES`` in order."""
+
+    for expected, role in enumerate(CORE_ROLES):
+        cell = shifted_header[expected] if expected < len(shifted_header) else None
+        if classify_header_role(cell) != role:
+            return False
+    return True
+
+
+def _sample_qty_slot_unit_words(
+    ws_f: object,
     *,
-    path: Path,
-    relpath: str,
-    sheet: str,
-    header_row: int,
-    source_id: str,
-) -> list[DsBaselineIssue]:
-    issues: list[DsBaselineIssue] = []
-    mapping = _role_map(shifted_header)
-    for role, expected in ROLE_INDEX.items():
-        found_at = mapping.get(role)
-        cell = shifted_header[expected] if expected < len(shifted_header) else ""
-        detected = classify_header_role(cell)
-        if detected == role:
+    header_row: int | None,
+    qty_col_index: int,
+    max_used: int = _QTY_SLOT_SAMPLE_ROWS,
+) -> tuple[str, ...]:
+    """Return unit-word hits in the fixed canon qty slot on the first data rows."""
+
+    if qty_col_index < 0:
+        return ()
+    seen: set[str] = set()
+    used = 0
+    for excel_row, values, _cols in _iter_xml_sheet_rows(
+        ws_f, max_col=qty_col_index + 1
+    ):
+        if header_row is not None and excel_row <= header_row:
             continue
-        if found_at is not None and found_at != expected:
-            issues.append(
-                _issue(
-                    ISSUE_INTERNAL_SHIFT,
-                    "ERROR",
-                    (
-                        f"роль {role} после сдвига в колонке "
-                        f"{get_column_letter(found_at + 1)}, ожидается "
-                        f"{get_column_letter(expected + 1)}"
-                    ),
-                    path=path,
-                    relpath=relpath,
-                    sheet=sheet,
-                    excel_row=header_row,
-                    source_id=source_id,
-                )
-            )
-        else:
-            issues.append(
-                _issue(
-                    ISSUE_MISSING_ROLE,
-                    "ERROR",
-                    (
-                        f"после сдвига в {get_column_letter(expected + 1)} нет роли "
-                        f"{role} (подпись { _norm_header(cell)!r})"
-                    ),
-                    path=path,
-                    relpath=relpath,
-                    sheet=sheet,
-                    excel_row=header_row,
-                    source_id=source_id,
-                )
-            )
-    return issues
+        if not _row_used(values):
+            continue
+        used += 1
+        cell = values[qty_col_index] if qty_col_index < len(values) else None
+        seen.update(_unit_words_in_text(cell))
+        if used >= max_used:
+            break
+    return tuple(word for word in _QTY_SLOT_UNIT_WORDS if word in seen)
+
+
+def _build_layout_hint(
+    header_values: Sequence[object],
+    *,
+    offset: int,
+    qty_slot_unit_words: Sequence[str] = (),
+) -> str:
+    """One Russian sentence describing why the header is not the A–L canon."""
+
+    parts: list[str] = []
+    raw_found = _role_map(header_values)
+    shifted = list(header_values[offset:]) if offset else list(header_values)
+    for expected, role in enumerate(CORE_ROLES):
+        short = _ROLE_SHORT_RU[role]
+        canon_col0 = offset + expected
+        canon_letter = get_column_letter(canon_col0 + 1)
+        cell = shifted[expected] if expected < len(shifted) else None
+        if classify_header_role(cell) == role:
+            continue
+        found_col0 = raw_found.get(role)
+        if _is_empty(cell):
+            parts.append(f"пустой столбец {canon_letter} между ролями")
+        if found_col0 is None:
+            parts.append(f"нет «{short}»")
+        elif found_col0 != canon_col0:
+            found_letter = get_column_letter(found_col0 + 1)
+            parts.append(f"{short} в {found_letter}, в каноне {canon_letter}")
+    role_parts = parts[:_LAYOUT_HINT_MAX_PARTS]
+    if qty_slot_unit_words:
+        shown = ", ".join(qty_slot_unit_words)
+        role_parts.append(f"в слоте количества значения ед. изм. ({shown})")
+    message = "Раскладка не канон A–L."
+    if role_parts:
+        message = f"{message} {'. '.join(role_parts)}."
+    if len(message) > _LAYOUT_HINT_MAX_CHARS:
+        return message[: _LAYOUT_HINT_MAX_CHARS - 1] + "…"
+    return message
 
 
 def _parse_workbook(
@@ -1358,9 +1466,14 @@ def _parse_open_workbook(
         )
     active_scan = next((item for item in scans if item.is_active), None)
     if active_scan is None or not active_scan.is_candidate:
-        extra = ""
+        extra_bits: list[str] = []
         if candidate_names and active_name not in candidate_names:
-            extra = f"; шапка на {', '.join(candidate_names)}"
+            extra_bits.append(f"шапка на {', '.join(candidate_names)}")
+        found_roles = active_scan.roles if active_scan is not None else ()
+        if found_roles:
+            labels = [_ROLE_SHORT_RU.get(role, role) for role in found_roles]
+            extra_bits.append("найдены роли: " + ", ".join(labels))
+        extra = ("; " + "; ".join(extra_bits)) if extra_bits else ""
         issues.append(
             _issue(
                 ISSUE_NO_HEADER,
@@ -1396,34 +1509,11 @@ def _parse_open_workbook(
             offset = _leading_empty_count(header_values)
 
     width = max(len(header_values), offset + CORE_WIDTH)
-    if width - offset < CORE_WIDTH:
-        issues.append(
-            _issue(
-                ISSUE_NOT_ENOUGH_COLUMNS,
-                "ERROR",
-                f"после сдвига {offset} колонок осталось {max(width - offset, 0)} < 12",
-                path=source.path,
-                relpath=source.relpath,
-                sheet=sheet_name,
-                source_id=source_id,
-            )
-        )
-        return positions
-
     shifted_header = _pad(header_values, width)[offset:]
-    header_issues = _validate_core_roles(
-        shifted_header,
-        path=source.path,
-        relpath=source.relpath,
-        sheet=sheet_name,
-        header_row=header_row_num or 0,
-        source_id=source_id,
-    )
-    issues.extend(header_issues)
     tag_columns = [
         index
         for index, value in enumerate(header_values)
-        if _is_tag_header(value) and classify_header_role(value) != "rfq"
+        if _is_tag_header(value)
     ]
     read_max_col = _read_max_col(offset, tag_columns)
     column_notes.append(
@@ -1443,13 +1533,34 @@ def _parse_open_workbook(
             "tail_after_L": max(len(header_values) - offset - CORE_WIDTH, 0),
         }
     )
-    if header_issues:
-        # Still parse positions so nothing is omitted from quality reports.
-        pass
+    if not _header_is_canon(shifted_header):
+        qty_slot_index = offset + ROLE_INDEX["qty"]
+        issues.append(
+            _issue(
+                ISSUE_INTERNAL_SHIFT,
+                "ERROR",
+                _build_layout_hint(
+                    header_values,
+                    offset=offset,
+                    qty_slot_unit_words=_sample_qty_slot_unit_words(
+                        ws_f,
+                        header_row=header_row_num,
+                        qty_col_index=qty_slot_index,
+                    ),
+                ),
+                path=source.path,
+                relpath=source.relpath,
+                sheet=sheet_name,
+                excel_row=header_row_num,
+                source_id=source_id,
+            )
+        )
+        return positions
 
     registry_row = registry_by_id.get(source_id)
     seen_core: dict[tuple[str, ...], int] = {}
     qty_col_index = offset + ROLE_INDEX["qty"]
+    emitted_group_fallback = False
     for excel_row, formula_values, value_values, formula_cols in _iter_paired_sheet_rows(
         ws_f, ws_v, max_col=read_max_col
     ):
@@ -1465,22 +1576,6 @@ def _parse_open_workbook(
             continue
         if _is_boilerplate_shifted(shifted):
             continue
-        row_lead = _leading_empty_count(padded)
-        if row_lead < offset:
-            issues.append(
-                _issue(
-                    ISSUE_INTERNAL_SHIFT,
-                    "ERROR",
-                    (
-                        f"ведущие пустые колонки {row_lead} < шапка {offset}"
-                    ),
-                    path=source.path,
-                    relpath=source.relpath,
-                    sheet=sheet_name,
-                    excel_row=excel_row,
-                    source_id=source_id,
-                )
-            )
 
         value_row = _pad(value_values, read_max_col)
         shifted_values = value_row[offset:]
@@ -1490,6 +1585,13 @@ def _parse_open_workbook(
             return from_values[index] if index < len(from_values) else None
 
         npp = _cell_text(at("npp"))
+        if _has_footer_needle(npp) or _has_footer_needle(
+            _core_text_blob(shifted_values)
+        ):
+            continue
+        qty_formula_obj = at("qty", from_values=shifted)
+        if _qty_formula_is_aggregate(qty_formula_obj):
+            continue
         title = _cell_text(at("title"))
         system = _cell_text(at("system"))
         specification = _cell_text(at("specification"))
@@ -1503,6 +1605,12 @@ def _parse_open_workbook(
         units = normalize_units_text(units_raw)
         qty_raw_obj = at("qty")
         qty_raw_text = _cell_text(qty_raw_obj)
+        qty_probe, _qty_probe_error = _parse_qty(qty_raw_obj)
+        if _all_core_ref(shifted) or _all_core_ref(shifted_values):
+            continue
+        has_identity = bool(title or system or name or supplier or code)
+        if not has_identity and qty_probe is None:
+            continue
         has_formula = qty_col_index in formula_cols
         if has_formula:
             issues.append(
@@ -1610,7 +1718,7 @@ def _parse_open_workbook(
                 registry_row=registry_row,
             )
         )
-        if fallback and group_msg:
+        if fallback and group_msg and not emitted_group_fallback:
             issues.append(
                 _issue(
                     ISSUE_GROUP_FALLBACK,
@@ -1625,6 +1733,7 @@ def _parse_open_workbook(
                     group_id=group_id,
                 )
             )
+            emitted_group_fallback = True
 
         dup_key = _core_duplicate_key(shifted_values)
         previous = seen_core.get(dup_key)
@@ -2049,6 +2158,15 @@ def _write_structure_report(
     return saved
 
 
+def _conversion_needs_report(item: DsBaselinePosition) -> bool:
+    """True when a position is not a pure identity conversion."""
+
+    status = (item.conversion_status or "").strip()
+    if not status or status == STATUS_IDENTITY:
+        return False
+    return True
+
+
 def _write_quality_report(
     path: Path,
     *,
@@ -2145,49 +2263,53 @@ def _write_quality_report(
     qty_ws.column_dimensions["D"].width = 70
     qty_ws.column_dimensions["G"].width = 60
 
-    units_ws = wb.create_sheet("Единицы и конвертация")
-    units_ws.append(
-        [
-            "Файл",
-            "Путь",
-            "Лист",
-            "Строка",
-            "Код",
-            "Исходное кол-во",
-            "Исходная ЕИ",
-            "Коэффициент",
-            "Целевое кол-во",
-            "Целевая ЕИ",
-            "Статус",
-            "Trace",
-        ]
-    )
-    position_count = len(positions)
-    for index, item in enumerate(positions, start=1):
+    units_rows = [
+        item for item in positions if _conversion_needs_report(item)
+    ]
+    if units_rows:
+        units_ws = wb.create_sheet("Единицы и конвертация")
         units_ws.append(
             [
-                item.relpath,
-                str(item.path),
-                item.sheet,
-                item.excel_row,
-                item.code,
-                str(item.qty_source) if item.qty_source is not None else "",
-                item.unit_source,
-                str(item.conversion_coefficient)
-                if item.conversion_coefficient is not None
-                else "",
-                str(item.qty_target) if item.qty_target is not None else "",
-                item.unit_target,
-                item.conversion_status,
-                item.conversion_trace,
+                "Файл",
+                "Путь",
+                "Лист",
+                "Строка",
+                "Код",
+                "Исходное кол-во",
+                "Исходная ЕИ",
+                "Коэффициент",
+                "Целевое кол-во",
+                "Целевая ЕИ",
+                "Статус",
+                "Trace",
             ]
         )
-        if index == 1 or index % 500 == 0 or index == position_count:
-            hb.tick(f"единицы {index}/{position_count}")
-    _style_header(units_ws, 12)
-    units_ws.column_dimensions["A"].width = 36
-    units_ws.column_dimensions["B"].width = 70
-    units_ws.column_dimensions["L"].width = 70
+        units_count = len(units_rows)
+        for index, item in enumerate(units_rows, start=1):
+            units_ws.append(
+                [
+                    item.relpath,
+                    str(item.path),
+                    item.sheet,
+                    item.excel_row,
+                    item.code,
+                    str(item.qty_source) if item.qty_source is not None else "",
+                    item.unit_source,
+                    str(item.conversion_coefficient)
+                    if item.conversion_coefficient is not None
+                    else "",
+                    str(item.qty_target) if item.qty_target is not None else "",
+                    item.unit_target,
+                    item.conversion_status,
+                    item.conversion_trace,
+                ]
+            )
+            if index == 1 or index % 500 == 0 or index == units_count:
+                hb.tick(f"единицы {index}/{units_count}")
+        _style_header(units_ws, 12)
+        units_ws.column_dimensions["A"].width = 36
+        units_ws.column_dimensions["B"].width = 70
+        units_ws.column_dimensions["L"].width = 70
 
     tag_notes: dict[tuple[str, int | None], list[str]] = defaultdict(list)
     for iss in issues:
@@ -2209,7 +2331,7 @@ def _write_quality_report(
     )
     for item in positions:
         note = "; ".join(tag_notes.get((item.relpath, item.excel_row), ()))
-        if not item.diagnostic_tags and not note:
+        if not note:
             continue
         tags_ws.append(
             [

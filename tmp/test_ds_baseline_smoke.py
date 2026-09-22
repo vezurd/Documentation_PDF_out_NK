@@ -443,6 +443,23 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 any(item.blocking for item in result.issues if item.code == ISSUE_QTY_FORMULA)
             )
 
+            shift_issues = [
+                item
+                for item in result.issues
+                if Path(item.relpath).name == "ДС99_shift.xlsx"
+            ]
+            shift_layout = [
+                item for item in shift_issues if item.code == ISSUE_INTERNAL_SHIFT
+            ]
+            self.assertEqual(len(shift_layout), 1)
+            self.assertIn("Раскладка не канон", shift_layout[0].message)
+            self.assertFalse(
+                any(item.code == "missing_core_role" for item in shift_issues)
+            )
+            self.assertFalse(
+                any(item.file_name == "ДС99_shift.xlsx" for item in result.positions)
+            )
+
             structure = _load_xlsx(result.structure_report_path)
             try:
                 self.assertEqual(
@@ -470,17 +487,17 @@ class DsBaselineSmokeTest(unittest.TestCase):
                         "Сводка",
                         "Позиции без кода",
                         "Количества",
-                        "Единицы и конвертация",
                         "Теги",
                         "Дубли",
                         "Коды вне Google",
                         "Источники",
                     },
                 )
-                units_ws = quality["Единицы и конвертация"]
-                self.assertGreaterEqual(units_ws.max_row, 2)
-                self.assertIsNone(units_ws.cell(row=2, column=1).hyperlink)
-                self.assertIsNone(units_ws.cell(row=2, column=2).hyperlink)
+                self.assertNotIn("Единицы и конвертация", quality.sheetnames)
+                empty_ws = quality["Позиции без кода"]
+                self.assertGreaterEqual(empty_ws.max_row, 2)
+                self.assertIsNone(empty_ws.cell(row=2, column=1).hyperlink)
+                self.assertIsNone(empty_ws.cell(row=2, column=2).hyperlink)
                 src_ws = quality["Источники"]
                 self.assertIsNotNone(src_ws.cell(row=2, column=2).hyperlink)
             finally:
@@ -619,19 +636,135 @@ class DsBaselineSmokeTest(unittest.TestCase):
 
             quality = _load_xlsx(result.quality_report_path)
             try:
-                units_ws = quality["Единицы и конвертация"]
-                statuses = [
-                    row[10]
-                    for row in units_ws.iter_rows(min_row=2, values_only=True)
-                    if row[10]
-                ]
-                self.assertIn(STATUS_IDENTITY, statuses)
-                self.assertIsNone(units_ws.cell(row=2, column=1).hyperlink)
-                self.assertIsNone(units_ws.cell(row=2, column=2).hyperlink)
+                self.assertNotIn("Единицы и конвертация", quality.sheetnames)
+                self.assertEqual(
+                    set(quality.sheetnames),
+                    {
+                        "Сводка",
+                        "Позиции без кода",
+                        "Количества",
+                        "Теги",
+                        "Дубли",
+                        "Коды вне Google",
+                        "Источники",
+                    },
+                )
                 src_ws = quality["Источники"]
                 self.assertIsNotNone(src_ws.cell(row=2, column=2).hyperlink)
             finally:
                 quality.close()
+
+    def test_spec_header_with_tag_word_is_not_tag_column(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            header = list(DS_HEADER)
+            header[3] = "Линия/ TAG-Номер/ Спецификация"
+            spec = "AGCC.287-8630-KSB4.MTO-0001"
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    header,
+                    _ds_row(spec=spec, qty=2),
+                    _ds_row(npp=2, spec=spec, qty=4),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            self.assertFalse(result.blocking, result.summary_line())
+            self.assertEqual(len(result.positions), 2)
+            self.assertEqual(
+                {item.qty for item in result.positions},
+                {Decimal("2"), Decimal("4")},
+            )
+            self.assertTrue(all(not item.diagnostic_tags for item in result.positions))
+            self.assertFalse(
+                any(item.code == ISSUE_TAG_DUPLICATE for item in result.issues)
+            )
+            self.assertFalse(
+                any(item.code == ISSUE_TAG_MISMATCH for item in result.issues)
+            )
+
+    def test_non_canon_shift_emits_one_layout_issue_and_no_positions(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(
+                ds_root / "ДС99_shift.xlsx",
+                [DS_HEADER[:7] + ["служебная"] + DS_HEADER[7:], _ds_row()],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            layout = [
+                item for item in result.issues if item.code == ISSUE_INTERNAL_SHIFT
+            ]
+            self.assertEqual(len(layout), 1)
+            self.assertIn("Раскладка не канон", layout[0].message)
+            self.assertEqual(layout[0].excel_row, 1)
+            self.assertFalse(
+                any(item.code == "missing_core_role" for item in result.issues)
+            )
+            self.assertEqual(result.positions, [])
+            self.assertTrue(result.blocking)
+
+    def test_canon_footer_itogo_sum_is_not_a_position(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    DS_HEADER,
+                    _ds_row(npp=1, qty=2),
+                    _ds_row(npp="ИТОГО:", qty="=SUM(L2:L2)", code=""),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            self.assertEqual(len(result.positions), 1)
+            self.assertEqual(result.positions[0].qty, Decimal("2"))
+            self.assertFalse(
+                any(item.code == ISSUE_QTY_FORMULA for item in result.issues)
+            )
+            self.assertFalse(
+                any(item.code == ISSUE_EMPTY_CODE for item in result.issues)
+            )
+            self.assertFalse(result.blocking, result.summary_line())
+
+    def test_empty_code_row_stays_a_position(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    DS_HEADER,
+                    _ds_row(
+                        code="",
+                        title="8529",
+                        name="Кабель",
+                        units="шт",
+                        qty=2,
+                    ),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            self.assertEqual(len(result.positions), 1)
+            self.assertFalse(result.positions[0].code_normalized)
+            self.assertEqual(result.positions[0].qty, Decimal("2"))
+            self.assertTrue(
+                any(item.code == ISSUE_EMPTY_CODE for item in result.issues)
+            )
+            self.assertTrue(result.blocking)
 
 
 class DsBaselineInflatedSheetSmokeTest(unittest.TestCase):
