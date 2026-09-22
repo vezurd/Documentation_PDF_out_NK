@@ -85,10 +85,10 @@ LEGACY_HEADER_UL = "УЛ"
 LEGACY_HEADER_NOTE = "Примечание"
 
 HDR_STATUS = f"Статус {HEADER_REQUIRED_MARK}"
-HDR_SOURCE_ID = f"Номер ДС {HEADER_REQUIRED_MARK}"
+HDR_SOURCE_ID = f"Актуальный номер ДС {HEADER_REQUIRED_MARK}"
 HDR_SOURCE_ID_LEGACY = "ID ДС источника"
 HDR_FILE_DS = "Файл ДС"
-HDR_PREVIOUS = "Предыдущий / старый ДС"
+HDR_PREVIOUS = "Исторический номер ДС"
 HDR_REVISION = "Ревизия"
 HDR_NOTE = "Примечание"
 HDR_ORIGINAL_ROW = "Исходная строка реестра"
@@ -99,9 +99,11 @@ RFP_STATUS_MISS = "не совпало"
 CORE_HEADER_TITLES: tuple[str, ...] = (
     HDR_STATUS,
     HDR_SOURCE_ID,
+    HDR_PREVIOUS,
     HDR_FILE_DS,
 )
-_SOURCE_ID_HEADER_NAMES = ("Номер ДС", "ID ДС источника")
+_SOURCE_ID_HEADER_NAMES = ("Актуальный номер ДС", "Номер ДС", "ID ДС источника")
+_HISTORICAL_HEADER_NAMES = ("Исторический номер ДС", "Предыдущий / старый ДС")
 
 ISSUE_MISSING_SOURCE_ID = "missing_source_id"
 ISSUE_DUPLICATE_SOURCE_ID = "duplicate_source_id"
@@ -143,7 +145,7 @@ _THIN = Side(style="thin", color="B0B0B0")
 _BLOCK_BORDER_COLORS = ("1B4F72", "548235", "C65911", "7030A0")
 _COMMENT_AUTHOR = "реестр ДС"
 
-_CORE_WIDTHS = (16, 18, 42)
+_CORE_WIDTHS = (16, 22, 24, 42)
 _BLOCK_WIDTHS = (22, 16, 42, 16, 32, 26, 18, 18)
 
 _RELATION_FIELD_STEMS = (
@@ -545,8 +547,8 @@ def _layout_from_max_blocks(max_blocks: int) -> _HeaderLayout:
         headers=headers,
         status=1,
         source_id=2,
-        file_ds=3,
-        previous=0,
+        previous=3,
+        file_ds=4,
         revision=0,
         note=0,
         original_row=0,
@@ -574,7 +576,7 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
         title
         for title, present in (
             ("Статус", "Статус" in indexed),
-            ("Номер ДС", bool(source_header)),
+            ("Актуальный номер ДС", bool(source_header)),
         )
         if not present
     ]
@@ -586,9 +588,11 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
     found: dict[int, dict[str, int]] = {}
     known_norm: set[str] = {
         "Статус",
+        "Актуальный номер ДС",
         "Номер ДС",
         "ID ДС источника",
         "Файл ДС",
+        "Исторический номер ДС",
         "Предыдущий / старый ДС",
         "Ревизия",
         "Примечание",
@@ -678,7 +682,10 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
         status=indexed["Статус"],
         source_id=indexed[source_header],
         file_ds=indexed.get("Файл ДС", 0),
-        previous=indexed.get("Предыдущий / старый ДС", 0),
+        previous=next(
+            (indexed[name] for name in _HISTORICAL_HEADER_NAMES if name in indexed),
+            0,
+        ),
         revision=indexed.get("Ревизия", 0),
         note=indexed.get("Примечание", 0),
         original_row=indexed.get("Исходная строка реестра", 0),
@@ -694,15 +701,16 @@ def _header_comment(header: str) -> str:
             "Маркер обязательности — символ * и цвет шапки."
         ),
         HDR_SOURCE_ID: (
-            "Обязательно для статуса Активен (*). Пишите ДС11, ДС47, ДС4905_1. "
-            "У активных строк номер не повторяется."
+            "Обязательно для статуса Активен (*). Это номер файла ДС: ДС11, ДС8, ДС4905_1. "
+            "В Шаге 4 ему соответствует ключ посадки, не ярлык «Порядковый ДС»."
+        ),
+        HDR_PREVIOUS: (
+            "Старый номер, который заменён актуальным. Для пары 14/48 у файла 48 "
+            "здесь 48, а папка УЛ и ключ посадки остаются ДС14. Несколько номеров — через ;."
         ),
         HDR_FILE_DS: (
             "Имя файла ДС. Путь в ячейке не пишется: щелчок открывает файл. "
             "Робот подставляет его при проверке реестра."
-        ),
-        HDR_PREVIOUS: (
-            "Вспомогательное поле. Текст «Старый ДС» как в исходнике, без разбора."
         ),
         HDR_REVISION: "Вспомогательное поле. Заполняется человеком, робот не угадывает.",
         HDR_NOTE: "Вспомогательное поле. Примечание как есть.",
@@ -1201,7 +1209,9 @@ def detect_registry_format(path: str | Path) -> RegistryFormat:
             if header:
                 names = {normalize_header(v) for v in header if v}
                 if "Статус" in names and (
-                    "Номер ДС" in names or "ID ДС источника" in names
+                    "Актуальный номер ДС" in names
+                    or "Номер ДС" in names
+                    or "ID ДС источника" in names
                 ):
                     return "new"
         sheet = workbook[workbook.sheetnames[0]]
@@ -1670,10 +1680,17 @@ def _legend_rows() -> list[tuple[str, str, str, str]]:
             "В свод попадают только «Активен». История и Отключен робот пропускает.",
         ),
         (
-            "Номер ДС",
+            "Актуальный номер ДС",
             star,
-            "Пишите ДС11, ДС47, ДС4905_1. У активных строк номер не повторяется.",
-            "По нему робот находит файл ДС. Чужой номер привяжет не ту спецификацию.",
+            "Номер файла ДС: ДС11, ДС8, ДС4905_1. У активных строк не повторяется.",
+            "По нему робот находит файл ДС. В Шаге 4 это ключ посадки "
+            "(столбец сейчас называется «Фактический ДС»), не ярлык файла «Порядковый ДС».",
+        ),
+        (
+            "Исторический номер ДС",
+            grey,
+            "Старый номер из прежнего реестра. Несколько — через точку с запятой.",
+            "На количества не влияет. Нужен, чтобы видеть, какой номер заменён актуальным.",
         ),
         (
             "Файл ДС",
@@ -2147,6 +2164,7 @@ def write_registry_workbook(
         _write_text_cell(
             ws, excel_row, layout.source_id, format_registry_ds_number(row.source_id)
         )
+        _write_text_cell(ws, excel_row, layout.previous, row.previous_ds)
         _write_file_links(
             ws,
             excel_row,
@@ -2321,9 +2339,6 @@ def _merge_source_info(
     used: set[int] = set()
     merged: list[DsRegistryRow] = []
     for row in rows:
-        if row.previous_ds or row.revision or row.note or row.original_excel_row:
-            merged.append(row)
-            continue
         match_at = None
         for index, item in enumerate(info):
             if index in used:
@@ -2335,17 +2350,17 @@ def _merge_source_info(
             merged.append(row)
             continue
         used.add(match_at)
-        source_id, previous, revision, note, original = info[match_at]
+        _source_id, previous, revision, note, original = info[match_at]
         merged.append(
             DsRegistryRow(
                 status=row.status,
-                source_id=row.source_id or source_id,
-                previous_ds=previous,
-                revision=revision,
-                note=note,
+                source_id=row.source_id,
+                previous_ds=row.previous_ds or previous,
+                revision=row.revision or revision,
+                note=row.note or note,
                 relations=row.relations,
                 excel_row=row.excel_row,
-                original_excel_row=original,
+                original_excel_row=row.original_excel_row or original,
             )
         )
     return merged
