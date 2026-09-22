@@ -995,15 +995,14 @@ class CenterWindow(QWidget):
         )
 
     def _run_ds_registry(self) -> None:
-        from RFQ.rfp_parts.ds_jobs import ds_registry_robot_dir
+        from RFQ.rfp_parts.ds_registry import DEFAULT_RFP_BASE
 
         paths = self._ds_job_paths()
-        out_dir = ds_registry_robot_dir()
         self._start_job(
             _JOB_TITLE_DS_REGISTRY,
             run_ds_registry_check_job,
             paths["registry_path"],
-            out_dir,
+            DEFAULT_RFP_BASE,
             paths["ul_root"],
             job_tab="rfp_parts",
         )

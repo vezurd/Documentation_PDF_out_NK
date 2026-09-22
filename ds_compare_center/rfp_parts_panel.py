@@ -47,7 +47,11 @@ from RFQ.rfp_parts.ds_hybrid_preflight import (
     ds_hybrid_output_dir,
 )
 from RFQ.rfp_parts.ds_jobs import CockpitRow, DsCockpitSnapshot, get_last_ds_cockpit
-from RFQ.rfp_parts.ds_registry import DEFAULT_REGISTRY_PATH
+from RFQ.rfp_parts.ds_registry import (
+    DEFAULT_REGISTRY_PATH,
+    DEFAULT_RFP_BASE,
+    resolve_latest_registry,
+)
 from RFQ.rfp_parts.ds_rfp_hybrid import (
     HYBRID_REPORT_PREFIX,
     HYBRID_XLSX_NAME,
@@ -233,10 +237,22 @@ class RfpPartsPanel(QWidget):
         """Out-dir of the last run (if any)."""
         return self._last_reports_dir
 
+    def _working_registry_text(self) -> str:
+        """Newest registry in ``_RFP``, or an empty string if that folder is unreachable."""
+        try:
+            latest = resolve_latest_registry(DEFAULT_RFP_BASE)
+            if latest.is_file():
+                return str(latest)
+        except OSError:
+            return ""
+        return ""
+
     def ds_job_paths(self) -> dict[str, str]:
         """Return folder/file paths currently shown on the cockpit."""
         gui = normalize_gui_paths(load_ds_compare_config().get("gui_paths"))
-        registry = self._edit_registry.text().strip() or str(DEFAULT_REGISTRY_PATH)
+        registry = self._working_registry_text() or (
+            self._edit_registry.text().strip() or str(DEFAULT_REGISTRY_PATH)
+        )
         return {
             "source_root": self._edit_ds_folder.text().strip(),
             "registry_path": registry,
@@ -251,7 +267,9 @@ class RfpPartsPanel(QWidget):
             self._edit_ds_folder.setText(gui.get("last_ds_trusted_folder", ""))
         if hasattr(self, "_edit_registry"):
             self._edit_registry.setText(
-                gui.get("last_ds_registry_file", "") or str(DEFAULT_REGISTRY_PATH)
+                self._working_registry_text()
+                or gui.get("last_ds_registry_file", "")
+                or str(DEFAULT_REGISTRY_PATH)
             )
         self._refresh_paths()
 
@@ -301,8 +319,9 @@ class RfpPartsPanel(QWidget):
             box,
             v,
             "Проверить реестр",
-            "Старый файл на UNC не перезаписывается. Если формат старый — "
-            "робот пишет копию нового формата и подскажет, что делать дальше.",
+            "Один реестр в папке _RFP. Старый формат переименовывается в "
+            "Реестр_ДС_УЛ_old.xlsx. Если файл открыт в Excel — пишется копия "
+            "с датой, программа берёт самую новую и хранит 5 копий.",
             self._click_ds_registry,
         )
         self._add_action_with_comment(
@@ -820,6 +839,8 @@ class RfpPartsPanel(QWidget):
         Args:
             snapshot: Last DS/hybrid/coverage/registry job outcome.
         """
+        if snapshot.kind == "registry":
+            self._edit_registry.setText(str(snapshot.registry_path))
         self._registry_banner.setText(snapshot.summary)
         self._registry_banner.setStyleSheet(
             _BANNER_STYLES.get(snapshot.banner_tone, _BANNER_STYLES["ok"])
@@ -1120,6 +1141,8 @@ class RfpPartsPanel(QWidget):
         snapshot = get_last_ds_cockpit()
         if snapshot is not None:
             self.fill_from_snapshot(snapshot)
+            if snapshot.kind == "registry":
+                self._persist_ds_paths()
         self._refresh_paths()
         prefix = "OK. " if success else "Ошибка. "
         bits = [html.escape(prefix + (message or ""))]

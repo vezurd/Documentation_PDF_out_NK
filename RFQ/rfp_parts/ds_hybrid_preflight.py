@@ -569,9 +569,17 @@ def _resolve_registry_path(
     registry_path: str | Path | None,
     config: dict[str, Any] | None,
 ) -> Path:
-    raw = registry_path
-    if raw is None or not str(raw).strip():
-        raw = _parts_section(config).get("ds_registry_path") or ""
+    if registry_path is not None and str(registry_path).strip():
+        return Path(str(registry_path).strip())
+    from RFQ.rfp_parts.ds_registry import DEFAULT_RFP_BASE, resolve_latest_registry
+
+    try:
+        latest = resolve_latest_registry(DEFAULT_RFP_BASE)
+        if latest.is_file():
+            return latest
+    except OSError:
+        pass
+    raw = _parts_section(config).get("ds_registry_path") or ""
     if not str(raw).strip():
         raw = _gui_ds_paths().get("last_ds_registry_file") or ""
     text = str(raw).strip()

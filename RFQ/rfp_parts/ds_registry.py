@@ -1,9 +1,9 @@
 """Canonical DS registry: one sheet, one row per source DS, numbered links.
 
-The human-edited workbook lives at ``DEFAULT_REGISTRY_PATH`` (UNC). Ordinary
-robot runs only read and validate it. Migration writes to an explicit output
-path. Replacing a canonical file requires ``confirm=True`` and never runs
-implicitly against UNC.
+The one working workbook lives in ``_RFP`` as ``Реестр_ДС_УЛ.xlsx``.
+«Проверить реестр» renames a legacy file to ``Реестр_ДС_УЛ_old.xlsx`` and
+replaces it. If Excel holds the file open, a dated copy is written; the
+program reads the newest of the main file and at most five dated copies.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Iterator, Literal, Sequence
@@ -45,7 +45,13 @@ BACKUP_SUFFIX_FORMAT = "%Y%m%d_%H%M%S"
 DEFAULT_RFP_BASE = Path(
     r"\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP"
 )
-DEFAULT_REGISTRY_PATH = DEFAULT_RFP_BASE / "Реестр_ДС_УЛ.xlsx"
+CANONICAL_REGISTRY_NAME = "Реестр_ДС_УЛ.xlsx"
+OLD_REGISTRY_NAME = "Реестр_ДС_УЛ_old.xlsx"
+DATED_REGISTRY_RE = re.compile(
+    r"^Реестр_ДС_УЛ_(\d{8}_\d{6})\.xlsx$", re.IGNORECASE
+)
+MAX_DATED_REGISTRY_COPIES = 5
+DEFAULT_REGISTRY_PATH = DEFAULT_RFP_BASE / CANONICAL_REGISTRY_NAME
 
 STATUS_ACTIVE = "Активен"
 STATUS_HISTORY = "История"
@@ -1572,6 +1578,171 @@ def _add_legend_sheet(workbook: Workbook) -> None:
     sheet.page_setup.fitToHeight = 1
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.print_title_rows = "1:3"
+
+
+@dataclass(frozen=True, slots=True)
+class RegistryInstall:
+    """Where the one working registry was written."""
+
+    path: Path
+    mode: Literal["canonical", "dated"]
+    archived_path: Path | None = None
+    archived_now: bool = False
+
+
+def resolve_latest_registry(directory: str | Path | None = None) -> Path:
+    """Newest working registry in ``_RFP``: the main file or a dated copy.
+
+    ``Реестр_ДС_УЛ_old.xlsx`` is never chosen. If nothing exists yet, returns
+    the canonical path (the file may be missing).
+    """
+
+    home = Path(directory) if directory else DEFAULT_RFP_BASE
+    canonical = home / CANONICAL_REGISTRY_NAME
+    found: list[Path] = []
+    try:
+        if canonical.is_file():
+            found.append(canonical)
+        for path in home.iterdir():
+            if path.name.startswith("~$"):
+                continue
+            if DATED_REGISTRY_RE.match(path.name) and path.is_file():
+                found.append(path)
+    except OSError:
+        return canonical
+    if not found:
+        return canonical
+    return max(found, key=lambda item: item.stat().st_mtime)
+
+
+def prune_dated_registries(
+    directory: str | Path,
+    *,
+    keep: int = MAX_DATED_REGISTRY_COPIES,
+) -> list[Path]:
+    """Delete dated registry copies beyond ``keep`` newest stamps."""
+
+    home = Path(directory)
+    dated: list[tuple[str, Path]] = []
+    try:
+        entries = list(home.iterdir())
+    except OSError:
+        return []
+    for path in entries:
+        match = DATED_REGISTRY_RE.match(path.name)
+        if match and path.is_file():
+            dated.append((match.group(1), path))
+    dated.sort(reverse=True)
+    removed: list[Path] = []
+    for _, path in dated[max(0, keep):]:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed.append(path)
+    return removed
+
+
+def archive_legacy_canonical(home: str | Path) -> tuple[Path | None, bool]:
+    """Rename a legacy ``Реестр_ДС_УЛ.xlsx`` to ``Реестр_ДС_УЛ_old.xlsx``.
+
+    Returns:
+        ``(archive_path, moved_now)``. A second run leaves an existing ``_old``
+        in place. A locked file is not renamed.
+    """
+
+    folder = Path(home)
+    canonical = folder / CANONICAL_REGISTRY_NAME
+    old = folder / OLD_REGISTRY_NAME
+    if not canonical.is_file():
+        return (old if old.is_file() else None), False
+    try:
+        if detect_registry_format(canonical) != "legacy":
+            return None, False
+    except OSError:
+        return None, False
+    if old.exists():
+        return old, False
+    try:
+        os.replace(canonical, old)
+    except OSError:
+        return None, False
+    return old, True
+
+
+def _next_dated_registry_path(folder: Path) -> Path:
+    """Next free ``Реестр_ДС_УЛ_<YYYYMMDD_HHMMSS>.xlsx`` in ``folder``."""
+
+    stamp_dt = datetime.now()
+    for _ in range(8):
+        candidate = folder / f"Реестр_ДС_УЛ_{stamp_dt.strftime('%Y%m%d_%H%M%S')}.xlsx"
+        if not candidate.exists():
+            return candidate
+        stamp_dt += timedelta(seconds=1)
+    return folder / f"Реестр_ДС_УЛ_{stamp_dt.strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+
+def install_working_registry(
+    rows: Sequence[DsRegistryRow],
+    home: str | Path,
+) -> RegistryInstall:
+    """Write the one working registry into ``home`` (the ``_RFP`` folder).
+
+    The canonical name is replaced when it is free. If Excel holds it open, a
+    ``Реестр_ДС_УЛ_<дата>.xlsx`` copy is written instead and older dated copies
+    beyond five are deleted.
+
+    Args:
+        rows: New-format rows, including a migration result.
+        home: Directory that contains the working registry. Not a reports stamp.
+
+    Returns:
+        The path the program should read next.
+
+    Raises:
+        DsRegistryError: Neither the canonical name nor a dated copy could be written.
+    """
+
+    folder = Path(home)
+    folder.mkdir(parents=True, exist_ok=True)
+    staging = folder / f".{Path(CANONICAL_REGISTRY_NAME).stem}.{os.getpid()}.staging.xlsx"
+    written = write_registry_workbook(staging, rows)
+    archived, moved_now = archive_legacy_canonical(folder)
+    canonical = folder / CANONICAL_REGISTRY_NAME
+    try:
+        os.replace(written, canonical)
+    except PermissionError:
+        dated = _next_dated_registry_path(folder)
+        try:
+            os.replace(written, dated)
+        except OSError:
+            written.unlink(missing_ok=True)
+            raise DsRegistryError(
+                f"{CANONICAL_REGISTRY_NAME} открыт в Excel, заменить его нельзя, "
+                "и копия с датой тоже не записалась. Закройте файл и повторите проверку."
+            )
+        prune_dated_registries(folder)
+        return RegistryInstall(
+            path=dated,
+            mode="dated",
+            archived_path=archived,
+            archived_now=moved_now,
+        )
+    except OSError:
+        written.unlink(missing_ok=True)
+        if moved_now and archived is not None and archived.is_file() and not canonical.exists():
+            try:
+                os.replace(archived, canonical)
+            except OSError:
+                pass
+        raise
+    prune_dated_registries(folder)
+    return RegistryInstall(
+        path=canonical,
+        mode="canonical",
+        archived_path=archived,
+        archived_now=moved_now,
+    )
 
 
 def _publish_workbook(tmp_path: Path, target: Path) -> Path:

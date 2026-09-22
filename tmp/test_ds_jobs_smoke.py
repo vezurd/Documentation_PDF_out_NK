@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
@@ -30,13 +31,18 @@ from RFQ.rfp_parts.ds_jobs import (
     run_ds_registry_check_job,
 )
 from RFQ.rfp_parts.ds_registry import (
+    CANONICAL_REGISTRY_NAME,
+    DATED_REGISTRY_RE,
     DEFAULT_REGISTRY_PATH,
     MODE_WHOLE,
     MIGRATION_REPORT_PREFIX,
+    OLD_REGISTRY_NAME,
     STATUS_ACTIVE,
     DsRegistryRelation,
     DsRegistryRow,
     detect_registry_format,
+    install_working_registry,
+    resolve_latest_registry,
     write_registry_workbook,
 )
 from RFQ.rfp_parts.ds_rfp_hybrid import (
@@ -170,18 +176,74 @@ class DsJobsSmokeTest(unittest.TestCase):
             result = run_ds_registry_check_job(legacy, reports, None)
             self.assertTrue(result.success, result.message)
             self.assertEqual(legacy.read_bytes(), before)
-            migrated = reports / "Реестр_ДС_УЛ_migrated.xlsx"
-            self.assertTrue(migrated.is_file())
-            self.assertNotEqual(migrated.resolve(), DEFAULT_REGISTRY_PATH)
+            working = reports / "Реестр_ДС_УЛ.xlsx"
+            self.assertTrue(working.is_file())
+            self.assertEqual(detect_registry_format(working), "new")
+            self.assertNotEqual(working.resolve(), DEFAULT_REGISTRY_PATH)
+            self.assertFalse((reports / "Реестр_ДС_УЛ_migrated.xlsx").exists())
             self.assertTrue(
                 any(path.name.startswith(MIGRATION_REPORT_PREFIX) for path in reports.iterdir())
             )
             self.assertIn("формат=new", result.message)
-            self.assertIn("скопирован из старого", result.message)
             cockpit = get_last_ds_cockpit()
             self.assertIsNotNone(cockpit)
-            self.assertIn("Канон UNC не заменён", cockpit.next_step)
-            self.assertIn(migrated.name, cockpit.next_step)
+            self.assertIn("Рабочий реестр один", cockpit.next_step)
+            self.assertIn(working.name, cockpit.next_step)
+
+    def test_legacy_in_home_is_renamed_old(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            home = Path(raw)
+            legacy = home / CANONICAL_REGISTRY_NAME
+            _write_legacy(legacy)
+            before = legacy.read_bytes()
+            result = run_ds_registry_check_job(legacy, home, None)
+            self.assertTrue(result.success, result.message)
+            old = home / OLD_REGISTRY_NAME
+            self.assertTrue(old.is_file())
+            self.assertEqual(old.read_bytes(), before)
+            self.assertEqual(detect_registry_format(legacy), "new")
+            self.assertEqual(resolve_latest_registry(home), legacy)
+            cockpit = get_last_ds_cockpit()
+            self.assertIsNotNone(cockpit)
+            self.assertIn(OLD_REGISTRY_NAME, cockpit.next_step)
+
+    def test_locked_canonical_keeps_five_dated_copies(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            home = Path(raw)
+            real_replace = os.replace
+
+            def fake_replace(src, dst):
+                if Path(dst).name == CANONICAL_REGISTRY_NAME:
+                    raise PermissionError(5, "locked")
+                return real_replace(src, dst)
+
+            row = DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="13",
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС13",
+                        rfp_key="13",
+                        ul_folder="согл УЛ ДС13",
+                        mode=MODE_WHOLE,
+                    ),
+                ),
+            )
+            with patch("RFQ.rfp_parts.ds_registry.os.replace", side_effect=fake_replace):
+                last = None
+                for _ in range(6):
+                    last = install_working_registry([row], home)
+            self.assertIsNotNone(last)
+            assert last is not None
+            self.assertEqual(last.mode, "dated")
+            dated = [
+                path
+                for path in home.iterdir()
+                if DATED_REGISTRY_RE.match(path.name)
+            ]
+            self.assertEqual(len(dated), 5)
+            self.assertEqual(resolve_latest_registry(home), last.path)
+            self.assertFalse((home / CANONICAL_REGISTRY_NAME).exists())
 
     def test_coverage_warns_if_rfp_missing(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:

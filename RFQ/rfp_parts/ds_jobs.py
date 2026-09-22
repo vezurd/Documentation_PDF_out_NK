@@ -1,8 +1,9 @@
 """FunctionJobRunner jobs for the RFP · Сбор частей DS/hybrid cockpit.
 
-Ordinary runs only read the canonical UNC registry. Migration writes a *new*
-workbook under the reports folder. ``backup_and_replace_registry`` is never
-imported or called from this module.
+«Проверить реестр» keeps one working file in ``_RFP``. A legacy workbook is
+renamed to ``Реестр_ДС_УЛ_old.xlsx`` and replaced. A file open in Excel stays
+put; a dated copy is written instead, and only five dated copies are kept.
+``backup_and_replace_registry`` is never imported or called from this module.
 """
 
 from __future__ import annotations
@@ -43,17 +44,25 @@ from RFQ.rfp_parts.ds_baseline import (
 )
 from RFQ.rfp_parts.ds_identity import parse_rfp_ds_identity
 from RFQ.rfp_parts.ds_registry import (
+    CANONICAL_REGISTRY_NAME,
     DEFAULT_REGISTRY_PATH,
+    DEFAULT_RFP_BASE,
     FORMAT_VERSION,
     LEGEND_SHEET_NAME,
     MIGRATION_REPORT_PREFIX,
+    OLD_REGISTRY_NAME,
     MODE_NO_UL,
     DsRegistryDocument,
     DsRegistryError,
     detect_registry_format,
+    default_migration_report_path,
     ensure_registry_legend,
+    install_working_registry,
     load_registry,
+    migrate_legacy_rows,
     migrate_registry,
+    read_legacy_registry,
+    resolve_latest_registry,
 )
 from RFQ.rfp_parts.ds_rfp_hybrid import (
     HYBRID_XLSX_NAME,
@@ -546,25 +555,35 @@ def _registry_next_step(
     *,
     migrated_path: Path | None,
     registry_format: str,
+    placement: str = "",
+    archived_now: bool = False,
 ) -> str:
     """Build the Russian next-step sentence for a registry-kind snapshot."""
     labels = _overlay_blocking_labels(document)
     labels_text = ", ".join(labels)
-    if migrated_path is not None:
-        path = str(migrated_path)
+    path = str(migrated_path or document.path)
+    if placement == "dated":
+        return (
+            f"{CANONICAL_REGISTRY_NAME} открыт в Excel, заменить его нельзя. "
+            f"Записана копия {path}. Программа берёт самый новый файл в папке _RFP "
+            f"и хранит {5} таких копий, более старые удаляет. Закройте Excel и "
+            "проверьте реестр ещё раз — тогда основной файл будет заменён."
+        )
+    if placement == "canonical":
+        renamed = (
+            f" Старый формат переименован в {OLD_REGISTRY_NAME}."
+            if archived_now
+            else ""
+        )
+        blocked = ""
         if labels:
-            return (
-                "Канон UNC не заменён. Для робота записана копия нового формата: "
-                f"{path}. Ошибок нет. Пока нельзя заменить на RFP связи: {labels_text} "
-                "(режим «Требует распределения» — нет фильтров титула и марки). "
-                "Остальные группы робот уже может читать. Дальше: откройте копию, "
-                "проверьте жёлтые строки, затем «Подставить копию роботу» — путь в "
-                "этом окне сменится, файл на UNC останется."
+            blocked = (
+                f" Пока нельзя заменить на RFP связи: {labels_text} "
+                "(режим «Требует распределения»). Остальные группы можно собирать."
             )
         return (
-            "Канон UNC не заменён. Для робота записана копия нового формата: "
-            f"{path}. Замечаний, которые блокируют overlay, нет. Дальше: "
-            "«Подставить копию роботу», чтобы сбор ДС читал этот файл, а не старый UNC."
+            f"Рабочий реестр один, в папке _RFP: {path}.{renamed}{blocked} "
+            "Дальше: «Собрать свод только из ДС» или «Наложить RFP на группы»."
         )
     if registry_format == "new":
         if labels:
@@ -594,6 +613,8 @@ def _snapshot_from_registry(
     hybrid: DsRfpHybridResult | None = None,
     migrated_registry_path: Path | None = None,
     extra_warn: int = 0,
+    placement: str = "",
+    archived_now: bool = False,
 ) -> DsCockpitSnapshot:
     ul_for_cov = _optional_ul_for_validate(ul_root)
     active_ids = [row.source_id for row in document.active_rows if row.source_id]
@@ -670,8 +691,12 @@ def _snapshot_from_registry(
         )
     else:
         summary = document.validation.summary_line()
-        if migrated_registry_path is not None:
-            format_label = "new, скопирован из старого"
+        if placement == "dated":
+            format_label = "new, копия с датой"
+        elif archived_now:
+            format_label = "new, старый формат переименован"
+        elif migrated_registry_path is not None:
+            format_label = "new"
         else:
             format_label = registry_format
         summary = (
@@ -684,6 +709,8 @@ def _snapshot_from_registry(
             document,
             migrated_path=migrated_registry_path,
             registry_format=registry_format,
+            placement=placement,
+            archived_now=archived_now,
         )
     return DsCockpitSnapshot(
         kind=kind,
@@ -733,7 +760,7 @@ def _print_snapshot(snapshot: DsCockpitSnapshot) -> None:
         _emit(f"RFP: {snapshot.rfp_root}")
     if snapshot.ul_root is not None:
         _emit(f"УЛ: {snapshot.ul_root}")
-    if snapshot.output_dir is not None:
+    if snapshot.output_dir is not None and snapshot.kind != "registry":
         _emit(f"Отчёты: {snapshot.output_dir}")
     if snapshot.baseline_path is not None:
         _emit(f"{BASELINE_XLSX_NAME}: {snapshot.baseline_path}")
@@ -741,8 +768,11 @@ def _print_snapshot(snapshot: DsCockpitSnapshot) -> None:
         _emit(f"{HYBRID_XLSX_NAME}: {snapshot.hybrid_path}")
     if snapshot.report_path is not None:
         _emit(f"{snapshot.report_path.name}: {snapshot.report_path}")
-    if snapshot.migrated_registry_path is not None:
-        _emit(f"Копия реестра (не UNC): {snapshot.migrated_registry_path}")
+    if (
+        snapshot.migrated_registry_path is not None
+        and snapshot.migrated_registry_path != snapshot.registry_path
+    ):
+        _emit(f"Копия реестра: {snapshot.migrated_registry_path}")
     _emit(
         "Счётчики: "
         f"ERROR={snapshot.error_count}, WARN={snapshot.warn_count}, "
@@ -792,12 +822,47 @@ def _ensure_legend_on_copy(path: Path) -> None:
         )
 
 
+def _install_rows(rows: list[Any], home: Path):
+    """Install rows into the working registry folder.
+
+    Returns:
+        ``(RegistryInstall | None, error_message | None)``.
+    """
+
+    err = _ensure_output_dir(home)
+    if err:
+        return None, err
+    try:
+        installed = install_working_registry(rows, home)
+    except DsRegistryError as exc:
+        return None, f"реестр не записан: {exc}"
+    _install_rows.last = installed  # type: ignore[attr-defined]
+    return installed, None
+
+
+def _emit_install(installed: Any) -> None:
+    if installed.mode == "dated":
+        _emit(
+            f"{CANONICAL_REGISTRY_NAME} открыт в Excel. "
+            f"Копия с датой: {installed.path}"
+        )
+        return
+    if installed.archived_now and installed.archived_path is not None:
+        _emit(
+            f"Старый формат переименован в {installed.archived_path.name}. "
+            f"Рабочий реестр: {installed.path}"
+        )
+        return
+    _emit(f"Рабочий реестр: {installed.path}")
+
+
 def _open_registry_for_job(
     registry_path: Path,
     *,
     ul_root: Path | None,
     output_dir: Path | None,
     migrate_legacy: bool,
+    install_into_home: bool = False,
 ) -> tuple[DsRegistryDocument | None, str, Path | None, str | None, int]:
     """Load new-format registry, or migrate legacy into ``output_dir``.
 
@@ -814,12 +879,18 @@ def _open_registry_for_job(
     if fmt == "new":
         document, err = _load_new_registry(registry_path, ul_root=ul_root)
         if (
-            document is not None
-            and err is None
-            and not _same_file(registry_path, DEFAULT_REGISTRY_PATH)
+            not install_into_home
+            or document is None
+            or err is not None
+            or output_dir is None
         ):
-            _ensure_legend_on_copy(registry_path)
-        return document, fmt, None, err, extra_warn
+            return document, fmt, None, err, extra_warn
+        installed, install_err = _install_rows(document.rows, output_dir)
+        if install_err or installed is None:
+            return None, fmt, None, install_err or "реестр не записан", extra_warn
+        _emit_install(installed)
+        reloaded, err = _load_new_registry(installed.path, ul_root=ul_root)
+        return reloaded, "new", installed.path, err, extra_warn
     if fmt != "legacy":
         return (
             None,
@@ -843,39 +914,54 @@ def _open_registry_for_job(
             extra_warn,
         )
     if output_dir is None:
-        return None, fmt, None, "для миграции нужна папка отчётов", extra_warn
-    err = _ensure_output_dir(output_dir)
-    if err:
-        return None, fmt, None, err, extra_warn
-    migrated = output_dir / ROBOT_REGISTRY_COPY_NAME
-    if _same_file(migrated, DEFAULT_REGISTRY_PATH) or _same_file(
-        migrated, registry_path
-    ):
-        return (
-            None,
-            fmt,
-            None,
-            "миграция отказана: выход совпадает с каноническим/исходным реестром",
-            extra_warn,
-        )
+        return None, fmt, None, "не задана папка рабочего реестра", extra_warn
+    if not install_into_home:
+        migrated = output_dir / ROBOT_REGISTRY_COPY_NAME
+        if _same_file(migrated, DEFAULT_REGISTRY_PATH) or _same_file(
+            migrated, registry_path
+        ):
+            return (
+                None,
+                fmt,
+                None,
+                "миграция отказана: выход совпадает с исходным реестром",
+                extra_warn,
+            )
+        try:
+            result = migrate_registry(registry_path, migrated)
+        except DsRegistryError as exc:
+            return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
+        document, err = _load_new_registry(result.output_path, ul_root=ul_root)
+        return document, "new", result.output_path, err, extra_warn
     try:
-        result = migrate_registry(registry_path, migrated)
+        legacy_rows = read_legacy_registry(registry_path)
+        new_rows, migrate_issues = migrate_legacy_rows(legacy_rows)
     except DsRegistryError as exc:
         return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
-    if result.output_path.name != migrated.name:
-        _emit(
-            f"{migrated.name} открыт в Excel, заменить его нельзя. "
-            f"Новая копия с листом «{LEGEND_SHEET_NAME}»: {result.output_path}. "
-            "Закройте старый файл. «Подставить копию роботу» укажет на новый."
-        )
-    _emit(
-        "Legacy-реестр скопирован в новый формат (канон UNC не заменён): "
-        f"{result.output_path}"
-    )
-    if result.report_path:
-        _emit(f"{MIGRATION_REPORT_PREFIX}: {result.report_path}")
-    document, err = _load_new_registry(result.output_path, ul_root=ul_root)
-    return document, "new", result.output_path, err, extra_warn
+    installed, install_err = _install_rows(new_rows, output_dir)
+    if install_err or installed is None:
+        return None, fmt, None, install_err or "реестр не записан", extra_warn
+    _emit_install(installed)
+    document, err = _load_new_registry(installed.path, ul_root=ul_root)
+    if document is not None:
+        report = default_migration_report_path(installed.path)
+        try:
+            from RFQ.rfp_parts.ds_registry import _write_migration_report
+
+            _write_migration_report(
+                report,
+                source_path=registry_path,
+                output_path=installed.path,
+                legacy_rows=legacy_rows,
+                new_rows=document.rows,
+                issues=migrate_issues,
+                validation=document.validation,
+            )
+        except OSError as exc:
+            _emit(f"Отчёт миграции не записан: {exc}")
+        else:
+            _emit(f"{MIGRATION_REPORT_PREFIX}: {report}")
+    return document, "new", installed.path, err, extra_warn
 
 
 def run_ds_registry_check_job(
@@ -883,40 +969,51 @@ def run_ds_registry_check_job(
     output_dir: str | Path | None = None,
     ul_root: str | Path | None = None,
 ) -> DsJobResult:
-    """Validate the registry; migrate a *copy* into reports if the file is legacy.
+    """Validate the registry and keep one working file in the ``_RFP`` folder.
+
+    A legacy file is renamed to ``Реестр_ДС_УЛ_old.xlsx`` and replaced. If Excel
+    holds the file open, a dated copy is written and older dated copies beyond
+    five are deleted. The program then reads whichever file is newest.
 
     Args:
         registry_path: Registry xlsx. Default ``gui_paths.last_ds_registry_file``.
-        output_dir: Reports folder for an optional migrated copy.
+        output_dir: Folder for the working registry. Default ``_RFP``.
+            Tests pass a temp folder. Production passes ``DEFAULT_RFP_BASE``.
         ul_root: TSD root for UL-folder existence. Default
             ``gui_paths.last_tsd_packing_folder``.
 
     Returns:
         Russian summary. ``success`` is false when the file cannot be loaded.
-        Never writes ``DEFAULT_REGISTRY_PATH``.
     """
     os.environ.setdefault("PYTHONUTF8", "1")
-    path = _resolve_registry_path(registry_path)
-    reports = Path(output_dir) if output_dir else ds_registry_robot_dir()
+    _install_rows.last = None  # type: ignore[attr-defined]
+    home = Path(output_dir) if output_dir else DEFAULT_RFP_BASE
+    requested = _resolve_registry_path(registry_path)
+    latest = resolve_latest_registry(home)
+    path = latest if _is_file(latest) else requested
     ul_path = _resolve_ul_root(ul_root)
     _emit("Проверка реестра ДС…")
     document, fmt, migrated, err, extra_warn = _open_registry_for_job(
         path,
         ul_root=ul_path,
-        output_dir=reports,
+        output_dir=home,
         migrate_legacy=True,
+        install_into_home=True,
     )
     if document is None:
         return _fail(err or "реестр не прочитан")
+    installed = getattr(_install_rows, "last", None)
     snapshot = _store(
         _snapshot_from_registry(
             kind="registry",
             document=document,
             registry_format=fmt,
-            output_dir=reports if migrated is not None else None,
+            output_dir=home if migrated is not None else None,
             ul_root=ul_path,
             migrated_registry_path=migrated,
             extra_warn=extra_warn,
+            placement=installed.mode if installed is not None else "",
+            archived_now=bool(installed and installed.archived_now),
         )
     )
     success = document.validation.is_ok
