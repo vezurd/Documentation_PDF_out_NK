@@ -325,11 +325,28 @@ class DsSourceIdResolveSmokeTest(unittest.TestCase):
         self.assertIsNone(only_short.source_id)
         self.assertEqual(only_short.method, "unresolved")
 
-        ambiguous = resolve_ds_source_id("archive/copy_ДС88_ДС37.xlsx", active)
-        self.assertEqual(ambiguous.method, "ambiguous")
-        self.assertIsNone(ambiguous.source_id)
-        self.assertIn("88", ambiguous.candidates)
-        self.assertIn("37", ambiguous.candidates)
+        buried = resolve_ds_source_id("archive/copy_ДС88_ДС37.xlsx", active)
+        self.assertEqual(buried.method, "unresolved")
+        self.assertIsNone(buried.source_id)
+
+        ordinal = resolve_ds_source_id(
+            "ДС_50_1._Спецификация №_65_ДС 50v1.xlsx",
+            active + ("50", "65"),
+        )
+        self.assertEqual(ordinal.source_id, "50")
+        self.assertEqual(ordinal.method, "filename_prefix")
+
+        later_number = resolve_ds_source_id(
+            "ДС_96_1._Спецификация №75_ДС 70 на уменьшение.xlsx",
+            active + ("75", "96", "70"),
+        )
+        self.assertEqual(later_number.source_id, "96")
+
+        appendix = resolve_ds_source_id(
+            "ДС_75_Приложение 1 к ДС 75_16а Спецификация№41.xlsx",
+            active + ("75", "41"),
+        )
+        self.assertEqual(appendix.source_id, "75")
 
 
 class DsBaselineSmokeTest(unittest.TestCase):

@@ -736,11 +736,26 @@ def _folder_exact_id(folder_name: str, active_ids: Sequence[str]) -> str | None:
     return None
 
 
-def _id_boundary_ok(remainder: str) -> bool:
+def _registered_longer_id(
+    source_id: str,
+    tail_digits: str,
+    active_ids: Sequence[str],
+) -> bool:
+    longer = f"{source_id}_{tail_digits}".casefold()
+    return any(item.casefold() == longer for item in active_ids)
+
+
+def _id_boundary_ok(
+    remainder: str,
+    source_id: str,
+    active_ids: Sequence[str],
+) -> bool:
     """True when ``remainder`` does not continue the matched source ID.
 
-    ``4905_1`` must not collapse to ``4905`` (``_`` + digits only). An
-    actual-like sequential/revision tail ``_24Б`` is a valid boundary.
+    ``4905_1`` must not collapse to ``4905`` when ``4905_1`` is an active id.
+    A bare ``_1`` at the end of the stem is not a file index. ``_1.`` /
+    ``_1_`` / ``_1 `` is an index of the shorter id
+    (``ДС_50_1._Спецификация`` → 50). A revision tail ``_24Б`` is a boundary.
     """
 
     if not remainder:
@@ -751,7 +766,11 @@ def _id_boundary_ok(remainder: str) -> bool:
         index = 1
         while index < len(remainder) and remainder[index].isdigit():
             index += 1
+        if _registered_longer_id(source_id, remainder[1:index], active_ids):
+            return False
         if index < len(remainder) and remainder[index].isalpha():
+            return True
+        if index < len(remainder) and not remainder[index].isalnum():
             return True
         return False
     return True
@@ -759,26 +778,28 @@ def _id_boundary_ok(remainder: str) -> bool:
 
 
 def _filename_prefix_id(file_name: str, active_ids: Sequence[str]) -> str | None:
+    """Read the DS number only from the start of the file name.
+
+    Accepted anchors: ``ДС13.xlsx``, ``ДС_50_1._…``, ``ДС4905_1.xlsx``,
+    ``ДС_75_Приложение…``. A specification number or an older DS mentioned
+    later (``№75``, ``ДС 70 на уменьшение``) is not an id.
+    """
+
     stem = Path(file_name).stem.strip()
     stripped = _ID_STRIP_PREFIX_RE.sub("", stem, count=1).strip()
     variants = (stem, stripped)
     ordered = sorted(set(active_ids), key=lambda item: (-len(item), item))
     for source_id in ordered:
         for text in variants:
-            if text == source_id:
+            if text.casefold() == source_id.casefold():
                 return source_id
-            if text.startswith(source_id) and _id_boundary_ok(text[len(source_id) :]):
+            if text.casefold().startswith(source_id.casefold()) and _id_boundary_ok(
+                text[len(source_id) :],
+                source_id,
+                active_ids,
+            ):
                 return source_id
     return None
-
-
-def _token_hits(text: str, source_id: str) -> bool:
-    escaped = re.escape(source_id)
-    pattern = re.compile(
-        rf"(?:^|[/\\]|[^0-9A-Za-zА-Яа-я])(?:ДС[_\s]?)?{escaped}(?![0-9A-Za-zА-Яа-я])(?!_\d)",
-        re.IGNORECASE,
-    )
-    return pattern.search(text) is not None
 
 
 def resolve_ds_source_id(
@@ -787,11 +808,10 @@ def resolve_ds_source_id(
 ) -> DsSourceIdResolution:
     """Resolve a DS file to one active registry source ID.
 
-    Order: nearest ancestor exact ``ДС_<id>`` / ``ДС{id}``, then filename
-    prefix longest exact ID (authoritative even if another ``ДС`` token
-    appears later in the name), then a unique token in the relative path.
-    Ambiguous only when ancestor and prefix both miss and several tokens
-    remain. ``4905_1`` never collapses to ``4905``.
+    The number is only the parent folder ``ДС_<id>`` / ``ДС<id>`` or the
+    leading token of the file name. Text after that anchor is not searched.
+    ``4905_1`` never collapses to ``4905``. A file index ``_1.`` does not
+    create a new id.
     """
 
     if not active_ids:
@@ -809,15 +829,6 @@ def resolve_ds_source_id(
     prefix = _filename_prefix_id(file_name, active_ids)
     if prefix is not None:
         return DsSourceIdResolution(prefix, "filename_prefix", (prefix,))
-
-    hits: list[str] = []
-    for source_id in active_ids:
-        if _token_hits(posix, source_id) and source_id not in hits:
-            hits.append(source_id)
-    if len(hits) == 1:
-        return DsSourceIdResolution(hits[0], "unique_token", tuple(hits))
-    if len(hits) > 1:
-        return DsSourceIdResolution(None, "ambiguous", tuple(hits))
     return DsSourceIdResolution(None, "unresolved", ())
 
 
