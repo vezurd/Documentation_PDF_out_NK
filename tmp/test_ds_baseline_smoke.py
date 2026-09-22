@@ -10,6 +10,7 @@ from collections import Counter
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
@@ -40,6 +41,7 @@ from RFQ.rfp_parts.ds_baseline import (
     STRUCTURE_REPORT_PREFIX,
     TAG_MISMATCH_REPORT_PREFIX,
     IdentityDsUnitsConverter,
+    _path_uri,
     build_ds_baseline,
     collect_ds_workbooks,
     resolve_ds_source_id,
@@ -190,7 +192,7 @@ def _write_registry(path: Path) -> None:
         DsRegistryRow(
             status=STATUS_ACTIVE,
             source_id="47",
-            relations=(_rel(group_id="ДС13", rfp_key="13", ul_folder="согл УЛ ДС13", mode=MODE_WHOLE),),
+            relations=(_rel(group_id="ДС47", rfp_key="47", ul_folder="согл УЛ ДС47", mode=MODE_WHOLE),),
         ),
         DsRegistryRow(
             status=STATUS_ACTIVE,
@@ -211,7 +213,7 @@ def _write_registry(path: Path) -> None:
             status=STATUS_ACTIVE,
             source_id="4905_1",
             relations=(
-                _rel(group_id="ДС4905", rfp_key="4905", ul_folder="согл УЛ 4905", mode=MODE_WHOLE),
+                _rel(group_id="ДС4905_1", rfp_key="4905_1", ul_folder="согл УЛ 4905_1", mode=MODE_WHOLE),
             ),
         ),
         DsRegistryRow(
@@ -475,6 +477,12 @@ class DsBaselineSmokeTest(unittest.TestCase):
                         "Источники",
                     },
                 )
+                units_ws = quality["Единицы и конвертация"]
+                self.assertGreaterEqual(units_ws.max_row, 2)
+                self.assertIsNone(units_ws.cell(row=2, column=1).hyperlink)
+                self.assertIsNone(units_ws.cell(row=2, column=2).hyperlink)
+                src_ws = quality["Источники"]
+                self.assertIsNotNone(src_ws.cell(row=2, column=2).hyperlink)
             finally:
                 quality.close()
 
@@ -530,20 +538,14 @@ class DsBaselineSmokeTest(unittest.TestCase):
             self.assertEqual(by_source["47"].group_label, "ДС13")
             self.assertFalse(by_source["13"].grouping_fallback)
             self.assertEqual(by_source["4905_1"].source_id, "4905_1")
-            self.assertEqual(by_source["4905_1"].group_label, "ДС4905")
-            self.assertEqual(by_source["101"].group_label, "NO_UL:101")
+            self.assertEqual(by_source["4905_1"].group_label, "ДС4905_1")
+            self.assertEqual(by_source["101"].group_label, "ДС101")
 
             pos8 = [item for item in result.positions if item.source_id == "8"]
             self.assertEqual(len(pos8), 1)
             self.assertEqual(pos8[0].group_label, "ДС8")
-            self.assertTrue(pos8[0].grouping_fallback)
-            self.assertTrue(pos8[0].overlay_blocked)
-            self.assertTrue(
-                any(
-                    item.code == ISSUE_GROUP_FALLBACK and item.source_id == "8"
-                    for item in result.issues
-                )
-            )
+            self.assertFalse(pos8[0].grouping_fallback)
+            self.assertFalse(pos8[0].overlay_blocked)
 
             pos15 = [item for item in result.positions if item.source_id == "15"]
             matched = next(item for item in pos15 if item.title == "1600")
@@ -551,7 +553,7 @@ class DsBaselineSmokeTest(unittest.TestCase):
             self.assertEqual(matched.group_label, "ДС15")
             self.assertFalse(matched.grouping_fallback)
             self.assertEqual(unmatched.group_label, "ДС15")
-            self.assertTrue(unmatched.grouping_fallback)
+            self.assertFalse(unmatched.grouping_fallback)
             self.assertEqual(unmatched.group_id, "ДС15")
 
             offset_row = next(item for item in result.positions if item.source_id == "47")
@@ -571,7 +573,7 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 names = {row[0] for row in data_rows if row and row[0]}
                 self.assertIn("ДС13", names)
                 self.assertIn("ДС4905", names)
-                self.assertIn("NO_UL:101", names)
+                self.assertIn("ДС101", names)
                 self.assertIn("ДС8", names)
                 for row in data_rows:
                     if not row or row[0] is None:
@@ -601,17 +603,19 @@ class DsBaselineSmokeTest(unittest.TestCase):
             self.assertEqual(ds_names.intersection({"13", "47"}), set())
 
             reused = [row for row in pos if str(row.el[DS_NAME].value) == "ДС13"]
-            self.assertGreaterEqual(len(reused), 2)
+            self.assertGreaterEqual(len(reused), 1)
 
             group_ids = {item.group_id for item in result.groups}
             self.assertIn("ДС13", group_ids)
             reused_group = next(item for item in result.groups if item.group_id == "ДС13")
-            self.assertEqual(set(reused_group.source_ids), {"13", "47"})
+            self.assertEqual(set(reused_group.source_ids), {"13"})
             self.assertFalse(reused_group.fallback)
+            own_47 = next(item for item in result.groups if item.group_id == "ДС47")
+            self.assertEqual(set(own_47.source_ids), {"47"})
 
-            fallback_group = next(item for item in result.groups if item.group_id == "ДС8")
-            self.assertTrue(fallback_group.fallback)
-            self.assertTrue(fallback_group.overlay_blocked)
+            bag8 = next(item for item in result.groups if item.group_id == "ДС8")
+            self.assertFalse(bag8.fallback)
+            self.assertFalse(bag8.overlay_blocked)
 
             quality = _load_xlsx(result.quality_report_path)
             try:
@@ -622,6 +626,8 @@ class DsBaselineSmokeTest(unittest.TestCase):
                     if row[10]
                 ]
                 self.assertIn(STATUS_IDENTITY, statuses)
+                self.assertIsNone(units_ws.cell(row=2, column=1).hyperlink)
+                self.assertIsNone(units_ws.cell(row=2, column=2).hyperlink)
                 src_ws = quality["Источники"]
                 self.assertIsNotNone(src_ws.cell(row=2, column=2).hyperlink)
             finally:
@@ -660,7 +666,7 @@ class DsBaselineInflatedSheetSmokeTest(unittest.TestCase):
             finally:
                 probe.close()
 
-            progress: list[tuple[int, int, str]] = []
+            progress: list[tuple[int, int, str, float | None]] = []
             registry = load_registry(registry_path)
             started = time.perf_counter()
             result = build_ds_baseline(
@@ -685,7 +691,22 @@ class DsBaselineInflatedSheetSmokeTest(unittest.TestCase):
             )
             self.assertEqual(result.positions[0].diagnostic_tags, ("T-A",))
             self.assertEqual(result.positions[1].diagnostic_tags, ("T-B",))
-            self.assertEqual(progress, [(1, 1, "ДС13.xlsx")])
+            self.assertEqual(
+                [(item[0], item[1], item[2]) for item in progress],
+                [(1, 1, "ДС13.xlsx"), (1, 1, "ДС13.xlsx")],
+            )
+            self.assertIsNone(progress[0][3])
+            self.assertIsNotNone(progress[1][3])
+
+
+class DsBaselinePathUriSmokeTest(unittest.TestCase):
+    def test_absolute_uri_does_not_call_resolve(self) -> None:
+        _path_uri.cache_clear()
+        with patch.object(Path, "resolve", side_effect=AssertionError("resolve")):
+            uri = _path_uri(r"C:\tmp\ds.xlsx")
+        self.assertTrue(str(uri).startswith("file:"))
+        unc = _path_uri(r"\\bcc\eng\ds.xlsx")
+        self.assertTrue(str(unc).startswith("file:"))
 
 
 if __name__ == "__main__":

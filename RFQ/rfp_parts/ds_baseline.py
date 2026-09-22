@@ -18,6 +18,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Literal, Protocol, Sequence
@@ -48,6 +49,7 @@ from RFQ.rfp_parts.ds_registry import (
     DsRegistryDocument,
     DsRegistryRelation,
     DsRegistryRow,
+    canonical_supply_group_id,
     cell_text,
     detect_registry_format,
 )
@@ -489,21 +491,32 @@ def _file_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _path_uri(path: Path) -> str | None:
+@lru_cache(maxsize=4096)
+def _path_uri(path_key: str) -> str | None:
+    """Build a ``file:`` URI without ``Path.resolve()``.
+
+    ``resolve()`` hits the network for every UNC path. Quality reports used
+    to call it twice per position row, which looks like a hang after the
+    workbooks are already parsed. Excel also caps a sheet at ~65 530
+    hyperlinks — same trap as Step4 RFP/MTO path columns.
+    """
     try:
-        return Path(path).resolve().as_uri()
+        as_path = Path(path_key)
+        if as_path.is_absolute():
+            return as_path.as_uri()
+        return as_path.resolve(strict=False).as_uri()
     except (OSError, ValueError):
         return None
 
 
 def _set_path_cell(cell, path: Path | str | None) -> None:
+    """Put a clickable file link on a *file-list* cell, not on every position."""
     if path is None or path == "":
         return
-    as_path = Path(path) if not isinstance(path, Path) else path
     if cell.value is None or cell.value == "":
         cell.value = str(path)
     cell.alignment = _ALIGN_WRAP
-    uri = _path_uri(as_path)
+    uri = _path_uri(str(path))
     if uri:
         cell.hyperlink = uri
         cell.font = _LINK_FONT
@@ -1128,64 +1141,18 @@ def _assign_group(
     system: str,
     registry_row: DsRegistryRow | None,
 ) -> tuple[str, str, str, bool, bool, str | None]:
-    """Return group_id, label, mode, fallback, overlay_blocked, issue message."""
+    """Return group_id, label, mode, fallback, overlay_blocked, issue message.
 
+    The bag is the actual DS number. Extra UL folders and RFP files of that
+    number stay in the same bag. Title and mark do not split it.
+    """
+
+    del title, system
     if registry_row is None or not source_id:
         label = _fallback_group_id(source_id)
         return label, label, "", True, True, "нет строки реестра для ID"
-
-    started = [rel for rel in registry_row.relations if not rel.is_empty()]
-    if len(started) == 1 and started[0].mode in {MODE_WHOLE, MODE_NO_UL}:
-        rel = started[0]
-        group_id = rel.group_id or _fallback_group_id(source_id)
-        return group_id, group_id, rel.mode, False, False, None
-
-    if len(started) == 1 and started[0].mode == MODE_FILTER:
-        rel = started[0]
-        if rel.has_complete_filters() and _row_matches_filter(title, system, rel):
-            group_id = rel.group_id or _fallback_group_id(source_id)
-            return group_id, group_id, rel.mode, False, False, None
-        label = _fallback_group_id(source_id)
-        return (
-            label,
-            label,
-            rel.mode or MODE_FILTER,
-            True,
-            True,
-            "фильтр титула/марки не совпал",
-        )
-
-    filter_rels = [
-        rel
-        for rel in started
-        if rel.mode == MODE_FILTER and rel.has_complete_filters()
-    ]
-    if filter_rels:
-        matched = [
-            rel for rel in filter_rels if _row_matches_filter(title, system, rel)
-        ]
-        if len(matched) == 1:
-            rel = matched[0]
-            group_id = rel.group_id or _fallback_group_id(source_id)
-            return group_id, group_id, rel.mode, False, False, None
-        label = _fallback_group_id(source_id)
-        reason = (
-            "несколько фильтров совпали"
-            if len(matched) > 1
-            else "нет совпадения по фильтру титула/марки"
-        )
-        return label, label, MODE_FILTER, True, True, reason
-
-    label = _fallback_group_id(source_id)
-    mode = started[0].mode if started else MODE_NEEDS_SPLIT
-    return (
-        label,
-        label,
-        mode,
-        True,
-        True,
-        f"режим «{MODE_NEEDS_SPLIT}» или несколько связей без однозначного фильтра",
-    )
+    group_id = canonical_supply_group_id(source_id)
+    return group_id, group_id, "", False, False, None
 
 
 def _row_matches_filter(
@@ -2027,9 +1994,6 @@ def _write_structure_report(
             ]
         )
         _mark_level(problems.cell(row=problems.max_row, column=1), item.level)
-        if item.path is not None:
-            _set_path_cell(problems.cell(row=problems.max_row, column=3), item.path)
-            _set_path_cell(problems.cell(row=problems.max_row, column=4), item.path)
     _style_header(problems, 9)
     problems.column_dimensions["C"].width = 36
     problems.column_dimensions["D"].width = 70
@@ -2089,8 +2053,6 @@ def _write_quality_report(
         for item in rows:
             extra = extra_fn(item) if extra_fn else ()
             ws.append(_pos_row(item, extra))
-            _set_path_cell(ws.cell(row=ws.max_row, column=1), item.path)
-            _set_path_cell(ws.cell(row=ws.max_row, column=2), item.path)
         _style_header(ws, len(headers))
         ws.column_dimensions["A"].width = 36
         ws.column_dimensions["B"].width = 70
@@ -2128,9 +2090,6 @@ def _write_quality_report(
             ]
         )
         _mark_level(qty_ws.cell(row=qty_ws.max_row, column=1), item.level)
-        if item.path is not None:
-            _set_path_cell(qty_ws.cell(row=qty_ws.max_row, column=3), item.path)
-            _set_path_cell(qty_ws.cell(row=qty_ws.max_row, column=4), item.path)
     _style_header(qty_ws, 7)
     qty_ws.column_dimensions["C"].width = 36
     qty_ws.column_dimensions["D"].width = 70
@@ -2172,13 +2131,15 @@ def _write_quality_report(
                 item.conversion_trace,
             ]
         )
-        _set_path_cell(units_ws.cell(row=units_ws.max_row, column=1), item.path)
-        _set_path_cell(units_ws.cell(row=units_ws.max_row, column=2), item.path)
     _style_header(units_ws, 12)
     units_ws.column_dimensions["A"].width = 36
     units_ws.column_dimensions["B"].width = 70
     units_ws.column_dimensions["L"].width = 70
 
+    tag_notes: dict[tuple[str, int | None], list[str]] = defaultdict(list)
+    for iss in issues:
+        if iss.code in {ISSUE_TAG_DUPLICATE, ISSUE_TAG_MISMATCH}:
+            tag_notes[(iss.relpath, iss.excel_row)].append(iss.message)
     tags_ws = wb.create_sheet("Теги")
     tags_ws.append(
         [
@@ -2194,13 +2155,7 @@ def _write_quality_report(
         ]
     )
     for item in positions:
-        note = "; ".join(
-            iss.message
-            for iss in issues
-            if iss.relpath == item.relpath
-            and iss.excel_row == item.excel_row
-            and iss.code in {ISSUE_TAG_DUPLICATE, ISSUE_TAG_MISMATCH}
-        )
+        note = "; ".join(tag_notes.get((item.relpath, item.excel_row), ()))
         if not item.diagnostic_tags and not note:
             continue
         tags_ws.append(
@@ -2216,8 +2171,6 @@ def _write_quality_report(
                 note,
             ]
         )
-        _set_path_cell(tags_ws.cell(row=tags_ws.max_row, column=1), item.path)
-        _set_path_cell(tags_ws.cell(row=tags_ws.max_row, column=2), item.path)
     _style_header(tags_ws, 9)
     tags_ws.column_dimensions["A"].width = 36
     tags_ws.column_dimensions["B"].width = 70
@@ -2241,9 +2194,6 @@ def _write_quality_report(
             ]
         )
         _mark_level(dup_ws.cell(row=dup_ws.max_row, column=1), item.level)
-        if item.path is not None:
-            _set_path_cell(dup_ws.cell(row=dup_ws.max_row, column=3), item.path)
-            _set_path_cell(dup_ws.cell(row=dup_ws.max_row, column=4), item.path)
     _style_header(dup_ws, 7)
     dup_ws.column_dimensions["C"].width = 36
     dup_ws.column_dimensions["D"].width = 70
@@ -2266,9 +2216,6 @@ def _write_quality_report(
                 item.message,
             ]
         )
-        if item.path is not None:
-            _set_path_cell(google_ws.cell(row=google_ws.max_row, column=1), item.path)
-            _set_path_cell(google_ws.cell(row=google_ws.max_row, column=2), item.path)
     pos_by_loc = {(p.relpath, p.excel_row): p for p in positions}
     for row in range(2, google_ws.max_row + 1):
         rel = str(google_ws.cell(row=row, column=1).value or "")
@@ -2304,6 +2251,7 @@ def _write_sidecar_positions(
     rows: Sequence[Sequence[object]],
     path_cols: Sequence[int],
 ) -> Path:
+    del path_cols
     wb = Workbook()
     ws = wb.active
     assert ws is not None
@@ -2311,10 +2259,6 @@ def _write_sidecar_positions(
     ws.append(list(headers))
     for row in rows:
         ws.append(list(row))
-        for col in path_cols:
-            value = ws.cell(row=ws.max_row, column=col).value
-            if value:
-                _set_path_cell(ws.cell(row=ws.max_row, column=col), Path(str(value)))
     _style_header(ws, len(headers))
     return _save_workbook_atomic(path, wb)
 
@@ -2580,7 +2524,7 @@ def build_ds_baseline(
             )
 
     if phase_callback is not None:
-        phase_callback("группы поставки и отчёты Excel")
+        phase_callback("группы поставки")
     groups = _build_groups(positions)
     fingerprint = _tree_fingerprint(files, registry=registry)
     blocking_count = sum(1 for item in issues if item.blocking)
@@ -2607,6 +2551,10 @@ def build_ds_baseline(
         ("Fingerprint", fingerprint),
         ("Сводка реестра", registry.validation.summary_line()),
     ]
+    if phase_callback is not None:
+        phase_callback(
+            f"отчёт по структуре ({len(files)} файлов, {len(issues)} замечаний)"
+        )
     _write_structure_report(
         structure_path,
         result_head=summary_rows,
@@ -2616,6 +2564,10 @@ def build_ds_baseline(
         column_notes=column_notes,
         issues=issues,
     )
+    if phase_callback is not None:
+        phase_callback(
+            f"отчёт по качеству ({len(positions)} позиций)"
+        )
     _write_quality_report(
         quality_path,
         result_head=summary_rows,
