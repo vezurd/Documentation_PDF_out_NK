@@ -94,7 +94,7 @@ class GuiWindowDict(TypedDict):
 _WATCH_SPLIT_RE = re.compile(r"[,;\n]+")
 
 _LOCAL_DS_TRUSTED_CANDIDATE = Path(
-    r"C:\Users\ydruzev\PycharmProjects\ДС_дляРобота _уменьшение_2026.09.21"
+    r"\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\_temp_не удалять\ДС_дляРобота _уменьшение"
 )
 _DEFAULT_DS_REGISTRY_FILE = (
     r"\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\Реестр_ДС_УЛ.xlsx"
@@ -157,7 +157,7 @@ def normalize_excel_export_mode(raw: object) -> str:
 
 
 def _default_ds_trusted_folder() -> str:
-    """Local trusted-DS tree when present; otherwise empty (user picks a folder)."""
+    """Trusted-DS tree when the folder is reachable; otherwise empty."""
     try:
         if _LOCAL_DS_TRUSTED_CANDIDATE.is_dir():
             return str(_LOCAL_DS_TRUSTED_CANDIDATE)
