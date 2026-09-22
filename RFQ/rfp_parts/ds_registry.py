@@ -26,7 +26,11 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
-from RFQ.rfp_parts.ds_identity import DsIdentity, parse_ul_folder_ds_identity
+from RFQ.rfp_parts.ds_identity import (
+    DsIdentity,
+    parse_rfp_ds_identity,
+    parse_ul_folder_ds_identity,
+)
 
 IssueLevel = Literal["ERROR", "WARN", "OVERLAY"]
 RegistryFormat = Literal["new", "legacy", "unknown"]
@@ -81,20 +85,23 @@ LEGACY_HEADER_UL = "УЛ"
 LEGACY_HEADER_NOTE = "Примечание"
 
 HDR_STATUS = f"Статус {HEADER_REQUIRED_MARK}"
-HDR_SOURCE_ID = f"ID ДС источника {HEADER_REQUIRED_MARK}"
+HDR_SOURCE_ID = f"Номер ДС {HEADER_REQUIRED_MARK}"
+HDR_SOURCE_ID_LEGACY = "ID ДС источника"
+HDR_FILE_DS = "Файл ДС"
 HDR_PREVIOUS = "Предыдущий / старый ДС"
 HDR_REVISION = "Ревизия"
 HDR_NOTE = "Примечание"
 HDR_ORIGINAL_ROW = "Исходная строка реестра"
+SOURCE_INFO_SHEET_NAME = "Исходный ДС"
+RFP_STATUS_MATCH = "совпало"
+RFP_STATUS_MISS = "не совпало"
 
 CORE_HEADER_TITLES: tuple[str, ...] = (
     HDR_STATUS,
     HDR_SOURCE_ID,
-    HDR_PREVIOUS,
-    HDR_REVISION,
-    HDR_NOTE,
-    HDR_ORIGINAL_ROW,
+    HDR_FILE_DS,
 )
+_SOURCE_ID_HEADER_NAMES = ("Номер ДС", "ID ДС источника")
 
 ISSUE_MISSING_SOURCE_ID = "missing_source_id"
 ISSUE_DUPLICATE_SOURCE_ID = "duplicate_source_id"
@@ -111,6 +118,7 @@ ISSUE_INVALID_MODE = "invalid_mode"
 ISSUE_UL_UNPARSED = "ul_unparsed"
 ISSUE_UL_IDENTITY_MISMATCH = "ul_identity_mismatch"
 ISSUE_UL_FOLDER_MISSING = "ul_folder_missing"
+ISSUE_UL_UNEXPECTED = "ul_unexpected"
 
 _FILL_REQUIRED = PatternFill(
     fill_type="solid", fgColor="1B4F72", start_color="1B4F72", end_color="1B4F72"
@@ -125,8 +133,9 @@ _FILL_AUX = PatternFill(
 )
 _FONT_AUX = Font(bold=True, color="000000", name="Calibri", size=11)
 _FILL_BLANK = PatternFill(
-    fill_type="solid", fgColor="FFC7CE", start_color="FFC7CE", end_color="FFC7CE"
+    fill_type="solid", fgColor="FFFF00", start_color="FFFF00", end_color="FFFF00"
 )
+_FILL_TODO = _FILL_BLANK
 _FONT_DATA = Font(name="Calibri", size=11)
 _ALIGN_HEADER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 _ALIGN_DATA = Alignment(horizontal="left", vertical="top", wrap_text=True)
@@ -134,8 +143,8 @@ _THIN = Side(style="thin", color="B0B0B0")
 _BLOCK_BORDER_COLORS = ("1B4F72", "548235", "C65911", "7030A0")
 _COMMENT_AUTHOR = "реестр ДС"
 
-_CORE_WIDTHS = (16, 20, 24, 12, 36, 18)
-_BLOCK_WIDTHS = (20, 26, 32, 24, 18, 18)
+_CORE_WIDTHS = (16, 18, 42)
+_BLOCK_WIDTHS = (22, 16, 42, 16, 32, 26, 18, 18)
 
 _RELATION_FIELD_STEMS = (
     "ID группы поставки",
@@ -147,7 +156,12 @@ _RELATION_FIELD_STEMS = (
 )
 
 _HEADER_RE_GROUP = re.compile(r"^ID группы поставки\s+(\d+)$", re.IGNORECASE)
-_HEADER_RE_RFP = re.compile(r"^Фактический ДС / ключ RFP\s+(\d+)$", re.IGNORECASE)
+_HEADER_RE_RFP = re.compile(
+    r"^(?:Фактический ДС / ключ RFP|Номер RFP)\s+(\d+)$", re.IGNORECASE
+)
+_HEADER_RE_RFP_FILE = re.compile(r"^Файл RFP\s+(\d+)$", re.IGNORECASE)
+_HEADER_RE_RFP_STATUS = re.compile(r"^Статус RFP\s+(\d+)$", re.IGNORECASE)
+_DS_NUMBER_PREFIX_RE = re.compile(r"^ДС\s*", re.IGNORECASE)
 _HEADER_RE_UL = re.compile(r"^Папка УЛ\s+(\d+)$", re.IGNORECASE)
 _HEADER_RE_MODE = re.compile(r"^Режим распределения\s+(\d+)$", re.IGNORECASE)
 _HEADER_RE_TITLE = re.compile(r"^Фильтр титула\s+(\d+)$", re.IGNORECASE)
@@ -354,16 +368,21 @@ class _RelationBlockLayout:
     mode: int
     title_filter: int
     mark_filter: int
+    rfp_file: int = 0
+    rfp_status: int = 0
 
     def columns(self) -> tuple[int, ...]:
-        return (
+        ordered = (
             self.group_id,
             self.rfp_key,
+            self.rfp_file,
+            self.rfp_status,
             self.ul_folder,
             self.mode,
             self.title_filter,
             self.mark_filter,
         )
+        return tuple(col for col in ordered if col)
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +395,7 @@ class _HeaderLayout:
     note: int
     original_row: int
     blocks: tuple[_RelationBlockLayout, ...]
+    file_ds: int = 0
 
     @property
     def max_blocks(self) -> int:
@@ -391,13 +411,15 @@ class _HeaderLayout:
 # ---------------------------------------------------------------------------
 
 
-def relation_headers(block_index: int) -> tuple[str, str, str, str, str, str]:
-    """Return the six canonical headers of relation block ``N``."""
+def relation_headers(block_index: int) -> tuple[str, ...]:
+    """Return the canonical headers of relation block ``N``."""
 
     n = int(block_index)
     return (
         f"ID группы поставки {n} {HEADER_REQUIRED_MARK}",
-        f"Фактический ДС / ключ RFP {n} {HEADER_REQUIRED_MARK}",
+        f"Номер RFP {n} {HEADER_REQUIRED_MARK}",
+        f"Файл RFP {n}",
+        f"Статус RFP {n}",
         f"Папка УЛ {n} {HEADER_CONDITIONAL_MARK}",
         f"Режим распределения {n} {HEADER_REQUIRED_MARK}",
         f"Фильтр титула {n} {HEADER_CONDITIONAL_MARK}",
@@ -421,6 +443,25 @@ def normalize_header(text: object) -> str:
     raw = str(text or "").replace("\n", " ").replace("\r", " ")
     raw = raw.replace(HEADER_REQUIRED_MARK, " ").replace(HEADER_CONDITIONAL_MARK, " ")
     return _WS_RE.sub(" ", raw).strip()
+
+
+def format_registry_ds_number(source_id: str) -> str:
+    """Show a registry DS id as ``ДС11`` / ``ДС4905_1``."""
+
+    text = cell_text(source_id)
+    if not text:
+        return ""
+    bare = _DS_NUMBER_PREFIX_RE.sub("", text).strip()
+    return f"ДС{bare}" if bare else text
+
+
+def parse_registry_ds_number(value: object) -> str:
+    """Read ``ДС11``, ``ДС 11`` or ``11`` back to the stored source id ``11``."""
+
+    text = cell_text(value)
+    if not text:
+        return ""
+    return _DS_NUMBER_PREFIX_RE.sub("", text).strip()
 
 
 def cell_text(value: object) -> str:
@@ -484,27 +525,31 @@ def _layout_from_max_blocks(max_blocks: int) -> _HeaderLayout:
     blocks: list[_RelationBlockLayout] = []
     offset = len(CORE_HEADER_TITLES)
     count = max(MIN_RELATION_BLOCKS, int(max_blocks))
+    width = len(relation_headers(1))
     for index in range(1, count + 1):
-        base = offset + (index - 1) * 6
+        base = offset + (index - 1) * width
         blocks.append(
             _RelationBlockLayout(
                 index=index,
                 group_id=base + 1,
                 rfp_key=base + 2,
-                ul_folder=base + 3,
-                mode=base + 4,
-                title_filter=base + 5,
-                mark_filter=base + 6,
+                rfp_file=base + 3,
+                rfp_status=base + 4,
+                ul_folder=base + 5,
+                mode=base + 6,
+                title_filter=base + 7,
+                mark_filter=base + 8,
             )
         )
     return _HeaderLayout(
         headers=headers,
         status=1,
         source_id=2,
-        previous=3,
-        revision=4,
-        note=5,
-        original_row=6,
+        file_ds=3,
+        previous=0,
+        revision=0,
+        note=0,
+        original_row=0,
         blocks=tuple(blocks),
     )
 
@@ -521,17 +566,17 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
         if key and key not in indexed:
             indexed[key] = col
 
+    source_header = next(
+        (name for name in _SOURCE_ID_HEADER_NAMES if name in indexed),
+        "",
+    )
     missing_core = [
         title
-        for title in (
-            "Статус",
-            "ID ДС источника",
-            "Предыдущий / старый ДС",
-            "Ревизия",
-            "Примечание",
-            "Исходная строка реестра",
+        for title, present in (
+            ("Статус", "Статус" in indexed),
+            ("Номер ДС", bool(source_header)),
         )
-        if title not in indexed
+        if not present
     ]
     if missing_core:
         raise DsRegistryFormatError(
@@ -541,7 +586,9 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
     found: dict[int, dict[str, int]] = {}
     known_norm: set[str] = {
         "Статус",
+        "Номер ДС",
         "ID ДС источника",
+        "Файл ДС",
         "Предыдущий / старый ДС",
         "Ревизия",
         "Примечание",
@@ -550,6 +597,8 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
     matchers = (
         ("group_id", _HEADER_RE_GROUP),
         ("rfp_key", _HEADER_RE_RFP),
+        ("rfp_file", _HEADER_RE_RFP_FILE),
+        ("rfp_status", _HEADER_RE_RFP_STATUS),
         ("ul_folder", _HEADER_RE_UL),
         ("mode", _HEADER_RE_MODE),
         ("title_filter", _HEADER_RE_TITLE),
@@ -609,6 +658,8 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
                     mode=fields["mode"],
                     title_filter=fields["title_filter"],
                     mark_filter=fields["mark_filter"],
+                    rfp_file=fields.get("rfp_file", 0),
+                    rfp_status=fields.get("rfp_status", 0),
                 )
             )
     else:
@@ -625,11 +676,12 @@ def _discover_layout(headers: Sequence[object]) -> _HeaderLayout:
     return _HeaderLayout(
         headers=tuple(header_values),
         status=indexed["Статус"],
-        source_id=indexed["ID ДС источника"],
-        previous=indexed["Предыдущий / старый ДС"],
-        revision=indexed["Ревизия"],
-        note=indexed["Примечание"],
-        original_row=indexed["Исходная строка реестра"],
+        source_id=indexed[source_header],
+        file_ds=indexed.get("Файл ДС", 0),
+        previous=indexed.get("Предыдущий / старый ДС", 0),
+        revision=indexed.get("Ревизия", 0),
+        note=indexed.get("Примечание", 0),
+        original_row=indexed.get("Исходная строка реестра", 0),
         blocks=tuple(blocks),
     )
 
@@ -642,8 +694,12 @@ def _header_comment(header: str) -> str:
             "Маркер обязательности — символ * и цвет шапки."
         ),
         HDR_SOURCE_ID: (
-            "Обязательно для статуса Активен (*). Строковый ключ как в источнике: "
-            "13, 47, 4905_1. Уникален среди активных строк. Не угадывать из примечания."
+            "Обязательно для статуса Активен (*). Пишите ДС11, ДС47, ДС4905_1. "
+            "У активных строк номер не повторяется."
+        ),
+        HDR_FILE_DS: (
+            "Имя файла ДС. Путь в ячейке не пишется: щелчок открывает файл. "
+            "Робот подставляет его при проверке реестра."
         ),
         HDR_PREVIOUS: (
             "Вспомогательное поле. Текст «Старый ДС» как в исходнике, без разбора."
@@ -664,10 +720,21 @@ def _header_comment(header: str) -> str:
             "группы: ДС{actual} (ДС13, ДС4905). Для комплекта без УЛ — NO_UL:<id>. "
             "Повторённые одинаковые ID должны совпадать по ключу RFP и папке УЛ."
         )
-    if header.startswith("Фактический ДС"):
+    if header.startswith("Фактический ДС") or header.startswith("Номер RFP"):
         return (
-            f"Обязательно (*) для блока {n}. Ключ корневого RFP — голый actual "
-            "(13, 4905), без префикса ДС."
+            f"Обязательно (*) для блока {n}. Номер в имени файла в корне "
+            "RFP_Зиновьев: 13, 4905. Один номер — одна группа."
+        )
+    if header.startswith("Файл RFP"):
+        return (
+            f"Имя файла RFP для блока {n}. Путь в ячейке не пишется. "
+            "Робот подставляет файл из корня RFP_Зиновьев."
+        )
+    if header.startswith("Статус RFP"):
+        return (
+            f"Совпало — в корне RFP_Зиновьев есть файл с этим номером. "
+            f"Не совпало — такого файла нет. Это не сверка количеств: "
+            f"количества смотрит «Наложить RFP на группы»."
         )
     if header.startswith("Папка УЛ"):
         return (
@@ -770,6 +837,50 @@ def _append_ul_identity_issues(
         )
 
 
+def index_ul_folders(ul_root: str | Path | None) -> dict[str, tuple[str, ...]]:
+    """Map a UL actual number to first-level folder names under ``ul_root``."""
+
+    if not ul_root:
+        return {}
+    root = Path(ul_root)
+    found: dict[str, list[str]] = {}
+    try:
+        children = [path for path in root.iterdir() if path.is_dir()]
+    except OSError:
+        return {}
+    for folder in children:
+        identity = parse_ul_folder_ds_identity(folder.name)
+        if identity.actual is None:
+            continue
+        found.setdefault(str(identity.actual), []).append(folder.name)
+    return {key: tuple(names) for key, names in found.items()}
+
+
+def index_rfp_files(rfp_root: str | Path | None) -> dict[str, tuple[Path, ...]]:
+    """Map an RFP actual number to workbook paths in the folder root only."""
+
+    if not rfp_root:
+        return {}
+    root = Path(rfp_root)
+    found: dict[str, list[Path]] = {}
+    try:
+        children = [
+            path
+            for path in root.iterdir()
+            if path.is_file()
+            and path.suffix.lower() in {".xlsx", ".xlsm"}
+            and not path.name.startswith("~$")
+        ]
+    except OSError:
+        return {}
+    for path in children:
+        identity = parse_rfp_ds_identity(path.name)
+        if identity.actual is None:
+            continue
+        found.setdefault(str(identity.actual), []).append(path)
+    return {key: tuple(paths) for key, paths in found.items()}
+
+
 def validate_registry_rows(
     rows: Sequence[DsRegistryRow],
     *,
@@ -783,6 +894,7 @@ def validate_registry_rows(
     group_anchor: dict[str, tuple[str, str, DsRegistryRow, int]] = {}
     rfp_anchor: dict[str, tuple[str, DsRegistryRow]] = {}
     ul_root_path = Path(ul_root) if ul_root else None
+    ul_index = index_ul_folders(ul_root_path) if ul_root_path is not None else {}
 
     for row in rows:
         if not _row_nonempty_for_status(row):
@@ -929,6 +1041,21 @@ def validate_registry_rows(
                     )
                 )
             _append_ul_identity_issues(issues, row, rel)
+            if rel.mode == MODE_NO_UL and rel.rfp_key and ul_index.get(rel.rfp_key):
+                found_names = ", ".join(ul_index[rel.rfp_key])
+                issues.append(
+                    _issue(
+                        ISSUE_UL_UNEXPECTED,
+                        "WARN",
+                        (
+                            f"блок {rel.block_index}: режим «{MODE_NO_UL}», "
+                            f"но в папке УЛ уже есть: {found_names}"
+                        ),
+                        row,
+                        group_id=rel.group_id,
+                        block_index=rel.block_index,
+                    )
+                )
             if (
                 ul_root_path is not None
                 and rel.ul_folder
@@ -1073,7 +1200,9 @@ def detect_registry_format(path: str | Path) -> RegistryFormat:
             header = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
             if header:
                 names = {normalize_header(v) for v in header if v}
-                if "Статус" in names and "ID ДС источника" in names:
+                if "Статус" in names and (
+                    "Номер ДС" in names or "ID ДС источника" in names
+                ):
                     return "new"
         sheet = workbook[workbook.sheetnames[0]]
         sample = []
@@ -1313,7 +1442,139 @@ def _apply_block_borders(
                 cell.border = Border(left=left, right=right, top=top, bottom=bottom)
 
 
+def _write_file_links(
+    ws: Worksheet,
+    row: int,
+    col: int,
+    paths: Sequence[Path],
+) -> None:
+    """Write filenames only. One file becomes a hyperlink; the path stays hidden."""
+
+    if col <= 0:
+        return
+    cell = ws.cell(row=row, column=col)
+    cell.alignment = _ALIGN_DATA
+    cell.number_format = "@"
+    files = [path for path in paths if path.name]
+    if len(files) == 1:
+        cell.value = files[0].name
+        cell.hyperlink = str(files[0])
+        cell.font = Font(
+            name="Calibri", size=11, color="0563C1", underline="single"
+        )
+        return
+    cell.hyperlink = None
+    cell.value = "\n".join(path.name for path in files) or None
+    cell.font = _FONT_DATA
+
+
+def _mark_todo(cell) -> None:
+    cell.fill = _FILL_TODO
+
+
+def _paint_human_todo(
+    ws: Worksheet,
+    layout: _HeaderLayout,
+    rows: Sequence[DsRegistryRow],
+    links: RegistryLinks,
+) -> None:
+    """Yellow cells a person still has to finish. Computed file cells stay plain."""
+
+    ul_index = links.ul_by_actual if links.scanned_ul else {}
+    for index, row in enumerate(rows):
+        if not row.is_active:
+            continue
+        excel_row = index + 2
+        if (
+            links.scanned_ds
+            and layout.file_ds
+            and row.source_id
+            and not links.ds_files.get(row.source_id)
+        ):
+            _mark_todo(ws.cell(row=excel_row, column=layout.file_ds))
+        for block in layout.blocks:
+            if block.index > len(row.relations):
+                continue
+            rel = row.relations[block.index - 1]
+            if rel.is_empty():
+                continue
+            if not rel.group_id:
+                _mark_todo(ws.cell(row=excel_row, column=block.group_id))
+            if not rel.rfp_key:
+                _mark_todo(ws.cell(row=excel_row, column=block.rfp_key))
+            if not rel.mode:
+                _mark_todo(ws.cell(row=excel_row, column=block.mode))
+            if rel.mode == MODE_NEEDS_SPLIT:
+                _mark_todo(ws.cell(row=excel_row, column=block.mode))
+                if not rel.title_filter:
+                    _mark_todo(ws.cell(row=excel_row, column=block.title_filter))
+                if not rel.mark_filter:
+                    _mark_todo(ws.cell(row=excel_row, column=block.mark_filter))
+            if rel.mode == MODE_FILTER:
+                if not rel.title_filter:
+                    _mark_todo(ws.cell(row=excel_row, column=block.title_filter))
+                if not rel.mark_filter:
+                    _mark_todo(ws.cell(row=excel_row, column=block.mark_filter))
+            if rel.mode and rel.mode != MODE_NO_UL and not rel.ul_folder:
+                _mark_todo(ws.cell(row=excel_row, column=block.ul_folder))
+            if (
+                rel.mode == MODE_NO_UL
+                and rel.rfp_key
+                and ul_index.get(rel.rfp_key)
+            ):
+                _mark_todo(ws.cell(row=excel_row, column=block.mode))
+            if (
+                links.scanned_rfp
+                and rel.rfp_key
+                and block.rfp_status
+                and not links.rfp_files.get(rel.rfp_key)
+            ):
+                _mark_todo(ws.cell(row=excel_row, column=block.rfp_status))
+
+
+def _add_source_info_sheet(workbook: Workbook, rows: Sequence[DsRegistryRow]) -> None:
+    """Keep old-DS notes off the working sheet."""
+
+    if SOURCE_INFO_SHEET_NAME in workbook.sheetnames:
+        del workbook[SOURCE_INFO_SHEET_NAME]
+    sheet = workbook.create_sheet(SOURCE_INFO_SHEET_NAME)
+    headers = (
+        "Номер ДС",
+        HDR_PREVIOUS,
+        HDR_REVISION,
+        HDR_NOTE,
+        HDR_ORIGINAL_ROW,
+    )
+    for col, header in enumerate(headers, start=1):
+        cell = sheet.cell(row=1, column=col, value=header)
+        cell.font = _FONT_AUX
+        cell.fill = _FILL_AUX
+        cell.alignment = _ALIGN_HEADER
+    for index, row in enumerate(rows, start=2):
+        _write_text_cell(sheet, index, 1, format_registry_ds_number(row.source_id))
+        _write_text_cell(sheet, index, 2, row.previous_ds)
+        _write_text_cell(sheet, index, 3, row.revision)
+        _write_text_cell(sheet, index, 4, row.note)
+        origin = sheet.cell(
+            row=index,
+            column=5,
+            value=row.original_excel_row if row.original_excel_row else None,
+        )
+        origin.alignment = _ALIGN_DATA
+        origin.font = _FONT_DATA
+    sheet.column_dimensions["A"].width = 18
+    sheet.column_dimensions["B"].width = 28
+    sheet.column_dimensions["C"].width = 14
+    sheet.column_dimensions["D"].width = 42
+    sheet.column_dimensions["E"].width = 24
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:E{max(1, len(rows) + 1)}"
+    sheet.sheet_properties.tabColor = "D9D9D9"
+
+
 def _write_text_cell(ws: Worksheet, row: int, col: int, value: str) -> None:
+    if col <= 0:
+        return
     cell = ws.cell(row=row, column=col, value=value if value else None)
     cell.alignment = _ALIGN_DATA
     cell.font = _FONT_DATA
@@ -1409,34 +1670,31 @@ def _legend_rows() -> list[tuple[str, str, str, str]]:
             "В свод попадают только «Активен». История и Отключен робот пропускает.",
         ),
         (
-            "ID ДС источника",
+            "Номер ДС",
             star,
-            "Номер ДС как в папке: 13, 47, 4905_1. У активных строк номер не повторяется.",
+            "Пишите ДС11, ДС47, ДС4905_1. У активных строк номер не повторяется.",
             "По нему робот находит файл ДС. Чужой номер привяжет не ту спецификацию.",
         ),
         (
-            "Предыдущий / старый ДС",
+            "Файл ДС",
             grey,
-            "Если знаете, какой ДС заменён.",
-            "Только пометка для человека. На свод и на RFP не влияет.",
+            "Не заполняйте вручную. Робот ставит имя файла при проверке реестра.",
+            "В ячейке только имя. Щелчок открывает файл.",
         ),
         (
-            "Ревизия",
-            grey,
-            "Если ведёте ревизию строки.",
-            "Только пометка. На расчёт не влияет.",
+            "Номер RFP, Файл RFP, Статус RFP",
+            star,
+            "Номер — какой файл искать в корне RFP_Зиновьев. Файл и статус "
+            "робот подставляет сам: «совпало» или «не совпало».",
+            "Совпало значит, что файл с этим номером есть. "
+            "Количества это не сравнивает.",
         ),
         (
-            "Примечание",
+            "Лист «Исходный ДС»",
             grey,
-            "Свободный текст.",
-            "Только пометка. На расчёт не влияет.",
-        ),
-        (
-            "Исходная строка реестра",
-            grey,
-            "Не меняйте: номер строки старого файла.",
-            "Чтобы сверить миграцию. Робот по ней ничего не выбирает.",
+            "Там предыдущий ДС, ревизия, примечание и номер старой строки. "
+            "На рабочем листе этих столбцов нет.",
+            "На свод и на RFP не влияет. Робот этот лист только хранит.",
         ),
         (
             "Связь 1, Связь 2…",
@@ -1484,7 +1742,9 @@ def _legend_rows() -> list[tuple[str, str, str, str]]:
         (
             "Режим «Нет УЛ»",
             star,
-            "Папку УЛ оставьте пустой.",
+            "Папку УЛ оставьте пустой. Робот сам смотрит папку со всеми УЛ: "
+            "если каталога с этим номером нет, ячейку трогать не нужно. "
+            "Если каталог появился, ячейка режима станет жёлтой.",
             "У поставки нет папки УЛ. Группа получит имя NO_UL: и номер ДС.",
         ),
         (
@@ -1685,6 +1945,8 @@ def _next_dated_registry_path(folder: Path) -> Path:
 def install_working_registry(
     rows: Sequence[DsRegistryRow],
     home: str | Path,
+    *,
+    links: RegistryLinks | None = None,
 ) -> RegistryInstall:
     """Write the one working registry into ``home`` (the ``_RFP`` folder).
 
@@ -1706,7 +1968,7 @@ def install_working_registry(
     folder = Path(home)
     folder.mkdir(parents=True, exist_ok=True)
     staging = folder / f".{Path(CANONICAL_REGISTRY_NAME).stem}.{os.getpid()}.staging.xlsx"
-    written = write_registry_workbook(staging, rows)
+    written = write_registry_workbook(staging, rows, links=links)
     archived, moved_now = archive_legacy_canonical(folder)
     canonical = folder / CANONICAL_REGISTRY_NAME
     try:
@@ -1815,18 +2077,32 @@ def ensure_registry_legend(path: str | Path) -> bool:
     return True
 
 
+@dataclass(frozen=True, slots=True)
+class RegistryLinks:
+    """Files and UL folders painted into the working registry sheet."""
+
+    ds_files: dict[str, tuple[Path, ...]] = field(default_factory=dict)
+    rfp_files: dict[str, tuple[Path, ...]] = field(default_factory=dict)
+    ul_by_actual: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    scanned_ds: bool = False
+    scanned_rfp: bool = False
+    scanned_ul: bool = False
+
+
 def write_registry_workbook(
     path: str | Path,
     rows: Sequence[DsRegistryRow],
     *,
     spare_rows: int = DEFAULT_SPARE_ROWS,
+    links: RegistryLinks | None = None,
 ) -> Path:
-    """Write the registry plus the second sheet «Как заполнять».
+    """Write the registry, the how-to sheet and the source-info sheet.
 
     Args:
         path: Destination xlsx. Parent directories are created.
         rows: Canonical rows in display order.
         spare_rows: Extra empty table rows so a person can append data.
+        links: Optional DS/RFP/UL lookup filled by «Проверить реестр».
 
     Returns:
         The written path.
@@ -1864,27 +2140,35 @@ def write_registry_workbook(
                 width
             )
 
+    link_book = links or RegistryLinks()
     for index, row in enumerate(rows):
         excel_row = index + 2
         _write_text_cell(ws, excel_row, layout.status, row.status)
-        _write_text_cell(ws, excel_row, layout.source_id, row.source_id)
-        _write_text_cell(ws, excel_row, layout.previous, row.previous_ds)
-        _write_text_cell(ws, excel_row, layout.revision, row.revision)
-        _write_text_cell(ws, excel_row, layout.note, row.note)
-        orig = row.original_excel_row
-        orig_cell = ws.cell(
-            row=excel_row,
-            column=layout.original_row,
-            value=orig if orig else None,
+        _write_text_cell(
+            ws, excel_row, layout.source_id, format_registry_ds_number(row.source_id)
         )
-        orig_cell.alignment = _ALIGN_DATA
-        orig_cell.font = _FONT_DATA
+        _write_file_links(
+            ws,
+            excel_row,
+            layout.file_ds,
+            link_book.ds_files.get(row.source_id, ()),
+        )
         for block in layout.blocks:
             rel = None
             if block.index <= len(row.relations):
                 rel = row.relations[block.index - 1]
             _write_text_cell(ws, excel_row, block.group_id, rel.group_id if rel else "")
             _write_text_cell(ws, excel_row, block.rfp_key, rel.rfp_key if rel else "")
+            rfp_paths = (
+                link_book.rfp_files.get(rel.rfp_key, ())
+                if rel is not None and rel.rfp_key
+                else ()
+            )
+            _write_file_links(ws, excel_row, block.rfp_file, rfp_paths)
+            status_text = ""
+            if rel is not None and rel.rfp_key and link_book.scanned_rfp:
+                status_text = RFP_STATUS_MATCH if rfp_paths else RFP_STATUS_MISS
+            _write_text_cell(ws, excel_row, block.rfp_status, status_text)
             _write_text_cell(ws, excel_row, block.ul_folder, rel.ul_folder if rel else "")
             _write_text_cell(ws, excel_row, block.mode, rel.mode if rel else "")
             _write_text_cell(
@@ -1955,7 +2239,9 @@ def write_registry_workbook(
     for col, header in enumerate(layout.headers, start=1):
         _apply_header_cell(ws.cell(row=1, column=col), header)
     _apply_block_borders(ws, layout, last_row)
+    _paint_human_todo(ws, layout, rows, link_book)
     _add_legend_sheet(wb)
+    _add_source_info_sheet(wb, rows)
 
     buffer = BytesIO()
     try:
@@ -1995,13 +2281,74 @@ def _relation_from_layout(
 
     return DsRegistryRelation(
         group_id=at(block.group_id),
-        rfp_key=at(block.rfp_key),
+        rfp_key=parse_registry_ds_number(at(block.rfp_key)),
         ul_folder=at(block.ul_folder),
         mode=at(block.mode),
         title_filter=at(block.title_filter),
         mark_filter=at(block.mark_filter),
         block_index=block.index,
     )
+
+
+def _read_source_info(
+    workbook: Workbook,
+) -> list[tuple[str, str, str, str, int | None]]:
+    if SOURCE_INFO_SHEET_NAME not in workbook.sheetnames:
+        return []
+    sheet = workbook[SOURCE_INFO_SHEET_NAME]
+    found: list[tuple[str, str, str, str, int | None]] = []
+    for values in sheet.iter_rows(min_row=2, values_only=True):
+        values = tuple(values or ())
+        source_id = parse_registry_ds_number(_cell_at(values, 0))
+        previous = cell_text(_cell_at(values, 1))
+        revision = cell_text(_cell_at(values, 2))
+        note = cell_text(_cell_at(values, 3))
+        original = _parse_original_row(_cell_at(values, 4))
+        if not any((source_id, previous, revision, note, original)):
+            continue
+        found.append((source_id, previous, revision, note, original))
+    return found
+
+
+def _merge_source_info(
+    rows: list[DsRegistryRow],
+    info: Sequence[tuple[str, str, str, str, int | None]],
+) -> list[DsRegistryRow]:
+    """Fill previous/revision/note/origin from «Исходный ДС» when the main sheet has none."""
+
+    if not info:
+        return rows
+    used: set[int] = set()
+    merged: list[DsRegistryRow] = []
+    for row in rows:
+        if row.previous_ds or row.revision or row.note or row.original_excel_row:
+            merged.append(row)
+            continue
+        match_at = None
+        for index, item in enumerate(info):
+            if index in used:
+                continue
+            if item[0] == row.source_id:
+                match_at = index
+                break
+        if match_at is None:
+            merged.append(row)
+            continue
+        used.add(match_at)
+        source_id, previous, revision, note, original = info[match_at]
+        merged.append(
+            DsRegistryRow(
+                status=row.status,
+                source_id=row.source_id or source_id,
+                previous_ds=previous,
+                revision=revision,
+                note=note,
+                relations=row.relations,
+                excel_row=row.excel_row,
+                original_excel_row=original,
+            )
+        )
+    return merged
 
 
 def load_registry(
@@ -2042,11 +2389,25 @@ def load_registry(
         ):
             values = tuple(values or ())
             status = cell_text(_cell_at(values, layout.status - 1))
-            source_id = cell_text(_cell_at(values, layout.source_id - 1))
-            previous = cell_text(_cell_at(values, layout.previous - 1))
-            revision = cell_text(_cell_at(values, layout.revision - 1))
-            note = cell_text(_cell_at(values, layout.note - 1))
-            original = _parse_original_row(_cell_at(values, layout.original_row - 1))
+            source_id = parse_registry_ds_number(
+                _cell_at(values, layout.source_id - 1)
+            )
+            previous = (
+                cell_text(_cell_at(values, layout.previous - 1))
+                if layout.previous
+                else ""
+            )
+            revision = (
+                cell_text(_cell_at(values, layout.revision - 1))
+                if layout.revision
+                else ""
+            )
+            note = cell_text(_cell_at(values, layout.note - 1)) if layout.note else ""
+            original = (
+                _parse_original_row(_cell_at(values, layout.original_row - 1))
+                if layout.original_row
+                else None
+            )
             relations = tuple(
                 _relation_from_layout(values, block) for block in layout.blocks
             )
@@ -2077,6 +2438,7 @@ def load_registry(
                     original_excel_row=original,
                 )
             )
+        rows = _merge_source_info(rows, _read_source_info(workbook))
     finally:
         workbook.close()
 

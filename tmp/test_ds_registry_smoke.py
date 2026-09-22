@@ -27,15 +27,19 @@ from RFQ.rfp_parts.ds_registry import (
     ISSUE_MULTI_LINK_NEEDS_SPLIT,
     ISSUE_PARTIAL_BLOCK,
     ISSUE_UL_IDENTITY_MISMATCH,
+    ISSUE_UL_UNEXPECTED,
     ISSUE_UL_UNPARSED,
     MIGRATION_REPORT_PREFIX,
     MODE_NEEDS_SPLIT,
     MODE_NO_UL,
     MODE_WHOLE,
+    RFP_STATUS_MATCH,
+    RFP_STATUS_MISS,
     REGISTRY_SHEET_NAME,
     REGISTRY_TABLE_NAME,
     STATUS_ACTIVE,
     STATUS_HISTORY,
+    RegistryLinks,
     DsRegistryRelation,
     DsRegistryReplaceError,
     DsRegistryRow,
@@ -207,7 +211,8 @@ class DsRegistrySmokeTest(unittest.TestCase):
             wb = _load_xlsx(path)
             try:
                 self.assertEqual(
-                    wb.sheetnames, [REGISTRY_SHEET_NAME, "Как заполнять"]
+                    wb.sheetnames,
+                    [REGISTRY_SHEET_NAME, "Как заполнять", "Исходный ДС"],
                 )
                 legend = wb["Как заполнять"]
                 self.assertIn("Как заполнять реестр", str(legend["A1"].value))
@@ -225,19 +230,24 @@ class DsRegistrySmokeTest(unittest.TestCase):
                 self.assertTrue(ws["A1"].alignment.wrap_text)
                 self.assertEqual(ws["A1"].value, HDR_STATUS)
                 self.assertEqual(ws["B1"].value, HDR_SOURCE_ID)
+                self.assertEqual(ws["B2"].value, "ДС23")
                 self.assertIn(HEADER_REQUIRED_MARK, str(ws["A1"].value))
-                self.assertIn(HEADER_CONDITIONAL_MARK, str(ws["I1"].value))
+                self.assertIn(HEADER_CONDITIONAL_MARK, str(ws["H1"].value))
                 self.assertTrue(_fill_rgb(ws["A1"]).endswith("1B4F72"))
                 self.assertTrue(_fill_rgb(ws["B1"]).endswith("1B4F72"))
-                self.assertTrue(_fill_rgb(ws["I1"]).endswith("FFC000"))
+                self.assertTrue(_fill_rgb(ws["H1"]).endswith("FFC000"))
                 self.assertTrue(_fill_rgb(ws["C1"]).endswith("D9D9D9"))
                 self.assertIsNotNone(ws["A1"].comment)
                 self.assertIn("Активен", ws["A1"].comment.text)
                 self.assertIn("*", ws["A1"].comment.text)
-                self.assertIsNotNone(ws["I1"].comment)
-                self.assertIn(MODE_NO_UL, ws["I1"].comment.text)
-                self.assertEqual(ws["G1"].border.left.style, "medium")
-                self.assertEqual(ws["L1"].border.right.style, "medium")
+                self.assertIsNotNone(ws["H1"].comment)
+                self.assertIn(MODE_NO_UL, ws["H1"].comment.text)
+                self.assertEqual(ws["D1"].border.left.style, "medium")
+                self.assertEqual(ws["K1"].border.right.style, "medium")
+                info = wb["Исходный ДС"]
+                self.assertEqual(info["A2"].value, "ДС23")
+                self.assertEqual(info["E2"].value, 2)
+                self.assertIsNone(ws["C2"].value)
                 formulas = [
                     str(dv.formula1) for dv in ws.data_validations.dataValidation
                 ]
@@ -668,6 +678,158 @@ class LockedRegistryCopySmokeTest(unittest.TestCase):
             self.assertIn("_новый_", written.name)
             self.assertEqual(target.read_bytes(), b"locked")
             self.assertEqual(load_registry(written).rows[0].source_id, "13")
+
+
+class RegistrySheetLinksSmokeTest(unittest.TestCase):
+    def test_ds_number_file_link_and_yellow_split(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_file = root / "ДС11_spec.xlsx"
+            ds_file.write_bytes(b"ds")
+            rfp_file = root / "ДС13. sample.xlsx"
+            rfp_file.write_bytes(b"rfp")
+            path = root / "registry.xlsx"
+            rows = [
+                DsRegistryRow(
+                    status=STATUS_ACTIVE,
+                    source_id="11",
+                    previous_ds="2",
+                    relations=(
+                        DsRegistryRelation(
+                            group_id="ДС11",
+                            rfp_key="13",
+                            ul_folder="согл УЛ ДС11",
+                            mode=MODE_WHOLE,
+                            block_index=1,
+                        ),
+                    ),
+                ),
+                DsRegistryRow(
+                    status=STATUS_ACTIVE,
+                    source_id="8",
+                    relations=(
+                        DsRegistryRelation(
+                            group_id="ДС1",
+                            rfp_key="99",
+                            ul_folder="согл УЛ ДС1",
+                            mode=MODE_NEEDS_SPLIT,
+                            block_index=1,
+                        ),
+                    ),
+                ),
+            ]
+            write_registry_workbook(
+                path,
+                rows,
+                links=RegistryLinks(
+                    ds_files={"11": (ds_file,)},
+                    rfp_files={"13": (rfp_file,)},
+                    scanned_ds=True,
+                    scanned_rfp=True,
+                ),
+            )
+            loaded = load_registry(path)
+            self.assertEqual(loaded.rows[0].source_id, "11")
+            self.assertEqual(loaded.rows[0].previous_ds, "2")
+            self.assertEqual(loaded.rows[0].relations[0].rfp_key, "13")
+            wb = _load_xlsx(path)
+            try:
+                ws = wb[REGISTRY_SHEET_NAME]
+                self.assertEqual(ws["B2"].value, "ДС11")
+                self.assertEqual(ws["C2"].value, ds_file.name)
+                self.assertNotIn(str(root), str(ws["C2"].value))
+                self.assertEqual(ws["F2"].value, rfp_file.name)
+                self.assertEqual(ws["G2"].value, RFP_STATUS_MATCH)
+                self.assertEqual(ws["G3"].value, RFP_STATUS_MISS)
+                self.assertTrue(_fill_rgb(ws["G3"]).endswith("FFFF00"))
+                self.assertTrue(_fill_rgb(ws["I3"]).endswith("FFFF00"))
+                self.assertTrue(_fill_rgb(ws["J3"]).endswith("FFFF00"))
+            finally:
+                wb.close()
+
+    def test_no_ul_warns_only_when_folder_exists(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            (root / "согл УЛ ДС101").mkdir()
+            present = DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="101",
+                excel_row=2,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="NO_UL:101",
+                        rfp_key="101",
+                        ul_folder="",
+                        mode=MODE_NO_UL,
+                        block_index=1,
+                    ),
+                ),
+            )
+            absent = DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="102",
+                excel_row=3,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="NO_UL:102",
+                        rfp_key="102",
+                        ul_folder="",
+                        mode=MODE_NO_UL,
+                        block_index=1,
+                    ),
+                ),
+            )
+            warned = validate_registry_rows([present, absent], ul_root=root)
+            codes = [(item.source_id, item.code) for item in warned.issues]
+            self.assertIn(("101", ISSUE_UL_UNEXPECTED), codes)
+            self.assertNotIn(("102", ISSUE_UL_UNEXPECTED), codes)
+
+    def test_legacy_header_name_still_loads(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            path = Path(raw) / "old.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            assert ws is not None
+            ws.title = REGISTRY_SHEET_NAME
+            headers = [
+                "Статус *",
+                "ID ДС источника *",
+                "Предыдущий / старый ДС",
+                "Ревизия",
+                "Примечание",
+                "Исходная строка реестра",
+                "ID группы поставки 1 *",
+                "Фактический ДС / ключ RFP 1 *",
+                "Папка УЛ 1 †",
+                "Режим распределения 1 *",
+                "Фильтр титула 1 †",
+                "Фильтр марки 1 †",
+            ]
+            for col, header in enumerate(headers, start=1):
+                ws.cell(row=1, column=col, value=header)
+            values = [
+                "Активен",
+                "ДС11",
+                "2",
+                "",
+                "заметка",
+                4,
+                "ДС11",
+                "11",
+                "согл УЛ ДС11",
+                "Вся ДС",
+                "",
+                "",
+            ]
+            for col, value in enumerate(values, start=1):
+                ws.cell(row=2, column=col, value=value)
+            wb.save(path)
+            wb.close()
+            loaded = load_registry(path)
+            self.assertEqual(loaded.rows[0].source_id, "11")
+            self.assertEqual(loaded.rows[0].previous_ds, "2")
+            self.assertEqual(loaded.rows[0].note, "заметка")
+            self.assertEqual(loaded.rows[0].relations[0].rfp_key, "11")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from RFQ.ds_compare.ds_compare_config import (
     load_ds_compare_config,
@@ -57,6 +57,9 @@ from RFQ.rfp_parts.ds_registry import (
     detect_registry_format,
     default_migration_report_path,
     ensure_registry_legend,
+    RegistryLinks,
+    index_rfp_files,
+    index_ul_folders,
     install_working_registry,
     load_registry,
     migrate_legacy_rows,
@@ -822,7 +825,73 @@ def _ensure_legend_on_copy(path: Path) -> None:
         )
 
 
-def _install_rows(rows: list[Any], home: Path):
+def _is_canon_home(path: Path) -> bool:
+    left = str(path).replace("/", "\\").casefold().rstrip("\\")
+    right = str(DEFAULT_RFP_BASE).replace("/", "\\").casefold().rstrip("\\")
+    return left == right
+
+
+def _map_ds_paths(root: Path, source_ids: Sequence[str]) -> dict[str, tuple[Path, ...]]:
+    """Pair DS workbooks to registry ids without reading workbook bytes."""
+
+    found: dict[str, list[Path]] = defaultdict(list)
+    ids = tuple(source_ids)
+    try:
+        candidates = list(root.rglob("*"))
+    except OSError:
+        return {}
+    for path in candidates:
+        if not path.is_file() or path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            continue
+        if path.name.startswith("~$"):
+            continue
+        try:
+            rel = path.relative_to(root).as_posix()
+        except OSError:
+            continue
+        resolved = resolve_ds_source_id(rel, ids)
+        if resolved.source_id:
+            found[resolved.source_id].append(path)
+    return {key: tuple(paths) for key, paths in found.items()}
+
+
+def _registry_links(
+    rows: Sequence[Any],
+    *,
+    ds_root: Path | None,
+    ul_root: Path | None,
+    rfp_root: Path | None,
+) -> RegistryLinks:
+    source_ids = [row.source_id for row in rows if getattr(row, "source_id", "")]
+    scanned_ds = ds_root is not None and _is_dir(ds_root)
+    scanned_ul = ul_root is not None and _is_dir(ul_root)
+    scanned_rfp = rfp_root is not None and _is_dir(rfp_root)
+    return RegistryLinks(
+        ds_files=_map_ds_paths(ds_root, source_ids) if scanned_ds and ds_root else {},
+        rfp_files=index_rfp_files(rfp_root) if scanned_rfp else {},
+        ul_by_actual=index_ul_folders(ul_root) if scanned_ul else {},
+        scanned_ds=scanned_ds,
+        scanned_rfp=scanned_rfp,
+        scanned_ul=scanned_ul,
+    )
+
+
+def _links_for_install(
+    rows: Sequence[Any],
+    ul_root: Path | None,
+    attach_links: bool,
+) -> RegistryLinks | None:
+    if not attach_links:
+        return None
+    return _registry_links(
+        rows,
+        ds_root=_resolve_source_root(None),
+        ul_root=ul_root,
+        rfp_root=_resolve_rfp_root(None),
+    )
+
+
+def _install_rows(rows: list[Any], home: Path, links: RegistryLinks | None = None):
     """Install rows into the working registry folder.
 
     Returns:
@@ -833,7 +902,7 @@ def _install_rows(rows: list[Any], home: Path):
     if err:
         return None, err
     try:
-        installed = install_working_registry(rows, home)
+        installed = install_working_registry(rows, home, links=links)
     except DsRegistryError as exc:
         return None, f"реестр не записан: {exc}"
     _install_rows.last = installed  # type: ignore[attr-defined]
@@ -863,6 +932,7 @@ def _open_registry_for_job(
     output_dir: Path | None,
     migrate_legacy: bool,
     install_into_home: bool = False,
+    attach_links: bool = False,
 ) -> tuple[DsRegistryDocument | None, str, Path | None, str | None, int]:
     """Load new-format registry, or migrate legacy into ``output_dir``.
 
@@ -885,7 +955,11 @@ def _open_registry_for_job(
             or output_dir is None
         ):
             return document, fmt, None, err, extra_warn
-        installed, install_err = _install_rows(document.rows, output_dir)
+        installed, install_err = _install_rows(
+            document.rows,
+            output_dir,
+            _links_for_install(document.rows, ul_root, attach_links),
+        )
         if install_err or installed is None:
             return None, fmt, None, install_err or "реестр не записан", extra_warn
         _emit_install(installed)
@@ -938,7 +1012,11 @@ def _open_registry_for_job(
         new_rows, migrate_issues = migrate_legacy_rows(legacy_rows)
     except DsRegistryError as exc:
         return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
-    installed, install_err = _install_rows(new_rows, output_dir)
+    installed, install_err = _install_rows(
+        new_rows,
+        output_dir,
+        _links_for_install(new_rows, ul_root, attach_links),
+    )
     if install_err or installed is None:
         return None, fmt, None, install_err or "реестр не записан", extra_warn
     _emit_install(installed)
@@ -999,6 +1077,7 @@ def run_ds_registry_check_job(
         output_dir=home,
         migrate_legacy=True,
         install_into_home=True,
+        attach_links=_is_canon_home(home),
     )
     if document is None:
         return _fail(err or "реестр не прочитан")
