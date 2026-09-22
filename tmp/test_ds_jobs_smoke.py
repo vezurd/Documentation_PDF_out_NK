@@ -260,6 +260,33 @@ class DsJobsSmokeTest(unittest.TestCase):
             self.assertTrue(result.success, result.message)
             self.assertIn("WARN", result.message)
 
+    def test_baseline_emits_ds_progress(self) -> None:
+        import io
+        from contextlib import redirect_stdout
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            registry = root / "registry.xlsx"
+            ds_root = root / "ds"
+            reports = root / "out"
+            _write_registry(registry)
+            _write_ds_xlsx(ds_root / "ДС_13" / "spec.xlsx")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = run_ds_baseline_job(
+                    ds_root,
+                    registry,
+                    reports,
+                    None,
+                    converter=IdentityDsUnitsConverter(),
+                    google_index=_google(),
+                )
+            self.assertTrue(result.success, result.message)
+            log = buf.getvalue()
+            self.assertIn("[ds progress] START: аудит ДС", log)
+            self.assertIn("[ds progress] PROGRESS: ДС", log)
+            self.assertIn("[ds progress] FRACTION:", log)
+
     def test_baseline_and_hybrid_with_temp_dirs(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
             root = Path(raw)

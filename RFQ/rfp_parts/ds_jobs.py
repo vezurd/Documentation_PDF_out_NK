@@ -9,7 +9,9 @@ put; a dated copy is written instead, and only five dated copies are kept.
 from __future__ import annotations
 
 import os
+import re
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,7 +44,7 @@ from RFQ.rfp_parts.ds_baseline import (
     collect_ds_workbooks,
     resolve_ds_source_id,
 )
-from RFQ.rfp_parts.ds_identity import parse_rfp_ds_identity
+from RFQ.rfp_parts.ds_progress import DsFileProgressTracker, DsProgressSession
 from RFQ.rfp_parts.ds_registry import (
     CANONICAL_REGISTRY_NAME,
     DEFAULT_REGISTRY_PATH,
@@ -188,6 +190,46 @@ def _emit(message: str) -> None:
         stream.flush()
     except Exception:
         pass
+
+
+def _baseline_progress_hooks(
+    label: str = "ДС",
+) -> tuple[
+    DsProgressSession,
+    DsFileProgressTracker,
+    dict[str, object],
+]:
+    """Build kwargs for ``build_ds_baseline`` with live stdout progress."""
+    session = DsProgressSession(_emit)
+    tracker = DsFileProgressTracker(_emit, label=label)
+
+    def on_discovered(count: int, skipped: int) -> None:
+        tracker.bind_total(count)
+        session.message(f"{label}: {count} файлов, пропущено {skipped}")
+
+    hooks: dict[str, object] = {
+        "progress_callback": tracker.baseline_callback(),
+        "phase_callback": session.message,
+        "files_discovered_callback": on_discovered,
+    }
+    return session, tracker, hooks
+
+
+def _rfp_progress_hooks(label: str = "RFP") -> tuple[DsFileProgressTracker, dict[str, object]]:
+    session = DsProgressSession(_emit)
+    tracker = DsFileProgressTracker(_emit, label=label)
+
+    def on_phase(msg: str) -> None:
+        session.message(msg)
+        if msg.startswith("разбор RFP:"):
+            match = re.search(r"(\d+) файлов", msg)
+            if match:
+                tracker.bind_total(int(match.group(1)))
+
+    return tracker, {
+        "progress_callback": tracker.rfp_callback(),
+        "phase_callback": on_phase,
+    }
 
 
 def _is_dir(path: Path) -> bool:
@@ -1071,6 +1113,9 @@ def run_ds_registry_check_job(
     path = latest if _is_file(latest) else requested
     ul_path = _resolve_ul_root(ul_root)
     _emit("Проверка реестра ДС…")
+    session = DsProgressSession(_emit)
+    phase_start = time.perf_counter()
+    session.phase_start("чтение и проверка реестра")
     document, fmt, migrated, err, extra_warn = _open_registry_for_job(
         path,
         ul_root=ul_path,
@@ -1078,6 +1123,10 @@ def run_ds_registry_check_job(
         migrate_legacy=True,
         install_into_home=True,
         attach_links=_is_canon_home(home),
+    )
+    session.phase_done(
+        "чтение и проверка реестра",
+        time.perf_counter() - phase_start,
     )
     if document is None:
         return _fail(err or "реестр не прочитан")
@@ -1139,10 +1188,15 @@ def run_ds_baseline_job(
     if document is None:
         return _fail(load_err or "реестр не прочитан")
     _emit("Аудит ДС и запись свода…")
+    session, _tracker, progress_hooks = _baseline_progress_hooks("ДС")
+    audit_start = time.perf_counter()
+    session.phase_start("аудит ДС")
+    merged_kwargs = {**kwargs, **progress_hooks}
     try:
-        baseline = build_ds_baseline(source, document, reports, **kwargs)
+        baseline = build_ds_baseline(source, document, reports, **merged_kwargs)
     except Exception as exc:
         return _fail(f"свод ДС не собран: {type(exc).__name__}: {exc}", reports)
+    session.phase_done("аудит ДС", time.perf_counter() - audit_start)
     snapshot = _store(
         _snapshot_from_registry(
             kind="baseline",
@@ -1226,16 +1280,26 @@ def run_ds_hybrid_job(
         rfp_kwargs["converter"] = kwargs["rfp_converter"]
     if "loader" in kwargs:
         rfp_kwargs["loader"] = kwargs["loader"]
+    session, _ds_tracker, ds_progress_hooks = _baseline_progress_hooks("ДС")
+    ds_kwargs.update(ds_progress_hooks)
+    _rfp_tracker, rfp_progress_hooks = _rfp_progress_hooks("RFP")
+    rfp_kwargs.update(rfp_progress_hooks)
     _emit("Аудит ДС…")
+    audit_start = time.perf_counter()
+    session.phase_start("аудит ДС")
     try:
         baseline = build_ds_baseline(source, document, reports, **ds_kwargs)
     except Exception as exc:
         return _fail(f"свод ДС не собран: {type(exc).__name__}: {exc}", reports)
+    session.phase_done("аудит ДС", time.perf_counter() - audit_start)
     _emit("Сверка корневого RFP и overlay…")
+    hybrid_start = time.perf_counter()
+    session.phase_start("overlay RFP")
     try:
         hybrid = build_ds_rfp_hybrid(baseline, document, rfp_path, reports, **rfp_kwargs)
     except Exception as exc:
         return _fail(f"гибрид ДС-RFP не собран: {type(exc).__name__}: {exc}", reports)
+    session.phase_done("overlay RFP", time.perf_counter() - hybrid_start)
     snapshot = _store(
         _snapshot_from_registry(
             kind="hybrid",
@@ -1287,21 +1351,27 @@ def run_ds_coverage_job(
     rfp_path = _resolve_rfp_root(rfp_root)
     extra_warn = 0
     _emit("Только покрытие реестр ↔ ДС ↔ RFP ↔ УЛ…")
+    session = DsProgressSession(_emit)
     if source is None or not _is_dir(source):
         extra_warn += 1
         _emit(f"WARN: папка доверенных ДС не найдена: {source or '—'}")
     if not _is_dir(rfp_path):
         extra_warn += 1
         _emit(f"WARN: корень RFP не найден: {rfp_path}")
+    load_start = time.perf_counter()
+    session.phase_start("реестр и каталоги")
     document, fmt, migrated, load_err, migrate_warn = _open_registry_for_job(
         path,
         ul_root=ul_path,
         output_dir=None,
         migrate_legacy=False,
     )
+    session.phase_done("реестр и каталоги", time.perf_counter() - load_start)
     extra_warn += migrate_warn
     if document is None:
         return _fail(load_err or "реестр не прочитан")
+    cover_start = time.perf_counter()
+    session.phase_start("таблица покрытия")
     snapshot = _store(
         _snapshot_from_registry(
             kind="coverage",
@@ -1314,6 +1384,7 @@ def run_ds_coverage_job(
             extra_warn=extra_warn,
         )
     )
+    session.phase_done("таблица покрытия", time.perf_counter() - cover_start)
     return DsJobResult(
         success=True,
         message=snapshot.summary,

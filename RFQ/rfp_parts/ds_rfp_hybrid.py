@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
@@ -977,6 +979,8 @@ def build_ds_rfp_hybrid(
     matrix_path: str | Path | None = None,
     stamp: str | None = None,
     equipment_by_code: dict[str, str] | None = None,
+    progress_callback: Callable[[int, int, str, float | None], object] | None = None,
+    phase_callback: Callable[[str], object] | None = None,
 ) -> DsRfpHybridResult:
     """Reconcile root RFP against a DS baseline and write the hybrid overlay.
 
@@ -1035,8 +1039,17 @@ def build_ds_rfp_hybrid(
     key_groups = _rfp_key_groups(registry)
     loader_impl: RfpWorkbookLoader = loader or ProductionRfpLoader()
     extracts: list[RfpFileExtract] = []
+    if phase_callback is not None:
+        phase_callback(
+            f"разбор RFP: {len(files)} файлов, пропущено {len(skipped)}"
+        )
+    total_rfp = len(files)
 
-    for source in files:
+    for index, source in enumerate(files, start=1):
+        relpath = str(source.relpath)
+        if progress_callback is not None:
+            progress_callback(index, total_rfp, relpath, None)
+        file_start = time.perf_counter()
         identity = parse_rfp_ds_identity(source.path.name)
         rfp_key = rfp_identity_key(identity) or ""
         group_id = ""
@@ -1108,6 +1121,13 @@ def build_ds_rfp_hybrid(
                 mapping_issue=mapping_issue,
             )
         )
+        if progress_callback is not None:
+            progress_callback(
+                index,
+                total_rfp,
+                relpath,
+                time.perf_counter() - file_start,
+            )
 
     by_key: dict[str, list[RfpFileExtract]] = defaultdict(list)
     for item in extracts:

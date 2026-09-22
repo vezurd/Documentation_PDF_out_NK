@@ -155,6 +155,13 @@ class JobMonitorPanel(QWidget):
             self._progress.setRange(0, 100)
             self._btn_stop.setEnabled(False)
 
+    def set_progress_fraction(self, current: int, total: int) -> None:
+        """Show determinate progress when ``total > 0``."""
+        if total <= 0:
+            return
+        self._progress.setRange(0, total)
+        self._progress.setValue(min(max(current, 0), total))
+
     @Slot()
     def _copy_log(self) -> None:
         clip = QGuiApplication.clipboard()

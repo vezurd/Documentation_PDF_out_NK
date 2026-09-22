@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
+import warnings
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
@@ -27,6 +29,13 @@ from openpyxl.utils.datetime import WINDOWS_EPOCH
 from openpyxl.workbook.workbook import Workbook as OpenpyxlWorkbook
 from openpyxl.worksheet._reader import WorkSheetParser
 from openpyxl.worksheet.worksheet import Worksheet
+
+warnings.filterwarnings(
+    "ignore",
+    message="Data Validation extension is not supported and will be removed",
+    category=UserWarning,
+    module=r"openpyxl\..*",
+)
 
 from RFQ.ds_compare.ds_quantity_parse import try_parse_quantity
 from RFQ.ds_compare.ds_units_normalize import normalize_units_text
@@ -2428,7 +2437,9 @@ def build_ds_baseline(
     matrix_path: str | Path | None = None,
     stamp: str | None = None,
     equipment_by_code: dict[str, str] | None = None,
-    progress_callback: Callable[[int, int, str], object] | None = None,
+    progress_callback: Callable[[int, int, str, float | None], object] | None = None,
+    phase_callback: Callable[[str], object] | None = None,
+    files_discovered_callback: Callable[[int, int], object] | None = None,
 ) -> DsBaselineResult:
     """Audit DS workbooks, write reports, and optionally write the Step1 baseline.
 
@@ -2447,8 +2458,10 @@ def build_ds_baseline(
             the identity converter.
         stamp: Report timestamp ``YYYYMMDD_HHMMSS``. Default is now.
         equipment_by_code: Optional Google equipment map for net column F.
-        progress_callback: Optional ``(file_index, total, relpath)`` hook,
-            invoked once per collected DS file before it is parsed.
+        progress_callback: Optional ``(index, total, relpath, file_elapsed)`` hook.
+            ``file_elapsed`` is ``None`` before parse and seconds after.
+        phase_callback: Optional short Russian phase label for live Job monitor.
+        files_discovered_callback: ``(file_count, skipped_count)`` after scan.
 
     Returns:
         ``DsBaselineResult`` with counts, issues, paths, rows, groups and
@@ -2460,7 +2473,15 @@ def build_ds_baseline(
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp_value = stamp or datetime.now().strftime(STAMP_FORMAT)
     issues: list[DsBaselineIssue] = _copy_registry_issues(registry)
+    if phase_callback is not None:
+        phase_callback("обход папки ДС")
     files, skipped = collect_ds_workbooks(root, registry_path=registry.path)
+    if files_discovered_callback is not None:
+        files_discovered_callback(len(files), len(skipped))
+    if phase_callback is not None:
+        phase_callback(
+            f"список ДС: {len(files)} файлов, пропущено {len(skipped)}"
+        )
     active_ids = _active_ids(registry)
     registry_by_id = {row.source_id: row for row in registry.active_rows if row.source_id}
 
@@ -2469,8 +2490,10 @@ def build_ds_baseline(
     positions: list[DsBaselinePosition] = []
     total = len(files)
     for index, source in enumerate(files, start=1):
+        relpath = str(source.relpath)
         if progress_callback is not None:
-            progress_callback(index, total, source.relpath)
+            progress_callback(index, total, relpath, None)
+        file_start = time.perf_counter()
         positions.extend(
             _parse_workbook(
                 source,
@@ -2481,7 +2504,13 @@ def build_ds_baseline(
                 column_notes=column_notes,
             )
         )
+        if progress_callback is not None:
+            progress_callback(
+                index, total, relpath, time.perf_counter() - file_start
+            )
 
+    if phase_callback is not None:
+        phase_callback("конвертация единиц измерения")
     if google_index is not None:
         known = set(google_index.units_by_code)
         for item in positions:
@@ -2550,6 +2579,8 @@ def build_ds_baseline(
                 )
             )
 
+    if phase_callback is not None:
+        phase_callback("группы поставки и отчёты Excel")
     groups = _build_groups(positions)
     fingerprint = _tree_fingerprint(files, registry=registry)
     blocking_count = sum(1 for item in issues if item.blocking)
@@ -2684,6 +2715,8 @@ def build_ds_baseline(
 
     baseline_path = None
     if write_baseline and not blocking:
+        if phase_callback is not None:
+            phase_callback(f"запись {BASELINE_XLSX_NAME}")
         target = out_dir / BASELINE_XLSX_NAME
         tmp_path = target.with_name(
             f".{target.stem}.{os.getpid()}.tmp{target.suffix}"

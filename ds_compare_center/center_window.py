@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -1089,7 +1090,14 @@ class CenterWindow(QWidget):
 
     @Slot(str)
     def _on_log(self, chunk: str) -> None:
-        self._function_job_monitor().append_log(chunk)
+        monitor = self._function_job_monitor()
+        monitor.append_log(chunk)
+        if self._function_job_tab != "rfp_parts":
+            return
+        for line in chunk.splitlines():
+            match = re.search(r"\[ds progress\] FRACTION: (\d+)/(\d+)", line)
+            if match:
+                monitor.set_progress_fraction(int(match.group(1)), int(match.group(2)))
 
     @Slot(str)
     def _on_runner_error(self, message: str) -> None:

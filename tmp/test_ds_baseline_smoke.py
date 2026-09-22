@@ -671,8 +671,8 @@ class DsBaselineInflatedSheetSmokeTest(unittest.TestCase):
                 converter=IdentityDsUnitsConverter(),
                 google_index=_google_index(),
                 stamp=STAMP,
-                progress_callback=lambda index, total, relpath: progress.append(
-                    (index, total, relpath)
+                progress_callback=lambda index, total, relpath, elapsed: progress.append(
+                    (index, total, relpath, elapsed)
                 ),
             )
             elapsed = time.perf_counter() - started
