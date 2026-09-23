@@ -22,6 +22,7 @@ from RFQ.rfp_parts.ds_registry import (
     HDR_SOURCE_ID,
     HDR_STATUS,
     ISSUE_DUPLICATE_LINK,
+    ISSUE_IDENTITY_SPLIT,
     ISSUE_ORPHAN,
     ISSUE_RFP_FILE_MISSING,
     ISSUE_SHARED_RFP,
@@ -945,6 +946,140 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
             max_relation_blocks=1,
         )
         self.assertIsNone(registry_packing_maps(dirty))
+
+
+class RegistryRescanSmokeTest(unittest.TestCase):
+    def test_check_drops_yellow_rows_and_rewrites_ds_file(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds = root / "ds"
+            (ds / "ДС_13").mkdir(parents=True)
+            (ds / "ДС_75_Приложение 1.xlsx").write_bytes(b"a")
+            (ds / "ДС_96_1._Спецификация №75.xlsx").write_bytes(b"b")
+            (ds / "ДС_13" / "10_Спецификация.xlsx").write_bytes(b"c")
+            (ds / "заметка.xlsx").write_bytes(b"x")
+            (ds / "Реестр_ДС_УЛ.xlsx").write_bytes(b"reg")
+            (ds / "СВОД_ДС_ручной.xlsx").write_bytes(b"svod")
+            path = root / "registry.xlsx"
+            stale = (
+                "ДС_75_Приложение 1.xlsx\n"
+                "ДС_96_1._Спецификация №75.xlsx"
+            )
+            write_registry_workbook(
+                path,
+                [
+                    DsRegistryRow(
+                        status=STATUS_ACTIVE,
+                        source_id="75",
+                        ds_file=stale,
+                        relations=(
+                            DsRegistryRelation(
+                                group_id="ДС75",
+                                rfp_key="16",
+                                ul_folder="согл УЛ ДС16",
+                                block_index=1,
+                            ),
+                        ),
+                    ),
+                    DsRegistryRow(
+                        status=STATUS_ACTIVE,
+                        source_id="75",
+                        ds_file="другой.xlsx",
+                        relations=(
+                            DsRegistryRelation(
+                                group_id="ДС75",
+                                rfp_key="",
+                                ul_folder="согл УЛ ДС75б",
+                                block_index=1,
+                            ),
+                        ),
+                    ),
+                    DsRegistryRow(
+                        status=STATUS_ACTIVE,
+                        source_id="96",
+                        relations=(
+                            DsRegistryRelation(
+                                group_id="ДС96",
+                                rfp_key="70",
+                                ul_folder="согл УЛ ДС70",
+                                block_index=1,
+                            ),
+                        ),
+                    ),
+                    DsRegistryRow(
+                        status=STATUS_ACTIVE,
+                        source_id="13",
+                        ds_file="чужой.xlsx",
+                        relations=(
+                            DsRegistryRelation(
+                                group_id="ДС13",
+                                rfp_key="13",
+                                ul_folder="согл УЛ ДС13",
+                                block_index=1,
+                            ),
+                        ),
+                    ),
+                    DsRegistryRow(
+                        status="",
+                        source_id="",
+                        ds_file="ДС_75_Приложение 1.xlsx",
+                        note="сирота: файл ДС не записан в строке номера ДС75",
+                    ),
+                    DsRegistryRow(
+                        status=STATUS_ACTIVE,
+                        source_id="",
+                        note="черновик человека",
+                        relations=(
+                            DsRegistryRelation(
+                                group_id="",
+                                rfp_key="1",
+                                ul_folder="папка человека",
+                                block_index=1,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+            split_rows = [
+                DsRegistryRow(status=STATUS_ACTIVE, source_id="75", ds_file="a.xlsx"),
+                DsRegistryRow(status=STATUS_ACTIVE, source_id="75", ds_file="b.xlsx"),
+            ]
+            _merged, split_issues = collapse_registry_rows(
+                split_rows, compare_ds_file=False
+            )
+            self.assertEqual(split_issues, [])
+
+            doc = load_registry(path, ds_root=ds)
+            by_id = {row.source_id: row for row in doc.rows if row.source_id}
+            self.assertEqual(by_id["75"].ds_file, "ДС_75_Приложение 1.xlsx")
+            self.assertEqual(
+                by_id["96"].ds_file, "ДС_96_1._Спецификация №75.xlsx"
+            )
+            self.assertEqual(by_id["13"].ds_file, "10_Спецификация.xlsx")
+            notes = [row.note for row in doc.rows if not row.source_id]
+            self.assertIn("черновик человека", notes)
+            self.assertEqual(
+                [note for note in notes if note.startswith("сирота:")],
+                ["сирота: файл ДС не назван ни на одной строке"],
+            )
+            self.assertEqual(
+                [row.ds_file for row in doc.rows if not row.source_id and row.ds_file],
+                ["заметка.xlsx"],
+            )
+            self.assertNotIn(
+                ISSUE_IDENTITY_SPLIT,
+                {item.code for item in doc.validation.issues},
+            )
+
+            again_path = root / "again.xlsx"
+            write_registry_workbook(again_path, doc.rows)
+            again = load_registry(again_path, ds_root=ds)
+            again_notes = [
+                row.note
+                for row in again.rows
+                if not row.source_id and row.note.startswith("сирота:")
+            ]
+            self.assertEqual(again_notes, notes[-1:])
 
 
 if __name__ == "__main__":

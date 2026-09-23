@@ -776,8 +776,8 @@ def _header_comment(header: str) -> str:
             "Одинаково на всех строках номера. При сборке свода не читается."
         ),
         HDR_FILE_DS: (
-            "Имя файла ДС. Путь в ячейке не пишется: щелчок открывает файл. "
-            "Робот подставляет его при проверке реестра."
+            "Имя файла ДС. Несколько файлов одного номера — по одному имени в строке. "
+            "Проверка реестра пересобирает ячейку из папки ДС и стирает прежний текст."
         ),
         HDR_REVISION: "Вспомогательное поле. Заполняется человеком, робот не угадывает.",
         HDR_NOTE: "Вспомогательное поле. Примечание как есть.",
@@ -981,11 +981,15 @@ def _claiming_links(row: DsRegistryRow) -> list[DsRegistryRelation]:
 
 def collapse_registry_rows(
     rows: Sequence[DsRegistryRow],
+    *,
+    compare_ds_file: bool = True,
 ) -> tuple[list[DsRegistryRow], list[DsRegistryIssue]]:
     """Merge sheet rows that share one actual number into one logical DS.
 
     A repeated actual number is the normal form. Status, historical number
     and DS file must agree across those rows. Each non-empty link stays.
+    ``compare_ds_file`` is false when the check is about to rewrite «Файл ДС»
+    from the folder, so a stale disagreement in that cell is not an error.
     """
 
     issues: list[DsRegistryIssue] = []
@@ -998,7 +1002,11 @@ def collapse_registry_rows(
     for source_id, group in buckets.items():
         statuses = {item.status for item in group if item.status}
         previous = {item.previous_ds for item in group if item.previous_ds}
-        files = {_norm_link(item.ds_file) for item in group if item.ds_file}
+        files = (
+            {_norm_link(item.ds_file) for item in group if item.ds_file}
+            if compare_ds_file
+            else set()
+        )
         group_id = canonical_supply_group_id(source_id)
         if len(statuses) > 1 or len(previous) > 1 or len(files) > 1:
             issues.append(
@@ -1073,6 +1081,109 @@ def _iter_named_workbooks(root: Path, *, recursive: bool) -> list[Path]:
     return found
 
 
+def _ds_file_names(text: str) -> list[str]:
+    """Split a «Файл ДС» cell into one filename per line."""
+
+    names: list[str] = []
+    for part in str(text or "").replace("\r\n", "\n").split("\n"):
+        name = part.strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _join_ds_file_names(paths: Sequence[Path]) -> str:
+    ordered = sorted({path.name for path in paths}, key=str.casefold)
+    return "\n".join(ordered)
+
+
+def _ds_catalog_ready(ds_root: str | Path | None) -> bool:
+    if not ds_root:
+        return False
+    try:
+        return Path(ds_root).is_dir()
+    except OSError:
+        return False
+
+
+def drop_robot_placeholder_rows(
+    rows: Sequence[DsRegistryRow],
+) -> list[DsRegistryRow]:
+    """Drop yellow rows a previous check wrote: no number and a «сирота:» note.
+
+    A row a person started stays, including one that already has a status
+    but still has no actual number.
+    """
+
+    kept: list[DsRegistryRow] = []
+    for row in rows:
+        note = (row.note or "").lstrip()
+        if (
+            not row.source_id
+            and not row.status
+            and note.startswith("сирота:")
+        ):
+            continue
+        kept.append(row)
+    return kept
+
+
+def _workbooks_by_source(
+    rows: Sequence[DsRegistryRow],
+    ds_root: str | Path,
+) -> tuple[dict[str, list[Path]], list[Path]]:
+    """Map each registry number to DS workbooks that resolve to it.
+
+    Registry copies, manual summaries and Excel locks are skipped the same
+    way as the DS audit. The second list is workbooks that resolve to no number.
+    """
+
+    from RFQ.rfp_parts.ds_baseline import collect_ds_workbooks, resolve_ds_source_id
+
+    files, _skipped = collect_ds_workbooks(ds_root)
+    active_ids = [row.source_id for row in rows if row.source_id]
+    found: dict[str, list[Path]] = {}
+    unresolved: list[Path] = []
+    for item in files:
+        resolution = resolve_ds_source_id(item.relpath, active_ids)
+        if resolution.source_id:
+            found.setdefault(resolution.source_id, []).append(item.path)
+        else:
+            unresolved.append(item.path)
+    return found, unresolved
+
+
+def sync_ds_files_from_folder(
+    rows: Sequence[DsRegistryRow],
+    ds_root: str | Path | None,
+) -> list[DsRegistryRow]:
+    """Rewrite «Файл ДС» from the folder. One filename per line.
+
+    A number with no resolved workbook gets an empty cell, so a stale name
+    does not stay. When the folder has no DS workbooks the cells are left
+    as they were.
+    """
+
+    if not _ds_catalog_ready(ds_root):
+        return list(rows)
+    assert ds_root is not None
+    found, _unresolved = _workbooks_by_source(rows, ds_root)
+    if not found and not _unresolved:
+        return list(rows)
+    synced: list[DsRegistryRow] = []
+    for row in rows:
+        if not row.source_id:
+            synced.append(row)
+            continue
+        synced.append(
+            replace(
+                row,
+                ds_file=_join_ds_file_names(found.get(row.source_id, [])),
+            )
+        )
+    return synced
+
+
 def collect_orphan_rows(
     rows: Sequence[DsRegistryRow],
     *,
@@ -1082,10 +1193,11 @@ def collect_orphan_rows(
 ) -> list[DsRegistryRow]:
     """Return yellow placeholder rows for folders and files absent from the sheet.
 
-    A named-but-missing UL folder is not an orphan. A DS workbook that resolves
-    to exactly one listed number with an empty file cell is not an orphan: the
-    check fills that name. Anything else not named on a row is a placeholder
-    until a person sets the actual number and a status.
+    A named-but-missing UL folder is not an orphan. A DS workbook whose name
+    is already on its number (one filename per line) is not an orphan. A file
+    that resolves to a number but is missing from that cell is a placeholder,
+    as is a workbook that resolves to no number. Registry copies, manual
+    summaries and Excel locks are not placeholders.
     """
 
     claimed_folders = {
@@ -1106,7 +1218,11 @@ def collect_orphan_rows(
         for rel in row.relations
         if rel.rfp_key
     }
-    claimed_ds_files = {_norm_link(row.ds_file) for row in rows if row.ds_file}
+    claimed_ds_files = {
+        _norm_link(name)
+        for row in rows
+        for name in _ds_file_names(row.ds_file)
+    }
     extras: list[DsRegistryRow] = []
 
     if ul_root:
@@ -1159,28 +1275,11 @@ def collect_orphan_rows(
                 )
             )
 
-    if ds_root:
-        root = Path(ds_root)
-        books = _iter_named_workbooks(root, recursive=True)
-        active_ids = [row.source_id for row in rows if row.source_id]
-        resolved: dict[str, list[Path]] = {}
-        try:
-            from RFQ.rfp_parts.ds_baseline import resolve_ds_source_id
-        except ImportError:  # pragma: no cover - package always present
-            resolve_ds_source_id = None  # type: ignore[assignment]
-        for path in books:
+    if _ds_catalog_ready(ds_root):
+        assert ds_root is not None
+        found, unresolved = _workbooks_by_source(rows, ds_root)
+        for path in unresolved:
             if _norm_link(path.name) in claimed_ds_files:
-                continue
-            source_id = ""
-            if resolve_ds_source_id is not None:
-                try:
-                    rel = path.relative_to(root).as_posix()
-                except OSError:
-                    rel = path.name
-                resolution = resolve_ds_source_id(rel, active_ids)
-                source_id = resolution.source_id or ""
-            if source_id:
-                resolved.setdefault(source_id, []).append(path)
                 continue
             extras.append(
                 DsRegistryRow(
@@ -1191,11 +1290,19 @@ def collect_orphan_rows(
                     relations=(),
                 )
             )
-        for source_id, paths in resolved.items():
+        for source_id, paths in found.items():
             owners = [row for row in rows if row.source_id == source_id]
-            if len(paths) == 1 and owners and not any(row.ds_file for row in owners):
-                continue
+            listed = {
+                _norm_link(name)
+                for row in owners
+                for name in _ds_file_names(row.ds_file)
+            }
             for path in paths:
+                if (
+                    _norm_link(path.name) in listed
+                    or _norm_link(path.name) in claimed_ds_files
+                ):
+                    continue
                 extras.append(
                     DsRegistryRow(
                         status="",
@@ -1209,41 +1316,6 @@ def collect_orphan_rows(
                     )
                 )
     return extras
-
-
-def fill_unique_ds_files(
-    rows: Sequence[DsRegistryRow],
-    ds_root: str | Path | None,
-) -> list[DsRegistryRow]:
-    """Copy the only resolved DS workbook name onto a row that left the cell empty."""
-
-    if not ds_root:
-        return list(rows)
-    root = Path(ds_root)
-    if not root.is_dir():
-        return list(rows)
-    try:
-        from RFQ.rfp_parts.ds_baseline import resolve_ds_source_id
-    except ImportError:  # pragma: no cover
-        return list(rows)
-    found: dict[str, list[Path]] = {}
-    active_ids = [row.source_id for row in rows if row.source_id]
-    for path in _iter_named_workbooks(root, recursive=True):
-        try:
-            rel = path.relative_to(root).as_posix()
-        except OSError:
-            rel = path.name
-        resolution = resolve_ds_source_id(rel, active_ids)
-        if resolution.source_id:
-            found.setdefault(resolution.source_id, []).append(path)
-    filled: list[DsRegistryRow] = []
-    for row in rows:
-        paths = found.get(row.source_id, [])
-        if row.source_id and not row.ds_file and len(paths) == 1:
-            filled.append(replace(row, ds_file=paths[0].name))
-        else:
-            filled.append(row)
-    return filled
 
 
 def validate_registry_rows(
@@ -2036,8 +2108,8 @@ def _legend_rows() -> list[tuple[str, str, str, str]]:
         (
             "Файл ДС",
             grey,
-            "Имя файла. Одинаковое на всех строках номера.",
-            "Робот может подставить единственный найденный файл. Лишний файл в папке — жёлтая строка.",
+            "Имя файла. Несколько файлов одного номера — каждое имя с новой строки. Одинаковое на всех строках номера.",
+            "Проверка заново собирает ячейку из папки ДС. Файл, который уже записан на свой номер, жёлтым не становится.",
         ),
         (
             "Папка УЛ",
@@ -2060,8 +2132,8 @@ def _legend_rows() -> list[tuple[str, str, str, str]]:
         (
             "Жёлтая строка без номера",
             yellow,
-            "Робот добавил папку или файл, которых не было ни на одной строке.",
-            "Пока не проставлены номер и статус «Активен» или «Отключен», свод не пишется.",
+            "Робот добавил папку или файл, которых не было ни на одной строке. Следующая проверка такую строку стирает и, если объект всё ещё не назван, добавляет заново.",
+            "Пока не проставлены номер и статус «Активен» или «Отключен», свод не пишется. Строку со статусом проверка не стирает.",
         ),
     ]
 
@@ -2804,8 +2876,10 @@ def load_registry(
         ul_root: Optional TSD root. Folders not named on any row become orphans.
             A named folder that is missing on disk is not an error.
         rfp_root: Optional RFP root. Files not named on any row become orphans.
-        ds_root: Optional DS folder. The same rule, plus a unique resolved file
-            fills an empty «Файл ДС» cell.
+        ds_root: Optional DS folder. When it is a directory, previous yellow
+            rows with no number are dropped and «Файл ДС» is rewritten from
+            the workbooks that resolve to each number. A workbook still absent
+            from every row becomes a new yellow row.
 
     Returns:
         Document with logical rows (including invalid ones) and a validation result.
@@ -2918,8 +2992,12 @@ def load_registry(
     finally:
         workbook.close()
 
-    rows, collapse_issues = collapse_registry_rows(rows)
-    rows = fill_unique_ds_files(rows, ds_root)
+    catalog_ready = _ds_catalog_ready(ds_root)
+    rows, collapse_issues = collapse_registry_rows(
+        rows, compare_ds_file=not catalog_ready
+    )
+    rows = drop_robot_placeholder_rows(rows)
+    rows = sync_ds_files_from_folder(rows, ds_root if catalog_ready else None)
     rows.extend(
         collect_orphan_rows(
             rows, ul_root=ul_root, rfp_root=rfp_root, ds_root=ds_root
