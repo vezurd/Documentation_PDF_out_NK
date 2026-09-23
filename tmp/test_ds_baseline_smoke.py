@@ -537,16 +537,16 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 self.assertEqual(
                     quality.sheetnames,
                     [
-                        "Сводка",
                         "Позиции без кода",
                         "Количества",
+                        "Сводка",
                         "Дубли",
                         "Теги",
                         "Коды вне Google",
                         "Источники",
                     ],
                 )
-                self.assertEqual(quality.active.title, "Сводка")
+                self.assertEqual(quality.active.title, "Позиции без кода")
                 self.assertNotIn("Единицы и конвертация", quality.sheetnames)
                 empty_ws = quality["Позиции без кода"]
                 self.assertGreaterEqual(empty_ws.max_row, 2)

@@ -2725,16 +2725,16 @@ def _write_quality_report(
     _order_sheets(
         wb,
         [
-            "Сводка",
             "Позиции без кода",
             "Количества",
+            "Сводка",
             "Дубли",
             "Теги",
             "Коды вне Google",
             "Единицы и конвертация",
             "Источники",
         ],
-        active="Сводка",
+        active="Позиции без кода",
     )
     hb.tick("сохранение xlsx", force=True)
     saved = _save_workbook_atomic(path, wb, progress=progress)
