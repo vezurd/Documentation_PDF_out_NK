@@ -15,11 +15,12 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Iterator, Literal, Sequence
+from typing import Callable, Iterator, Literal, Sequence
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
@@ -1128,34 +1129,83 @@ def drop_robot_placeholder_rows(
     return kept
 
 
+def _ds_workbook_name_skipped(name: str) -> bool:
+    """True for locks, registry copies, manual summaries and own DS reports.
+
+    Name only. The registry check must not open the workbook or hash its bytes;
+    that walk belongs to the DS audit.
+    """
+
+    from RFQ.rfp_parts.ds_baseline import _SKIP_EXACT_NAMES, _SKIP_NAME_PREFIXES
+
+    if name.startswith("~$"):
+        return True
+    folded = name.casefold()
+    stem = Path(name).stem.casefold()
+    if folded in _SKIP_EXACT_NAMES:
+        return True
+    return any(
+        stem.startswith(prefix) or folded.startswith(prefix)
+        for prefix in _SKIP_NAME_PREFIXES
+    )
+
+
+def _list_ds_workbook_names(ds_root: Path) -> list[tuple[Path, str]]:
+    """List DS workbooks as ``(path, relative posix path)`` without reading them."""
+
+    found: list[tuple[Path, str]] = []
+    try:
+        candidates = ds_root.rglob("*")
+    except OSError:
+        return found
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+        if path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            continue
+        if _ds_workbook_name_skipped(path.name):
+            continue
+        try:
+            rel = path.relative_to(ds_root).as_posix()
+        except ValueError:
+            rel = path.name
+        found.append((path, rel))
+    return found
+
+
 def _workbooks_by_source(
     rows: Sequence[DsRegistryRow],
     ds_root: str | Path,
 ) -> tuple[dict[str, list[Path]], list[Path]]:
     """Map each registry number to DS workbooks that resolve to it.
 
-    Registry copies, manual summaries and Excel locks are skipped the same
-    way as the DS audit. The second list is workbooks that resolve to no number.
+    Registry copies, manual summaries and Excel locks are skipped by name.
+    The second list is workbooks that resolve to no number. File bytes are
+    not read.
     """
 
-    from RFQ.rfp_parts.ds_baseline import collect_ds_workbooks, resolve_ds_source_id
+    from RFQ.rfp_parts.ds_baseline import resolve_ds_source_id
 
-    files, _skipped = collect_ds_workbooks(ds_root)
     active_ids = [row.source_id for row in rows if row.source_id]
     found: dict[str, list[Path]] = {}
     unresolved: list[Path] = []
-    for item in files:
-        resolution = resolve_ds_source_id(item.relpath, active_ids)
+    for path, rel in _list_ds_workbook_names(Path(ds_root)):
+        resolution = resolve_ds_source_id(rel, active_ids)
         if resolution.source_id:
-            found.setdefault(resolution.source_id, []).append(item.path)
+            found.setdefault(resolution.source_id, []).append(path)
         else:
-            unresolved.append(item.path)
+            unresolved.append(path)
     return found, unresolved
 
 
 def sync_ds_files_from_folder(
     rows: Sequence[DsRegistryRow],
     ds_root: str | Path | None,
+    *,
+    catalog: tuple[dict[str, list[Path]], list[Path]] | None = None,
 ) -> list[DsRegistryRow]:
     """Rewrite «Файл ДС» from the folder. One filename per line.
 
@@ -1164,11 +1214,13 @@ def sync_ds_files_from_folder(
     as they were.
     """
 
-    if not _ds_catalog_ready(ds_root):
-        return list(rows)
-    assert ds_root is not None
-    found, _unresolved = _workbooks_by_source(rows, ds_root)
-    if not found and not _unresolved:
+    if catalog is None:
+        if not _ds_catalog_ready(ds_root):
+            return list(rows)
+        assert ds_root is not None
+        catalog = _workbooks_by_source(rows, ds_root)
+    found, unresolved = catalog
+    if not found and not unresolved:
         return list(rows)
     synced: list[DsRegistryRow] = []
     for row in rows:
@@ -1184,12 +1236,24 @@ def sync_ds_files_from_folder(
     return synced
 
 
+def _lap(
+    on_lap: Callable[[str, float], None] | None,
+    label: str,
+    started: float,
+) -> None:
+    if on_lap is None:
+        return
+    on_lap(label, time.perf_counter() - started)
+
+
 def collect_orphan_rows(
     rows: Sequence[DsRegistryRow],
     *,
     ul_root: str | Path | None = None,
     rfp_root: str | Path | None = None,
     ds_root: str | Path | None = None,
+    ds_catalog: tuple[dict[str, list[Path]], list[Path]] | None = None,
+    on_lap: Callable[[str, float], None] | None = None,
 ) -> list[DsRegistryRow]:
     """Return yellow placeholder rows for folders and files absent from the sheet.
 
@@ -1226,6 +1290,7 @@ def collect_orphan_rows(
     extras: list[DsRegistryRow] = []
 
     if ul_root:
+        started = time.perf_counter()
         root = Path(ul_root)
         try:
             folders = [path for path in root.iterdir() if path.is_dir()]
@@ -1249,8 +1314,10 @@ def collect_orphan_rows(
                     ),
                 )
             )
+        _lap(on_lap, "сироты УЛ", started)
 
     if rfp_root:
+        started = time.perf_counter()
         for path in _iter_named_workbooks(Path(rfp_root), recursive=False):
             if _norm_link(path.name) in claimed_rfp_files:
                 continue
@@ -1274,10 +1341,15 @@ def collect_orphan_rows(
                     ),
                 )
             )
+        _lap(on_lap, "сироты RFP", started)
 
-    if _ds_catalog_ready(ds_root):
-        assert ds_root is not None
-        found, unresolved = _workbooks_by_source(rows, ds_root)
+    if ds_catalog is not None or _ds_catalog_ready(ds_root):
+        started = time.perf_counter()
+        if ds_catalog is not None:
+            found, unresolved = ds_catalog
+        else:
+            assert ds_root is not None
+            found, unresolved = _workbooks_by_source(rows, ds_root)
         for path in unresolved:
             if _norm_link(path.name) in claimed_ds_files:
                 continue
@@ -1315,6 +1387,7 @@ def collect_orphan_rows(
                         relations=(),
                     )
                 )
+        _lap(on_lap, "сироты ДС", started)
     return extras
 
 
@@ -2865,6 +2938,7 @@ def load_registry(
     ul_root: str | Path | None = None,
     rfp_root: str | Path | None = None,
     ds_root: str | Path | None = None,
+    on_lap: Callable[[str, float], None] | None = None,
 ) -> DsRegistryDocument:
     """Strict-read the canonical ``Реестр ДС`` workbook.
 
@@ -2878,8 +2952,10 @@ def load_registry(
         rfp_root: Optional RFP root. Files not named on any row become orphans.
         ds_root: Optional DS folder. When it is a directory, previous yellow
             rows with no number are dropped and «Файл ДС» is rewritten from
-            the workbooks that resolve to each number. A workbook still absent
-            from every row becomes a new yellow row.
+            the workbooks that resolve to each number. Names only: the books
+            are not opened and not hashed. A workbook still absent from every
+            row becomes a new yellow row.
+        on_lap: Optional ``(label, seconds)`` callback for step timings.
 
     Returns:
         Document with logical rows (including invalid ones) and a validation result.
@@ -2891,6 +2967,7 @@ def load_registry(
     source = Path(path)
     if not source.is_file():
         raise DsRegistryFormatError(f"файл реестра не найден: {source}")
+    started = time.perf_counter()
     workbook = _open_workbook(source, data_only=False)
     try:
         if REGISTRY_SHEET_NAME not in workbook.sheetnames:
@@ -2991,22 +3068,40 @@ def load_registry(
         rows = _merge_source_info(rows, _read_source_info(workbook))
     finally:
         workbook.close()
+    _lap(on_lap, "чтение листа", started)
 
     catalog_ready = _ds_catalog_ready(ds_root)
+    catalog = None
+    if catalog_ready:
+        assert ds_root is not None
+        started = time.perf_counter()
+        catalog = _workbooks_by_source(rows, ds_root)
+        _lap(on_lap, "имена файлов ДС", started)
     rows, collapse_issues = collapse_registry_rows(
         rows, compare_ds_file=not catalog_ready
     )
     rows = drop_robot_placeholder_rows(rows)
-    rows = sync_ds_files_from_folder(rows, ds_root if catalog_ready else None)
+    rows = sync_ds_files_from_folder(
+        rows,
+        ds_root if catalog_ready else None,
+        catalog=catalog,
+    )
     rows.extend(
         collect_orphan_rows(
-            rows, ul_root=ul_root, rfp_root=rfp_root, ds_root=ds_root
+            rows,
+            ul_root=ul_root,
+            rfp_root=rfp_root,
+            ds_root=ds_root,
+            ds_catalog=catalog,
+            on_lap=on_lap,
         )
     )
+    started = time.perf_counter()
     validation = validate_registry_rows(
         rows, ul_root=ul_root, rfp_root=rfp_root, max_blocks=layout.max_blocks
     )
     validation.issues = collapse_issues + validation.issues
+    _lap(on_lap, "проверка строк", started)
     return DsRegistryDocument(
         path=source,
         rows=rows,

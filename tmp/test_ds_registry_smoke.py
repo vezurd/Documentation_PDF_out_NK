@@ -1049,8 +1049,16 @@ class RegistryRescanSmokeTest(unittest.TestCase):
             )
             self.assertEqual(split_issues, [])
 
-            doc = load_registry(path, ds_root=ds)
+            laps: list[str] = []
+            doc = load_registry(
+                path,
+                ds_root=ds,
+                on_lap=lambda label, _seconds: laps.append(label),
+            )
             by_id = {row.source_id: row for row in doc.rows if row.source_id}
+            self.assertEqual(laps.count("имена файлов ДС"), 1)
+            self.assertIn("чтение листа", laps)
+            self.assertIn("сироты ДС", laps)
             self.assertEqual(by_id["75"].ds_file, "ДС_75_Приложение 1.xlsx")
             self.assertEqual(
                 by_id["96"].ds_file, "ДС_96_1._Спецификация №75.xlsx"

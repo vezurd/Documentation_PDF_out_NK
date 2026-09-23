@@ -15,7 +15,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Callable, Literal, Sequence
 
 from RFQ.ds_compare.ds_compare_config import (
     load_ds_compare_config,
@@ -335,6 +335,7 @@ def _load_new_registry(
     ul_root: Path | None,
     ds_root: Path | None = None,
     rfp_root: Path | None = None,
+    on_lap: Callable[[str, float], None] | None = None,
 ) -> tuple[DsRegistryDocument | None, str | None]:
     try:
         document = load_registry(
@@ -342,6 +343,7 @@ def _load_new_registry(
             ul_root=_optional_ul_for_validate(ul_root),
             ds_root=_catalog_if_dir(ds_root),
             rfp_root=_catalog_if_dir(rfp_root),
+            on_lap=on_lap,
         )
     except DsRegistryError as exc:
         return None, str(exc)
@@ -638,8 +640,8 @@ def _registry_next_step(
         blocked = ""
         if labels:
             blocked = (
-                f" Пока нельзя заменить на RFP связи: {labels_text} "
-                "(режим «Требует распределения»). Остальные группы можно собирать."
+                f" Свод не пишется, пока не разобраны номера {labels_text}: "
+                "одна папка УЛ или один номер RFP стоят на разных ДС."
             )
         return (
             f"Рабочий реестр один, в папке _RFP: {path}.{renamed}{blocked} "
@@ -1034,6 +1036,7 @@ def _open_registry_for_job(
     attach_links: bool = False,
     ds_root: Path | None = None,
     rfp_root: Path | None = None,
+    on_lap: Callable[[str, float], None] | None = None,
 ) -> tuple[DsRegistryDocument | None, str, Path | None, str | None, int]:
     """Load new-format registry, or migrate legacy into ``output_dir``.
 
@@ -1049,7 +1052,11 @@ def _open_registry_for_job(
         return None, "unknown", None, f"не удалось определить формат реестра: {exc}", 0
     if fmt == "new":
         document, err = _load_new_registry(
-            registry_path, ul_root=ul_root, ds_root=ds_root, rfp_root=rfp_root
+            registry_path,
+            ul_root=ul_root,
+            ds_root=ds_root,
+            rfp_root=rfp_root,
+            on_lap=on_lap,
         )
         if (
             not install_into_home
@@ -1058,16 +1065,23 @@ def _open_registry_for_job(
             or output_dir is None
         ):
             return document, fmt, None, err, extra_warn
-        installed, install_err = _install_rows(
-            document.rows,
-            output_dir,
-            _links_for_install(document.rows, ul_root, attach_links),
-        )
+        started = time.perf_counter()
+        links = _links_for_install(document.rows, ul_root, attach_links)
+        if on_lap is not None:
+            on_lap("ссылки ДС/RFP/УЛ", time.perf_counter() - started)
+        started = time.perf_counter()
+        installed, install_err = _install_rows(document.rows, output_dir, links)
+        if on_lap is not None:
+            on_lap("запись реестра", time.perf_counter() - started)
         if install_err or installed is None:
             return None, fmt, None, install_err or "реестр не записан", extra_warn
         _emit_install(installed)
         reloaded, err = _load_new_registry(
-            installed.path, ul_root=ul_root, ds_root=ds_root, rfp_root=rfp_root
+            installed.path,
+            ul_root=ul_root,
+            ds_root=ds_root,
+            rfp_root=rfp_root,
+            on_lap=on_lap,
         )
         return reloaded, "new", installed.path, err, extra_warn
     if fmt != "legacy":
@@ -1111,7 +1125,11 @@ def _open_registry_for_job(
         except DsRegistryError as exc:
             return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
         document, err = _load_new_registry(
-            result.output_path, ul_root=ul_root, ds_root=ds_root, rfp_root=rfp_root
+            result.output_path,
+            ul_root=ul_root,
+            ds_root=ds_root,
+            rfp_root=rfp_root,
+            on_lap=on_lap,
         )
         return document, "new", result.output_path, err, extra_warn
     try:
@@ -1119,16 +1137,23 @@ def _open_registry_for_job(
         new_rows, migrate_issues = migrate_legacy_rows(legacy_rows)
     except DsRegistryError as exc:
         return None, fmt, None, f"миграция реестра не выполнена: {exc}", extra_warn
-    installed, install_err = _install_rows(
-        new_rows,
-        output_dir,
-        _links_for_install(new_rows, ul_root, attach_links),
-    )
+    started = time.perf_counter()
+    links = _links_for_install(new_rows, ul_root, attach_links)
+    if on_lap is not None:
+        on_lap("ссылки ДС/RFP/УЛ", time.perf_counter() - started)
+    started = time.perf_counter()
+    installed, install_err = _install_rows(new_rows, output_dir, links)
+    if on_lap is not None:
+        on_lap("запись реестра", time.perf_counter() - started)
     if install_err or installed is None:
         return None, fmt, None, install_err or "реестр не записан", extra_warn
     _emit_install(installed)
     document, err = _load_new_registry(
-        installed.path, ul_root=ul_root, ds_root=ds_root, rfp_root=rfp_root
+        installed.path,
+        ul_root=ul_root,
+        ds_root=ds_root,
+        rfp_root=rfp_root,
+        on_lap=on_lap,
     )
     if document is not None:
         report = default_migration_report_path(installed.path)
@@ -1190,6 +1215,10 @@ def run_ds_registry_check_job(
     session = DsProgressSession(_emit)
     phase_start = time.perf_counter()
     session.phase_start("чтение и проверка реестра")
+
+    def _on_lap(label: str, seconds: float) -> None:
+        session.message(f"{label} — {seconds:.2f} с")
+
     document, fmt, migrated, err, extra_warn = _open_registry_for_job(
         path,
         ul_root=ul_path,
@@ -1199,6 +1228,7 @@ def run_ds_registry_check_job(
         attach_links=_is_canon_home(home),
         ds_root=Path(ds_root) if ds_root else None,
         rfp_root=Path(rfp_root) if rfp_root else None,
+        on_lap=_on_lap,
     )
     session.phase_done(
         "чтение и проверка реестра",
