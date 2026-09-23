@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+from zipfile import ZipFile
 
 from openpyxl import Workbook, load_workbook
 
@@ -1088,6 +1090,52 @@ class RegistryRescanSmokeTest(unittest.TestCase):
                 if not row.source_id and row.note.startswith("сирота:")
             ]
             self.assertEqual(again_notes, notes[-1:])
+
+
+class RegistryExcelFilterSmokeTest(unittest.TestCase):
+    def test_space_custom_filter_does_not_block_read(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            path = Path(raw) / "registry.xlsx"
+            write_registry_workbook(
+                path,
+                [
+                    DsRegistryRow(
+                        status=STATUS_ACTIVE,
+                        source_id="11",
+                        relations=(
+                            DsRegistryRelation(
+                                group_id="ДС11",
+                                rfp_key="11",
+                                ul_folder="согл УЛ ДС11",
+                                block_index=1,
+                            ),
+                        ),
+                    )
+                ],
+            )
+            source = ZipFile(BytesIO(path.read_bytes()))
+            out = BytesIO()
+            with ZipFile(out, "w") as target:
+                for info in source.infolist():
+                    blob = source.read(info.filename)
+                    if info.filename.startswith("xl/worksheets/") and info.filename.endswith(".xml"):
+                        text = blob.decode("utf-8")
+                        text2, count = re.subn(
+                            r"<autoFilter ref=\"A1:E\d+\"/>",
+                            (
+                                '<autoFilter ref="A1:E3"><filterColumn colId="0">'
+                                '<customFilters><customFilter operator="notEqual" val=" "/>'
+                                "</customFilters></filterColumn></autoFilter>"
+                            ),
+                            text,
+                            count=1,
+                        )
+                        if count:
+                            blob = text2.encode("utf-8")
+                    target.writestr(info.filename, blob)
+            path.write_bytes(out.getvalue())
+            self.assertEqual(detect_registry_format(path), "new")
+            self.assertEqual(load_registry(path).rows[0].source_id, "11")
 
 
 if __name__ == "__main__":

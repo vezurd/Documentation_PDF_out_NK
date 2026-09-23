@@ -1049,7 +1049,11 @@ def _open_registry_for_job(
     try:
         fmt = detect_registry_format(registry_path)
     except Exception as exc:
-        return None, "unknown", None, f"не удалось определить формат реестра: {exc}", 0
+        cause = exc.__cause__
+        detail = str(exc)
+        if cause is not None:
+            detail = f"{detail} ({type(cause).__name__}: {cause})"
+        return None, "unknown", None, f"не удалось определить формат реестра: {detail}", 0
     if fmt == "new":
         document, err = _load_new_registry(
             registry_path,

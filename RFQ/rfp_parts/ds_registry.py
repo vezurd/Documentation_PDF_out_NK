@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Callable, Iterator, Literal, Sequence
+from zipfile import BadZipFile, ZipFile
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
@@ -206,10 +207,54 @@ _WS_RE = re.compile(r"\s+")
 # ---------------------------------------------------------------------------
 
 
+_FILTER_COLUMN_RE = re.compile(
+    r"<filterColumn\b[^>]*/>|<filterColumn\b[^>]*>.*?</filterColumn>",
+    re.DOTALL,
+)
+
+
+def _xlsx_without_filter_columns(data: bytes) -> bytes:
+    """Drop Excel filter criteria so openpyxl can open the book.
+
+    A table dropdown (``autoFilter ref``) stays. Criteria such as
+    ``customFilter val=" "`` on «Исходный ДС» make openpyxl raise
+    "could not read worksheets" and the check never starts. The criteria
+    are not part of the registry contract.
+    """
+
+    try:
+        source = ZipFile(BytesIO(data))
+    except BadZipFile:
+        return data
+    changed = False
+    pieces: list[tuple[object, bytes]] = []
+    for info in source.infolist():
+        blob = source.read(info.filename)
+        if (
+            info.filename.startswith("xl/worksheets/")
+            and info.filename.endswith(".xml")
+            and b"filterColumn" in blob
+        ):
+            text = blob.decode("utf-8")
+            cleaned = _FILTER_COLUMN_RE.sub("", text)
+            if cleaned != text:
+                blob = cleaned.encode("utf-8")
+                changed = True
+        pieces.append((info, blob))
+    if not changed:
+        return data
+    out = BytesIO()
+    with ZipFile(out, "w") as target:
+        for info, blob in pieces:
+            target.writestr(info, blob)
+    return out.getvalue()
+
+
 def _open_workbook(path: Path, *, data_only: bool) -> Workbook:
     """Load xlsx from bytes so Windows does not keep the destination locked."""
 
-    return load_workbook(BytesIO(Path(path).read_bytes()), data_only=data_only)
+    data = _xlsx_without_filter_columns(Path(path).read_bytes())
+    return load_workbook(BytesIO(data), data_only=data_only)
 
 
 class DsRegistryError(Exception):
