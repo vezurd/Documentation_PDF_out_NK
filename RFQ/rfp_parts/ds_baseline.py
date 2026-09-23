@@ -238,11 +238,17 @@ _HEAD_REPEAT_NEEDLES = (
     "технические требования",
     "ед. изм.",
 )
+_LEGAL_ENTITY_RE = re.compile(
+    r"""^(?:ооо|оао|зао|пао|ао|ип)\s*["«“]?\s*[а-яёa-z]""",
+    re.IGNORECASE,
+)
+_PARTY_LABELS = frozenset({"поставщик", "покупатель", "подрядчик", "заказчик"})
 _FOOTER_NEEDLES = (
     "итого",
     "всего",
     "на сумму",
     "общая сумма",
+    "подписи сторон",
     "передан через диадок",
     "банковские реквизиты",
     "наименование банка",
@@ -1097,6 +1103,24 @@ def _has_footer_needle(text: object) -> bool:
     return any(needle in folded for needle in _FOOTER_NEEDLES)
 
 
+def _is_legal_entity_name(value: object) -> bool:
+    """True for a party name such as ``ООО "Прогресс Инжиниринг"``.
+
+    The signature block of a DS puts the supplier and the buyer into the
+    code column. A procurement code does not start with a legal form.
+    """
+
+    text = _cell_text(value).strip()
+    if not text:
+        return False
+    return _LEGAL_ENTITY_RE.match(text.casefold()) is not None
+
+
+def _is_party_label(value: object) -> bool:
+    text = _cell_text(value).strip().strip(":").strip(".").casefold()
+    return text in _PARTY_LABELS
+
+
 def _is_signature_text(value: object) -> bool:
     """True for a footer signature, not for a procurement or 1C code.
 
@@ -1115,6 +1139,7 @@ def _is_signature_text(value: object) -> bool:
 
 def _is_contract_scaffold(
     *,
+    code: str,
     code_normalized: str,
     code_1c: str,
     units: str,
@@ -1124,16 +1149,30 @@ def _is_contract_scaffold(
 
     A material row has a procurement code, a 1C code, a unit, or any
     quantity cell (number, zero, formula, or non-numeric text). A
-    signature in the 1C column is not a 1C code. Title, section, RD
-    name, and supplier name alone are the contract footer and must not
-    raise empty-code or empty-qty.
+    signature in the 1C column is not a 1C code. A legal-entity name in
+    the code column (``ООО …``, ``АО …``, ``ИП …``) is the parties'
+    signature block, not a code. Title, section, RD name, and supplier
+    name alone are the contract footer and must not raise empty-code
+    or empty-qty.
     """
 
-    if _is_signature_text(code_normalized):
+    if (
+        _is_signature_text(code_normalized)
+        or _is_legal_entity_name(code)
+        or _is_party_label(code)
+    ):
         code_normalized = ""
-    if _is_signature_text(code_1c):
+    if (
+        _is_signature_text(code_1c)
+        or _is_legal_entity_name(code_1c)
+        or _is_party_label(code_1c)
+    ):
         code_1c = ""
-    if _is_signature_text(units):
+    if (
+        _is_signature_text(units)
+        or _is_legal_entity_name(units)
+        or _is_party_label(units)
+    ):
         units = ""
     if code_normalized or code_1c.strip() or units.strip():
         return False
@@ -1895,6 +1934,7 @@ def _parse_open_workbook(
             has_formula = False
         code_normalized = normalize_code(code)
         if _is_contract_scaffold(
+            code=code,
             code_normalized=code_normalized,
             code_1c=code_1c,
             units=units,

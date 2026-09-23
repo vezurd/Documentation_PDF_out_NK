@@ -858,6 +858,22 @@ class DsBaselineSmokeTest(unittest.TestCase):
                     put(6, "/Никифоров И.С./"),
                     put(6, "_________________________________________/Савва С."),
                     put(11, "____________________________________/Григорьев М.С./"),
+                    put(2, " ПОДПИСИ СТОРОН"),
+                    ["", "", "ПОСТАВЩИК", "", "", "", "", "ПОКУПАТЕЛЬ", "", "", "", ""],
+                    [
+                        "",
+                        "",
+                        'ООО "Би.Си.Си."',
+                        "",
+                        "",
+                        "",
+                        "",
+                        'ООО "Прогресс Инжиниринг"',
+                        "",
+                        "",
+                        "",
+                        "",
+                    ],
                     ref_row,
                     _ds_row(
                         npp=2,
@@ -880,14 +896,14 @@ class DsBaselineSmokeTest(unittest.TestCase):
             result = _run_baseline(ds_root, registry_path, out_dir)
             self.assertEqual(
                 [item.excel_row for item in result.positions],
-                [2, 8, 9],
+                [2, 11, 12],
             )
             empty_codes = [
                 item.excel_row
                 for item in result.issues
                 if item.code == ISSUE_EMPTY_CODE
             ]
-            self.assertEqual(empty_codes, [8, 9])
+            self.assertEqual(empty_codes, [11, 12])
             self.assertFalse(
                 any(item.code == ISSUE_QTY_FORMULA for item in result.issues)
             )
@@ -899,7 +915,13 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 for item in result.issues
                 if item.code == ISSUE_QTY_EMPTY
             ]
-            self.assertEqual(qty_empty, [8])
+            self.assertEqual(qty_empty, [11])
+            self.assertFalse(
+                any("Прогресс" in item.message for item in result.issues)
+            )
+            self.assertFalse(
+                any(item.code == ISSUE_UNKNOWN_GOOGLE for item in result.issues)
+            )
 
     def test_empty_code_row_stays_a_position(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
