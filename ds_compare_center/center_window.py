@@ -47,6 +47,12 @@ from RFQ.rfp_parts.ds_jobs import (
     run_ds_hybrid_job,
     run_ds_registry_check_job,
 )
+from RFQ.rfp_parts.one_file_check import (
+    one_file_kind_dir,
+    run_ds_one_file_job,
+    run_rfp_one_file_job,
+    run_ul_one_file_job,
+)
 from RFQ.tags_rfp_compare.ds_manager_roster import (
     get_last_ds_roster_compare,
     resolve_ds_manager_matrix_path,
@@ -136,12 +142,23 @@ _JOB_TITLE_DS_BASELINE = "ДС: собрать вход Только ДС"
 _JOB_TITLE_DS_HYBRID = "ДС: проверить RFP и наложить"
 _JOB_TITLE_DS_COVERAGE = "ДС: только покрытие"
 _JOB_TITLE_DS_REGISTRY = "ДС: проверить реестр"
+_JOB_TITLE_RFP_ONE = "RFP: проверить один файл"
+_JOB_TITLE_DS_ONE = "ДС: проверить один файл"
+_JOB_TITLE_UL_ONE = "УЛ: проверить один файл"
 _JOB_TITLES_DS_COCKPIT = frozenset(
     {
         _JOB_TITLE_DS_BASELINE,
         _JOB_TITLE_DS_HYBRID,
         _JOB_TITLE_DS_COVERAGE,
         _JOB_TITLE_DS_REGISTRY,
+        _JOB_TITLE_DS_ONE,
+    }
+)
+_JOB_TITLES_PACKING = frozenset(
+    {
+        _JOB_TITLE_TSD_PACKING,
+        _JOB_TITLE_TSD_ZINOVIEV,
+        _JOB_TITLE_UL_ONE,
     }
 )
 _JOB_TITLE_RFP_DS_ID = "Соответствие ДС: RFP ↔ УЛ"
@@ -235,6 +252,7 @@ class CenterWindow(QWidget):
         self._tsd_packing_panel = TsdPackingPanel(
             on_run=self._run_tsd_packing,
             on_compare_zinoviev=self._run_tsd_zinoviev_compare,
+            on_check_one=self._run_ul_one_file,
         )
         self._tsd_packing_help_panel = TsdPackingHelpPanel()
         self._upd_panel = UpdPanel(on_run=self._run_upd_load)
@@ -254,6 +272,8 @@ class CenterWindow(QWidget):
             on_ds_hybrid=self._run_ds_hybrid,
             on_ds_coverage=self._run_ds_coverage,
             on_ds_registry=self._run_ds_registry,
+            on_check_one_rfp=self._run_rfp_one_file,
+            on_check_one_ds=self._run_ds_one_file,
         )
         self._rfp_ds_id_panel = RfpDsIdPanel(
             on_run=self._run_rfp_ds_id,
@@ -792,7 +812,7 @@ class CenterWindow(QWidget):
             self._function_job_tab = "ds_mp"
             self._rfp_ds_mp_panel.monitor.start_job(title)
             self._tabs.setCurrentIndex(_TAB_INDEX_RFP_DS_MP)
-        elif title in (_JOB_TITLE_TSD_PACKING, _JOB_TITLE_TSD_ZINOVIEV):
+        elif title in _JOB_TITLES_PACKING:
             self._function_job_tab = "packing"
             self._tsd_packing_panel.monitor.start_job(title)
             self._tabs.setCurrentIndex(_TAB_INDEX_TSD_PACKING)
@@ -995,6 +1015,30 @@ class CenterWindow(QWidget):
             job_tab="rfp_parts",
         )
 
+    def _run_rfp_one_file(self, file_path: str) -> None:
+        self._start_job(
+            _JOB_TITLE_RFP_ONE,
+            run_rfp_one_file_job,
+            file_path,
+            job_tab="rfp_parts",
+        )
+
+    def _run_ds_one_file(self, file_path: str) -> None:
+        paths = self._ds_job_paths()
+        self._rfp_parts_panel.set_last_reports_dir(one_file_kind_dir("ДС"))
+        self._start_job(
+            _JOB_TITLE_DS_ONE,
+            run_ds_one_file_job,
+            file_path,
+            paths["source_root"],
+            paths["registry_path"],
+            paths["ul_root"],
+            job_tab="rfp_parts",
+        )
+
+    def _run_ul_one_file(self, file_path: str) -> None:
+        self._start_job(_JOB_TITLE_UL_ONE, run_ul_one_file_job, file_path)
+
     def _run_ds_registry(self) -> None:
         from RFQ.rfp_parts.ds_registry import DEFAULT_RFP_BASE
 
@@ -1084,7 +1128,7 @@ class CenterWindow(QWidget):
             return self._rfp_ds_id_panel.monitor
         if self._function_job_tab == "ds_mp":
             return self._rfp_ds_mp_panel.monitor
-        if self._last_job_title in (_JOB_TITLE_TSD_PACKING, _JOB_TITLE_TSD_ZINOVIEV):
+        if self._last_job_title in _JOB_TITLES_PACKING:
             return self._tsd_packing_panel.monitor
         if self._last_job_title == _JOB_TITLE_UPD:
             return self._upd_panel.monitor
@@ -1108,6 +1152,11 @@ class CenterWindow(QWidget):
     @Slot(bool, str, object)
     def _on_finished(self, success: bool, message: str, result_path: object) -> None:
         rp = str(result_path) if result_path else None
+        if self._last_job_title == _JOB_TITLE_RFP_ONE:
+            self._rfp_parts_panel.monitor.finish_job(success, message, rp)
+            if rp:
+                self._rfp_parts_panel.show_one_file_reports(Path(rp))
+            return
         if self._last_job_title in _JOB_TITLES_DS_COCKPIT:
             self._rfp_parts_panel.monitor.finish_job(success, message, rp)
             self._rfp_parts_panel.on_ds_job_finished(success, message, rp)
@@ -1120,9 +1169,12 @@ class CenterWindow(QWidget):
             self._rfp_ds_mp_panel.monitor.finish_job(success, message, rp)
             self._rfp_ds_mp_panel.on_job_finished(success, message)
             return
-        if self._last_job_title in (_JOB_TITLE_TSD_PACKING, _JOB_TITLE_TSD_ZINOVIEV):
+        if self._last_job_title in _JOB_TITLES_PACKING:
             self._tsd_packing_panel.monitor.finish_job(success, message, rp)
-            self._tsd_packing_panel.on_job_finished(success, message, rp)
+            if self._last_job_title == _JOB_TITLE_UL_ONE:
+                self._tsd_packing_panel.set_status(message or "")
+            else:
+                self._tsd_packing_panel.on_job_finished(success, message, rp)
         elif self._last_job_title == _JOB_TITLE_UPD:
             self._upd_panel.monitor.finish_job(success, message, rp)
             self._upd_panel.on_job_finished(success, message, rp)

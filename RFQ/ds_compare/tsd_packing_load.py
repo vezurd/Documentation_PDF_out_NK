@@ -1550,3 +1550,90 @@ def format_packing_cache_freshness_detail(result: TsdLoadResult) -> str:
     if not result.success:
         detail += "; есть критичные замечания"
     return detail
+
+
+@dataclass
+class TsdOneFileResult:
+    """Outcome of checking one packing-list workbook."""
+
+    success: bool
+    message: str
+    result_path: str | None = None
+    critical: TsdCriticalReport | None = None
+
+
+def inspect_one_tsd_file(file_path: str, out_dir: str | Path) -> TsdOneFileResult:
+    """Run the full TSD reader on one workbook and write reports beside it.
+
+    Uses ``_load_one_tsd_file``, the same sheet rules and critical report as
+    ``load_and_cache_tsd_packing``. Does not write the production pickle,
+    summary or ``tsd_packing_critical.txt`` under the UL cache folder, and
+    does not replace the in-memory critical report of a full run.
+
+    Args:
+        file_path: One ``.xlsx`` packing list.
+        out_dir: Folder for this check's reports. Created when missing.
+
+    Returns:
+        Success follows the critical report (a readable file with positions
+        and no critical remarks). ``result_path`` is ``out_dir``.
+    """
+
+    path = Path(file_path)
+    out = Path(out_dir)
+    if not path.is_file():
+        return TsdOneFileResult(False, f"файл не найден: {path}", None)
+    if path.name.startswith("~$"):
+        return TsdOneFileResult(False, "это временный файл Excel (~$)", None)
+    if path.suffix.lower() != ".xlsx":
+        return TsdOneFileResult(
+            False,
+            f"упаковочный лист читается как xlsx: {path.name}",
+            None,
+        )
+
+    out.mkdir(parents=True, exist_ok=True)
+    root = str(path.parent)
+    print(f"УЛ один файл: {path}")
+    print(
+        "Правило листов: Master* пропускаем; "
+        "все остальные вкладки сканируем на position_row."
+    )
+    outcome = _load_one_tsd_file(str(path), root)
+    stats = TsdLoadStats(files_total=1)
+    positions: list[RowStd] = []
+    _apply_tsd_file_outcome(stats, positions, outcome, done=1, total=1)
+
+    report_path = out / TSD_PACKING_LOAD_REPORT_NAME
+    report_path.write_text(_format_stats_report(stats, root), encoding="utf-8")
+    sheets_path = save_tsd_packing_sheets_report(
+        stats,
+        root=root,
+        out_path=out / TSD_PACKING_SHEETS_REPORT_NAME,
+    )
+    critical = build_tsd_critical_report(stats, root=root)
+    critical_path = save_tsd_packing_critical_report(
+        critical,
+        root=root,
+        out_path=out / TSD_PACKING_CRITICAL_REPORT_NAME,
+    )
+    summary_path = save_tsd_packing_summary_xlsx(
+        positions,
+        out_path=out / tsd_packing_summary_xlsx_name(),
+    )
+    print(f"Отчёт: {report_path}")
+    print(f"Отчёт вкладок: {sheets_path}")
+    print(f"Критичные замечания: {critical_path}")
+    print(f"Свод одного файла: {summary_path}")
+    print("=== КРИТИЧНЫЕ ЗАМЕЧАНИЯ ===")
+    print(critical.format_detail())
+    message = (
+        f"Один файл {path.name}: позиций {stats.position_rows}, "
+        f"замечаний {len(critical.remarks)}. Отчёт: {out}"
+    )
+    return TsdOneFileResult(
+        success=bool(critical.ok and outcome.ok),
+        message=message,
+        result_path=str(out),
+        critical=critical,
+    )

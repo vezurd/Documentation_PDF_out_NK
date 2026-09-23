@@ -150,7 +150,7 @@ As-build process получает путь `rfp_tags_compare_config_asbuild.json
 Ожидание изначально: ровно `Single 1` + `Master 1`. Факт на сетевом корне: много файлов с `Single 2+`; часть — `SO - PL` / прочие имена.
 
 **Загрузка:** `RFQ/ds_compare/tsd_packing_load.py` → `load_and_cache_tsd_packing`  
-**GUI action:** `run_tsd_packing_load` → вкладка «Упаковочные листы».
+**GUI action:** `run_tsd_packing_load` → вкладка «Упаковочные листы». Кнопка **«Проверить один файл УЛ»** — тот же читатель (`inspect_one_tsd_file`) на одном xlsx; отчёт в `RFP сводный файл/_проверка_одного_файла/УЛ/`. Pickle и свод полного прогона эта кнопка не пишет.
 
 | Правило листов | Поведение |
 |----------------|-----------|

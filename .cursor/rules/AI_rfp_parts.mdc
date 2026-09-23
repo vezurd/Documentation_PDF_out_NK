@@ -28,6 +28,7 @@ alwaysApply: false
 | [ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py) | покрытие файлов RFP vs папок УЛ; GUI/CLI; milestone `ds_id_check` |
 | [__main__.py](RFQ/rfp_parts/__main__.py) | `python -m RFQ.rfp_parts` |
 | [rfp_parts_panel.py](ds_compare_center/rfp_parts_panel.py) | GUI вкладка; слева компактная таблица файлов ОК / ошибка |
+| [one_file_check.py](RFQ/rfp_parts/one_file_check.py) | один xlsx RFP / ДС / УЛ теми же инструментами сбора; отчёты в `_проверка_одного_файла` |
 | [file_status.py](RFQ/rfp_parts/file_status.py) | `rfp_parts_file_status.json`; русские тексты; fallback из diagnostics; GUI только ERROR/OK |
 | [rfp_supply_status.py](RFQ/tags_rfp_compare/rfp_supply_status.py) | канон. «Исключен из поставки»; замена тега; unknown → `RfpSupplyStatusError` |
 | `…\rfp_parts_net.xlsx` | свод Step1 с раскрытием тегов; см. **раскладка** ниже |
@@ -141,6 +142,8 @@ Live-фазы в stdout Job monitor — префикс **`[parts timing]`** (`ru
 
 Вкладка **RFP · Сбор частей**, левая колонка, блок «Файлы последнего прогона»: компактная таблица xlsx прогона. Только **ОК** / **Ошибка** (ошибки сверху по алфавиту, затем ОК). Описание — критичные замечания (нет шапки, нет обязательных столбцов, пустой файл, лот, Tag содержит `RFQ` и т.п.). Дубли тегов и TAG≠лот **не** в GUI: файл `Отчет по тегам - сбор частей.xlsx` в штамп-папке и короткая кликабельная ссылка над таблицей.
 
+**Один файл.** Кнопка **«Проверить один файл RFP»** вызывает тот же `run_rfp_parts_analyze` (`only_files` — одна книга). Кнопка **«Проверить один файл ДС»** — тот же аудит, что «Собрать свод только из ДС» (`only_paths`, `write_baseline=False`). УЛ — кнопка **«Проверить один файл УЛ»** на вкладке **ДС · Упаковочные листы** (`inspect_one_tsd_file`, тот же читатель листов). Отчёты: `RFP сводный файл/_проверка_одного_файла/{RFP|ДС|УЛ}/YYYY.MM.DD_HH.MM/`. Эта папка не штамп полного прогона: `rfp_parts_net.xlsx` Запуска, `Свод ДС для запуска.xlsx` и кэш УЛ остаются от общего сбора. Модуль: [one_file_check.py](RFQ/rfp_parts/one_file_check.py).
+
 Источник статуса — `rfp_parts_file_status.json`; если JSON ещё нет — сборка из `rfp_parts_sources.json` + `rfp_parts_diagnostics.xlsx`.
 
 ## Суммирование
@@ -199,6 +202,7 @@ python tmp/test_rfp_load_tags_smoke.py
 python tmp/test_rfp_supply_status_smoke.py
 python tmp/test_rfp_tag_count_mismatch_smoke.py
 python tmp/test_rfp_parts_timing_smoke.py
+python tmp/test_one_file_check_smoke.py
 python tmp/test_rfp_native_settings_smoke.py
 python tmp/test_rfp_packing_compare_smoke.py
 python -X utf8 -m RFQ.rfp_parts --help

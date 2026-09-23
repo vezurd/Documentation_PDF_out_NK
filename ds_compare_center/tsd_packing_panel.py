@@ -202,10 +202,12 @@ class TsdPackingPanel(QWidget):
         *,
         on_run: Callable[[str], None] | None = None,
         on_compare_zinoviev: Callable[[], None] | None = None,
+        on_check_one: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_run = on_run
         self._on_compare_zinoviev = on_compare_zinoviev
+        self._on_check_one = on_check_one
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
@@ -290,6 +292,14 @@ class TsdPackingPanel(QWidget):
         self._btn_run = QPushButton("Прочитать и проанализировать", box)
         self._btn_run.setMinimumWidth(0)
         self._btn_run.clicked.connect(self._run_load)
+        self._btn_one = QPushButton("Проверить один файл УЛ", box)
+        self._btn_one.setMinimumWidth(0)
+        self._btn_one.setToolTip(
+            "Тот же разбор вкладок и критичных замечаний, что полный прогон, "
+            "только выбранный xlsx. Отчёт в _проверка_одного_файла\\УЛ. "
+            "Кэш и свод полного прогона остаются на месте."
+        )
+        self._btn_one.clicked.connect(self._run_one_file)
         self._btn_compare_zin = QPushButton(
             "Сравнить свод робота с Зиновьевым",
             box,
@@ -305,6 +315,17 @@ class TsdPackingPanel(QWidget):
         self._btn_open_cache.setMinimumWidth(0)
         self._btn_open_cache.clicked.connect(self._open_cache_folder)
         v.addWidget(self._btn_run)
+        v.addWidget(self._btn_one)
+        one_hint = QLabel(
+            "Один файл — тот же читатель, что «Прочитать и проанализировать». "
+            "Отчёт в папке _проверка_одного_файла\\УЛ. "
+            "Кэш и свод полного прогона остаются на месте.",
+            box,
+        )
+        one_hint.setWordWrap(True)
+        one_hint.setStyleSheet("color: #555; font-size: 11px;")
+        _shrink_h(one_hint)
+        v.addWidget(one_hint)
         v.addWidget(self._btn_compare_zin)
         v.addWidget(self._btn_open_cache)
 
@@ -402,6 +423,21 @@ class TsdPackingPanel(QWidget):
             QMessageBox.warning(self, "Упаковочные листы", "Обработчик запуска не задан.")
             return
         self._on_run(path)
+
+    def _run_one_file(self) -> None:
+        start = self._edit_root.text().strip() or str(Path.home())
+        path, _selected = QFileDialog.getOpenFileName(
+            self,
+            "Один файл УЛ",
+            start,
+            "Excel (*.xlsx)",
+        )
+        if not path:
+            return
+        if self._on_check_one is None:
+            QMessageBox.warning(self, "Упаковочные листы", "Обработчик запуска не задан.")
+            return
+        self._on_check_one(path)
 
     def _run_compare_zinoviev(self) -> None:
         if self._on_compare_zinoviev is None:

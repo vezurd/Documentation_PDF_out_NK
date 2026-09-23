@@ -1310,6 +1310,45 @@ def _xlsx_files(directory: Path) -> list[Path]:
     )
 
 
+def resolve_parts_workbooks(
+    parts_dir: Path,
+    only_files: Iterable[Path] | None = None,
+) -> list[Path]:
+    """Return part workbooks for a collection run.
+
+    Args:
+        parts_dir: Folder ``RFP_Зиновьев``. Used when ``only_files`` is omitted.
+        only_files: When set, check only these workbooks. The same extractor
+            runs on each file. An empty sequence is an error.
+
+    Returns:
+        Workbook paths, locks skipped.
+
+    Raises:
+        FileNotFoundError: Directory or a named file is missing, or the
+            limited list has no workbook.
+        NotADirectoryError: ``parts_dir`` is not a directory and ``only_files``
+            is omitted.
+        ValueError: A limited path is not an Excel workbook.
+    """
+
+    if only_files is None:
+        return _xlsx_files(parts_dir)
+    files: list[Path] = []
+    for raw in only_files:
+        path = Path(raw)
+        if path.name.startswith("~$"):
+            continue
+        if not path.is_file():
+            raise FileNotFoundError(f"RFP file not found: {path}")
+        if path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            raise ValueError(f"Not an Excel workbook: {path}")
+        files.append(path)
+    if not files:
+        raise FileNotFoundError("No RFP workbooks in only_files")
+    return files
+
+
 def _record_key(record: RfpRecord) -> tuple[str, str]:
     return (_norm_key_text(record.ds_title), _norm_key_text(record.code))
 
@@ -3628,6 +3667,7 @@ def run_rfp_parts_analyze(
     manifest: Path | None = None,
     strict: bool = False,
     units_matrix_path: Path | None = None,
+    only_files: Iterable[Path] | None = None,
 ) -> Path:
     """Sum workbooks from the parts folder into ``rfp_parts_net.xlsx``.
 
@@ -3650,6 +3690,8 @@ def run_rfp_parts_analyze(
         strict: Exit 2 when the run has errors.
         units_matrix_path: Optional conversion matrix override. When omitted,
             ``load_config()['paths']['units_convert_matrix']`` is used.
+        only_files: When set, run the same collection on these workbooks
+            only. ``None`` reads every workbook directly in ``parts_dir``.
 
     Returns:
         Path to the written tagged ``rfp_parts_net.xlsx``.
@@ -3703,7 +3745,7 @@ def run_rfp_parts_analyze(
                 file_stats.append(stats)
 
         with timing.phase("список файлов частей"):
-            part_files = _xlsx_files(parts_dir)
+            part_files = resolve_parts_workbooks(parts_dir, only_files)
 
         with timing.phase("извлечение всех частей"):
             extraction_started = time.perf_counter()

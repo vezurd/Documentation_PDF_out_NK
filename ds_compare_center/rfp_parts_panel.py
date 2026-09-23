@@ -192,6 +192,8 @@ class RfpPartsPanel(QWidget):
         on_ds_hybrid: Callable[[], None] | None = None,
         on_ds_coverage: Callable[[], None] | None = None,
         on_ds_registry: Callable[[], None] | None = None,
+        on_check_one_rfp: Callable[[str], None] | None = None,
+        on_check_one_ds: Callable[[str], None] | None = None,
     ) -> None:
         """Create the panel.
 
@@ -202,6 +204,8 @@ class RfpPartsPanel(QWidget):
             on_ds_hybrid: Start ``run_ds_hybrid_job``.
             on_ds_coverage: Start ``run_ds_coverage_job``.
             on_ds_registry: Start ``run_ds_registry_check_job``.
+            on_check_one_rfp: Start the parts collection on one workbook.
+            on_check_one_ds: Start the DS baseline audit on one workbook.
         """
         super().__init__(parent)
         self._on_run = on_run
@@ -209,6 +213,8 @@ class RfpPartsPanel(QWidget):
         self._on_ds_hybrid = on_ds_hybrid
         self._on_ds_coverage = on_ds_coverage
         self._on_ds_registry = on_ds_registry
+        self._on_check_one_rfp = on_check_one_rfp
+        self._on_check_one_ds = on_check_one_ds
         self._last_reports_dir: Path | None = find_latest_rfp_parts_reports_dir()
         self._migrated_registry_path: Path | None = None
 
@@ -231,6 +237,11 @@ class RfpPartsPanel(QWidget):
         """Remember the out-dir used for the current/last run."""
         self._last_reports_dir = path
         self._refresh_status()
+
+    def show_one_file_reports(self, path: Path) -> None:
+        """Point status and the parts table at a one-file stamp folder."""
+        self.set_last_reports_dir(path)
+        self._refresh_file_status()
 
     @property
     def last_reports_dir(self) -> Path | None:
@@ -346,6 +357,24 @@ class RfpPartsPanel(QWidget):
             "Собрать свод частей RFP",
             "Прежний сбор rfp_parts_net.xlsx. Контур ДС и реестр не трогает.",
             self._click_run,
+        )
+        self._add_action_with_comment(
+            box,
+            v,
+            "Проверить один файл RFP",
+            "Тот же сбор частей (шапка, лот, теги, единицы, свод), "
+            "только выбранный xlsx. Отчёт лежит в "
+            "_проверка_одного_файла\\RFP. Полный штамп свода остаётся от общего прогона.",
+            self._click_one_rfp,
+        )
+        self._add_action_with_comment(
+            box,
+            v,
+            "Проверить один файл ДС",
+            "Тот же аудит, что «Собрать свод только из ДС», только выбранная книга. "
+            "Отчёт лежит в _проверка_одного_файла\\ДС. "
+            "«Свод ДС для запуска.xlsx» остаётся от полного прогона.",
+            self._click_one_ds,
         )
         btn_cov = QPushButton("Только имена и покрытие", box)
         btn_cov.setMinimumWidth(0)
@@ -713,6 +742,14 @@ class RfpPartsPanel(QWidget):
                 "\\YYYY.MM.DD_HH.MM\\"
             )
 
+    def _file_status_run_dir(self) -> Path:
+        """Prefer the last one-file stamp when it has a parts status payload."""
+        preferred = self._effective_reports_dir()
+        if load_file_status_payload(preferred).get("files"):
+            return preferred
+        latest = find_latest_rfp_parts_reports_dir()
+        return latest or preferred
+
     def _refresh_file_status(self) -> None:
         """Fill the left-pane file table from the latest stamp folder."""
         table = getattr(self, "_file_status_table", None)
@@ -720,7 +757,7 @@ class RfpPartsPanel(QWidget):
         link = getattr(self, "_tag_remarks_link", None)
         if table is None or summary is None:
             return
-        run_dir = find_latest_rfp_parts_reports_dir() or self._effective_reports_dir()
+        run_dir = self._file_status_run_dir()
         payload = load_file_status_payload(run_dir)
         files = payload.get("files") or []
         ok_n = int(payload.get("ok") or 0)
@@ -953,6 +990,32 @@ class RfpPartsPanel(QWidget):
         self._persist_ds_paths()
         if self._on_ds_registry is not None:
             self._on_ds_registry()
+
+    def _pick_workbook(self, title: str, start: str) -> str:
+        path, _selected = QFileDialog.getOpenFileName(
+            self,
+            title,
+            start or str(Path.home()),
+            "Excel (*.xlsx *.xlsm)",
+        )
+        return path
+
+    def _click_one_rfp(self) -> None:
+        start = str(DEFAULT_PARTS_DIR)
+        path = self._pick_workbook("Один файл RFP", start)
+        if not path or self._on_check_one_rfp is None:
+            return
+        self._on_check_one_rfp(path)
+
+    def _click_one_ds(self) -> None:
+        if not self._require_ds_folder():
+            return
+        self._persist_ds_paths()
+        start = self._edit_ds_folder.text().strip()
+        path = self._pick_workbook("Один файл ДС", start)
+        if not path or self._on_check_one_ds is None:
+            return
+        self._on_check_one_ds(path)
 
     def _click_open_migrated_registry(self) -> None:
         path = self._migrated_registry_path

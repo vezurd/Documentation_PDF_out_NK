@@ -760,13 +760,17 @@ def collect_ds_workbooks(
     source_root: str | Path,
     *,
     registry_path: str | Path | None = None,
+    only_paths: Sequence[str | Path] | None = None,
 ) -> tuple[list[DsSourceFile], list[DsSkippedFile]]:
-    """Recursively collect DS xlsx/xlsm, skipping locks, registry and own outputs.
+    """Collect DS xlsx/xlsm, skipping locks, registry and own outputs.
 
     Args:
-        source_root: Folder to walk.
+        source_root: Folder to walk when ``only_paths`` is omitted.
         registry_path: Canonical registry path; that file is skipped if inside
             the tree.
+        only_paths: When set, audit only these workbooks (same skip rules).
+            ``None`` walks ``source_root`` recursively. An empty sequence
+            collects nothing.
 
     Returns:
         ``(files, skipped)`` where ``files`` is sorted by posix relpath.
@@ -776,16 +780,22 @@ def collect_ds_workbooks(
     registry = Path(registry_path) if registry_path else None
     collected: list[DsSourceFile] = []
     skipped: list[DsSkippedFile] = []
-    if not root.is_dir():
+    if only_paths is None and not root.is_dir():
         return collected, skipped
 
     candidates: list[Path] = []
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in _EXCEL_SUFFIXES:
-            continue
-        candidates.append(path)
+    if only_paths is None:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in _EXCEL_SUFFIXES:
+                continue
+            candidates.append(path)
+    else:
+        for raw in only_paths:
+            path = Path(raw)
+            if path.is_file() and path.suffix.lower() in _EXCEL_SUFFIXES:
+                candidates.append(path)
 
     for path in candidates:
         relpath = _posix_relpath(path, root)
@@ -1021,6 +1031,26 @@ def _has_footer_needle(text: object) -> bool:
     if not folded:
         return False
     return any(needle in folded for needle in _FOOTER_NEEDLES)
+
+
+def _is_contract_scaffold(
+    *,
+    code_normalized: str,
+    code_1c: str,
+    units: str,
+    qty_error: str | None,
+) -> bool:
+    """True when the row is clause, signature, or bank text, not a position.
+
+    A material row has a procurement code, a 1C code, a unit, or any
+    quantity cell (number, zero, formula, or non-numeric text). Title,
+    section, RD name, and supplier name alone are the contract footer
+    and must not raise empty-code or empty-qty.
+    """
+
+    if code_normalized or code_1c.strip() or units.strip():
+        return False
+    return qty_error == ISSUE_QTY_EMPTY
 
 
 def _qty_formula_is_aggregate(text: object) -> bool:
@@ -1727,13 +1757,23 @@ def _parse_open_workbook(
         units = normalize_units_text(units_raw)
         qty_raw_obj = at("qty")
         qty_raw_text = _cell_text(qty_raw_obj)
-        qty_probe, _qty_probe_error = _parse_qty(qty_raw_obj)
+        qty_probe, qty_probe_error = _parse_qty(qty_raw_obj)
         if _all_core_ref(shifted) or _all_core_ref(shifted_values):
             continue
-        has_identity = bool(title or system or name or supplier or code)
+        has_identity = bool(title or system or name or supplier or code or code_1c)
         if not has_identity and qty_probe is None:
             continue
         has_formula = qty_col_index in formula_cols
+        if has_formula:
+            qty_probe_error = ISSUE_QTY_FORMULA
+        code_normalized = normalize_code(code)
+        if _is_contract_scaffold(
+            code_normalized=code_normalized,
+            code_1c=code_1c,
+            units=units,
+            qty_error=qty_probe_error,
+        ):
+            continue
         if has_formula:
             issues.append(
                 _issue(
@@ -1817,7 +1857,6 @@ def _parse_open_workbook(
                     )
                 )
 
-        code_normalized = normalize_code(code)
         if not code_normalized:
             issues.append(
                 _issue(
@@ -2732,6 +2771,7 @@ def build_ds_baseline(
     progress_callback: Callable[[int, int, str, float | None], object] | None = None,
     phase_callback: Callable[[str], object] | None = None,
     files_discovered_callback: Callable[[int, int], object] | None = None,
+    only_paths: Sequence[str | Path] | None = None,
 ) -> DsBaselineResult:
     """Audit DS workbooks, write reports, and optionally write the Step1 baseline.
 
@@ -2755,6 +2795,10 @@ def build_ds_baseline(
             ``file_elapsed`` is ``None`` before parse and seconds after.
         phase_callback: Optional short Russian phase label for live Job monitor.
         files_discovered_callback: ``(file_count, skipped_count)`` after scan.
+        only_paths: Limit the audit to these workbooks. ``None`` walks the
+            whole folder. The same parsers and reports run either way.
+            ``write_baseline`` still decides whether the launch workbook is
+            written.
 
     Returns:
         ``DsBaselineResult`` with counts, issues, paths, rows, groups and
@@ -2769,7 +2813,11 @@ def build_ds_baseline(
     issues: list[DsBaselineIssue] = _copy_registry_issues(registry)
     if phase_callback is not None:
         phase_callback("обход папки ДС")
-    files, skipped = collect_ds_workbooks(root, registry_path=registry.path)
+    files, skipped = collect_ds_workbooks(
+        root,
+        registry_path=registry.path,
+        only_paths=only_paths,
+    )
     if files_discovered_callback is not None:
         files_discovered_callback(len(files), len(skipped))
     if phase_callback is not None:
