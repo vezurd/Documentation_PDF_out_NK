@@ -739,6 +739,50 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
             finally:
                 wb.close()
 
+    def test_missing_ul_folder_is_blue_and_shared_stays_yellow(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            path = Path(raw) / "registry.xlsx"
+
+            def row(source_id: str, folder: str) -> DsRegistryRow:
+                return DsRegistryRow(
+                    status=STATUS_ACTIVE,
+                    source_id=source_id,
+                    relations=(
+                        DsRegistryRelation(
+                            group_id=f"ДС{source_id}",
+                            rfp_key=source_id,
+                            ul_folder=folder,
+                            mode=MODE_WHOLE,
+                            block_index=1,
+                        ),
+                    ),
+                )
+
+            present = "согл УЛ ДС11"
+            missing = "согл УЛ нет на диске"
+            shared = "согл УЛ общая"
+            write_registry_workbook(
+                path,
+                [row("11", present), row("12", missing), row("13", shared), row("47", shared)],
+                links=RegistryLinks(
+                    scanned_ul=True,
+                    ul_names=frozenset({"согл ул дс11"}),
+                ),
+            )
+            loaded = load_registry(path)
+            codes = {issue.code for issue in loaded.validation.issues}
+            self.assertNotIn("ul_folder_missing", codes)
+            self.assertIn(ISSUE_SHARED_UL, codes)
+            wb = _load_xlsx(path)
+            try:
+                ws = wb[REGISTRY_SHEET_NAME]
+                self.assertFalse(_fill_rgb(ws["E2"]).endswith("BDD7EE"))
+                self.assertTrue(_fill_rgb(ws["E3"]).endswith("BDD7EE"))
+                self.assertTrue(_fill_rgb(ws["E4"]).endswith("FFFF00"))
+                self.assertTrue(_fill_rgb(ws["E5"]).endswith("FFFF00"))
+            finally:
+                wb.close()
+
     def test_no_ul_warns_only_when_folder_exists(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
             root = Path(raw)

@@ -62,7 +62,7 @@ from RFQ.rfp_parts.ds_registry import (
     RFP_RECONCILE_NO_FILE,
     RegistryLinks,
     index_rfp_files,
-    index_ul_folders,
+    scan_ul_catalog,
     install_working_registry,
     load_registry,
     migrate_legacy_rows,
@@ -966,13 +966,15 @@ def _registry_links(
     scanned_ul = ul_root is not None and _is_dir(ul_root)
     scanned_rfp = rfp_root is not None and _is_dir(rfp_root)
     rfp_files = index_rfp_files(rfp_root) if scanned_rfp else {}
+    ul_by_actual, ul_names = scan_ul_catalog(ul_root) if scanned_ul else ({}, frozenset())
     return RegistryLinks(
         ds_files=_map_ds_paths(ds_root, source_ids) if scanned_ds and ds_root else {},
         rfp_files=rfp_files,
-        ul_by_actual=index_ul_folders(ul_root) if scanned_ul else {},
+        ul_by_actual=ul_by_actual,
         scanned_ds=scanned_ds,
         scanned_rfp=scanned_rfp,
         scanned_ul=scanned_ul,
+        ul_names=ul_names,
         reconcile_by_source=_reconcile_missing_rfp(rows, rfp_files, scanned_rfp),
     )
 

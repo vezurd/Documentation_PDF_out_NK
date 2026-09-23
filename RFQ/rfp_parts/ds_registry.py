@@ -171,6 +171,9 @@ _FONT_AUX = Font(bold=True, color="000000", name="Calibri", size=11)
 _FILL_BLANK = PatternFill(
     fill_type="solid", fgColor="FFFF00", start_color="FFFF00", end_color="FFFF00"
 )
+_FILL_UL_ABSENT = PatternFill(
+    fill_type="solid", fgColor="BDD7EE", start_color="BDD7EE", end_color="BDD7EE"
+)
 _FILL_TODO = _FILL_BLANK
 _FONT_DATA = Font(name="Calibri", size=11)
 _ALIGN_HEADER = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -810,7 +813,7 @@ def _header_comment(header: str) -> str:
         HDR_UL_FOLDER: (
             "Одна папка на строку. Несколько папок одного номера — несколько строк. "
             "Одна папка не может стоять на разных актуальных номерах. "
-            "Если папки нет на диске, ячейку не красить: свод не останавливается."
+            "Если папки ещё нет на диске, ячейка синяя: свод не останавливается."
         ),
         HDR_RFP_NUMBER: (
             "Номер файла в корне RFP_Зиновьев. Один номер принадлежит только "
@@ -972,23 +975,38 @@ def _append_ul_identity_issues(
         )
 
 
-def index_ul_folders(ul_root: str | Path | None) -> dict[str, tuple[str, ...]]:
-    """Map a UL actual number to first-level folder names under ``ul_root``."""
+def scan_ul_catalog(
+    ul_root: str | Path | None,
+) -> tuple[dict[str, tuple[str, ...]], frozenset[str]]:
+    """First-level UL folders: actual-number map and every folder name.
+
+    Names are casefolded and whitespace-collapsed, the same way a registry
+    cell is compared. A missing root yields empty results.
+    """
 
     if not ul_root:
-        return {}
+        return {}, frozenset()
     root = Path(ul_root)
     found: dict[str, list[str]] = {}
+    names: set[str] = set()
     try:
         children = [path for path in root.iterdir() if path.is_dir()]
     except OSError:
-        return {}
+        return {}, frozenset()
     for folder in children:
+        names.add(_norm_link(folder.name))
         identity = parse_ul_folder_ds_identity(folder.name)
         if identity.actual is None:
             continue
         found.setdefault(str(identity.actual), []).append(folder.name)
-    return {key: tuple(names) for key, names in found.items()}
+    return {key: tuple(items) for key, items in found.items()}, frozenset(names)
+
+
+def index_ul_folders(ul_root: str | Path | None) -> dict[str, tuple[str, ...]]:
+    """Map a UL actual number to first-level folder names under ``ul_root``."""
+
+    mapped, _names = scan_ul_catalog(ul_root)
+    return mapped
 
 
 def index_rfp_files(rfp_root: str | Path | None) -> dict[str, tuple[Path, ...]]:
@@ -1450,7 +1468,7 @@ def validate_registry_rows(
 
     The same UL folder, RFP number or RFP file on two actual numbers is an
     error, as is a repeat inside one number. A named UL folder that is absent
-    from disk is not painted and does not stop the summary. A named RFP file
+    from disk is painted blue and does not stop the summary. A named RFP file
     that is absent is a warning: it stays out of the RFP bag.
     """
 
@@ -2291,7 +2309,7 @@ def _legend_rows() -> list[tuple[str, str, str, str]]:
             "Папка УЛ",
             yellow,
             "Одна папка на строку, либо пусто, если на строке есть номер RFP. Одна папка — только один актуальный номер.",
-            "Папки нет на диске — ячейку не красить и свод не останавливать. Папка в каталоге без строки — жёлтая строка, свод не пишется.",
+            "Папки ещё нет на диске — ячейка синяя, свод не останавливается. Папка в каталоге без строки — жёлтая строка, свод не пишется.",
         ),
         (
             "Номер RFP и файл RFP",
@@ -2638,6 +2656,7 @@ class RegistryLinks:
     scanned_ds: bool = False
     scanned_rfp: bool = False
     scanned_ul: bool = False
+    ul_names: frozenset[str] = field(default_factory=frozenset)
     reconcile_by_source: dict[str, str] = field(default_factory=dict)
 
 
@@ -2710,6 +2729,14 @@ def expand_registry_rows(rows: Sequence[DsRegistryRow]) -> list[DsRegistryRow]:
     return expanded
 
 
+def _paint_ul_absent(cell) -> None:
+    cell.fill = _FILL_UL_ABSENT
+    if cell.comment is None:
+        cell.comment = _make_comment(
+            "Папки УЛ пока нет на диске. Свод из-за этого не останавливается."
+        )
+
+
 def _paint_cell(cell, comment: str) -> None:
     _mark_todo(cell)
     if comment and cell.comment is None:
@@ -2722,7 +2749,11 @@ def _paint_flat_conflicts(
     rows: Sequence[DsRegistryRow],
     links: RegistryLinks,
 ) -> None:
-    """Yellow cells for conflicts, orphans and a missing named RFP file."""
+    """Yellow cells for conflicts, orphans and a missing named RFP file.
+
+    A named UL folder that is not on disk is light blue, unless the same cell
+    is already yellow from a shared-folder conflict.
+    """
 
     folder_rows: dict[str, list[tuple[int, str]]] = {}
     rfp_rows: dict[str, list[tuple[int, str]]] = {}
@@ -2793,6 +2824,19 @@ def _paint_flat_conflicts(
     _shared(folder_rows, layout.flat_ul, "Папка УЛ")
     _shared(rfp_rows, layout.flat_rfp_number, "Номер RFP")
     _shared(file_rows, layout.flat_rfp_file, "Файл RFP")
+    if links.scanned_ul:
+        for index, row in enumerate(rows):
+            rel = row.relations[0] if row.relations else None
+            folder = rel.ul_folder if rel is not None else ""
+            if not folder or not row.source_id:
+                continue
+            if _norm_link(folder) in links.ul_names:
+                continue
+            cell = ws.cell(row=index + 2, column=layout.flat_ul)
+            rgb = str(getattr(getattr(cell.fill, "fgColor", None), "rgb", "") or "")
+            if rgb.upper().endswith("FFFF00"):
+                continue
+            _paint_ul_absent(cell)
     for items in identity.values():
         statuses = {item[1] for item in items if item[1]}
         previous = {item[2] for item in items if item[2]}
