@@ -9,7 +9,7 @@ alwaysApply: false
 > Узкий контур входа Step1 из закупочных ДС. Не путать с grouped ДС vs MTO
 > ([AI_ds_compare.mdc](.cursor/rules/AI_ds_compare.mdc)) и со сбором частей
 > `rfp_parts_net.xlsx` ([AI_rfp_parts.mdc](.cursor/rules/AI_rfp_parts.mdc)).
-> Снимок: **2026-09-22**.
+> Снимок: **2026-09-22**. Лист реестра и передача чату — [AI_ds_registry_handoff.mdc](.cursor/rules/AI_ds_registry_handoff.mdc).
 
 ## Когда читать
 

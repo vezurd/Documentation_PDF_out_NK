@@ -17,7 +17,7 @@ alwaysApply: true
 - RFQ / tags / step4 / performance -> `AI_rfq_context.mdc`
 - RFP Запуск, финальный Excel Step4 (столбцы / цвета / УЛ) -> `AI_rfp_step4_excel.mdc`
 - RFP из частей (RFP_Зиновьев → сумма в свод) -> `AI_rfp_parts.mdc`
-- Доверенный ДС baseline + overlay RFP (реестр, группы поставки) -> `AI_ds_rfp_hybrid.mdc`
+- Доверенный ДС baseline + overlay RFP (реестр, группы поставки) -> `AI_ds_rfp_hybrid.mdc`; лист реестра и передача чату -> `AI_ds_registry_handoff.mdc`
 - DS vs MTO (закупочная спецификация) -> `AI_ds_compare.mdc`
 - Cursor VPN (split tunnel, корп. LAN) -> `AI_cursor_vpn.mdc`
 - PDF v2 индекс -> `AI_v2.mdc`

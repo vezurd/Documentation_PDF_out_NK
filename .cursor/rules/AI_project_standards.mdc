@@ -91,6 +91,7 @@ alwaysApply: true
 | RFP Запуск — финальный Excel Step4 (столбцы, цвета, УЛ, ед. изм.) | `AI_rfp_step4_excel.mdc` |
 | RFP из частей (`RFP_Зиновьев`, сумма) | `AI_rfp_parts.mdc` |
 | Доверенный ДС baseline + overlay RFP | `AI_ds_rfp_hybrid.mdc` |
+| Реестр ДС/УЛ (лист, передача чату) | `AI_ds_registry_handoff.mdc` |
 | DS vs MTO (`analyze_ds_specification`) | `AI_ds_compare.mdc` |
 | Cursor split-tunnel VPN (Amnezia / 3proxy / ProxiFyre) | `AI_cursor_vpn.mdc` |
 | Каталог версий РД / готовность MTO робота | `AI_rd_catalog.mdc` |
