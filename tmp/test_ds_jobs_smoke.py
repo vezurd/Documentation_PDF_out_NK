@@ -355,7 +355,7 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
 
         texts = [btn.text() for btn in panel.findChildren(QPushButton)]
         self.assertIn("Собрать свод только из ДС", texts)
-        self.assertIn("Наложить RFP на группы", texts)
+        self.assertIn("Собрать свод из ДС и наложить RFP", texts)
         self.assertIn("Только имена и покрытие", texts)
         self.assertIn("Проверить реестр", texts)
         self.assertIn("Собрать свод частей RFP", texts)

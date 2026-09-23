@@ -346,9 +346,11 @@ class RfpPartsPanel(QWidget):
         self._add_action_with_comment(
             box,
             v,
-            "Наложить RFP на группы",
-            "Корень RFP_Зиновьев, без подпапок. Группа целиком из RFP только "
-            "если совпали код, единица и количество. Иначе группа остаётся из ДС.",
+            "Собрать свод из ДС и наложить RFP",
+            "Сначала аудит папки ДС, затем корень RFP_Зиновьев без подпапок. "
+            "Пишет «Свод ДС-RFP для запуска.xlsx» в _ds_hybrid. Группа целиком "
+            "из RFP только если совпали код, единица и количество. Иначе группа "
+            "остаётся из ДС.",
             self._click_ds_hybrid,
         )
         self._add_action_with_comment(
@@ -1159,7 +1161,7 @@ class RfpPartsPanel(QWidget):
             ),
             missing_hint=(
                 f"Файл {HYBRID_XLSX_NAME} не найден.\n"
-                "Сначала выполните «Наложить RFP на группы»."
+                "Сначала выполните «Собрать свод из ДС и наложить RFP»."
             ),
         )
 
@@ -1173,7 +1175,7 @@ class RfpPartsPanel(QWidget):
             resolve_latest=lambda: preferred or fallback,
             missing_hint=(
                 f"Файл {HYBRID_REPORT_PREFIX}_<штамп>.xlsx не найден.\n"
-                "Сначала выполните «Наложить RFP на группы»."
+                "Сначала выполните «Собрать свод из ДС и наложить RFP»."
             ),
         )
 
