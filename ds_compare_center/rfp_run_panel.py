@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout,
     QBrush,
@@ -16,11 +16,17 @@ from PySide6.QtGui import (
     QTextOption,
 )
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QAbstractItemView,
+    QButtonGroup,
+    QFrame,
     QGroupBox,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QStyle,
     QStyledItemDelegate,
@@ -31,7 +37,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from RFQ.tags_rfp_compare.rfp_tags_utils import load_config, resolve_effective_rfp_path
+from RFQ.rfp_parts.ds_hybrid_preflight import (
+    INPUT_MODE_DS_ONLY,
+    INPUT_MODE_HYBRID,
+    INPUT_MODE_LEGACY_NET,
+    resolve_input_mode,
+)
+from RFQ.tags_rfp_compare.rfp_tags_utils import (
+    load_config,
+    resolve_effective_rfp_path,
+    save_config,
+)
 from ds_compare_center.rfp_progress_parser import (
     MILESTONE_IDS,
     MILESTONE_STATES,
@@ -78,6 +94,31 @@ _TABLE_STYLE = (
 _HEADERS = ("Шаг", "Статус", "Детали")
 _STEP_COL_WIDTH = 250
 _ROW_MIN_HEIGHT = 22
+_INPUT_MODE_CHOICES: tuple[tuple[str, str, str], ...] = (
+    (
+        INPUT_MODE_LEGACY_NET,
+        "Свод частей RFP (rfp_parts_net)",
+        "Берётся самый новый rfp_parts_net.xlsx из папки "
+        "«RFP сводный файл\\YYYY.MM.DD_HH.MM» (его собирает вкладка "
+        "«RFP · Сбор частей»). Если в настройках снята галка тегов — "
+        "читается соседний rfp_parts_net_no_tags.xlsx (лот как в ДС; "
+        "боевой net не затирается). Если галка «Брать последний свод частей» "
+        "снята — читается путь «Файл RFP» в настройках.",
+    ),
+    (
+        INPUT_MODE_DS_ONLY,
+        "Свод ДС для запуска",
+        "«Свод ДС для запуска.xlsx» из «RFP сводный файл\\_ds_baseline». "
+        "Нет файла — ошибка, без подстановки свода частей.",
+    ),
+    (
+        INPUT_MODE_HYBRID,
+        "Свод ДС-RFP для запуска",
+        "«Свод ДС-RFP для запуска.xlsx» из «RFP сводный файл\\_ds_hybrid». "
+        "Нет файла — ошибка, без подстановки свода частей.",
+    ),
+)
+_INPUT_MODE_LABELS = {mode: label for mode, label, _text in _INPUT_MODE_CHOICES}
 
 
 class _WrapAnywhereDelegate(QStyledItemDelegate):
@@ -156,6 +197,146 @@ class _MilestoneTable(QTableWidget):
         self.resizeRowsToContents()
 
 
+class _CollapseHeader(QWidget):
+    """Clickable header row for the input-mode block."""
+
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self.clicked.emit()
+        event.accept()
+
+
+class _RfpInputModeBlock(QFrame):
+    """Collapsible picker for ``rfp_parts.input_mode`` on the main RFP launch.
+
+    Collapsed title shows the selected mode. Expanded body lists the modes
+    and their descriptions. A user change is written to the main RFP JSON.
+    """
+
+    mode_changed = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("rfpInputMode")
+        self.setStyleSheet(
+            "QFrame#rfpInputMode {"
+            " border: 1px solid #c8c8c8;"
+            " border-radius: 4px;"
+            " background: #fafafa;"
+            "}"
+        )
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._expanded = False
+        self._radios: dict[str, QRadioButton] = {}
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 6, 8, 6)
+        root.setSpacing(6)
+
+        self._header = _CollapseHeader(self)
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        header_row = QHBoxLayout(self._header)
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(6)
+        self._arrow = QLabel("▸", self._header)
+        self._arrow.setStyleSheet("font-weight: 600;")
+        self._title = QLabel("", self._header)
+        self._title.setWordWrap(True)
+        self._title.setStyleSheet("font-weight: 600;")
+        header_row.addWidget(self._arrow, stretch=0)
+        header_row.addWidget(self._title, stretch=1)
+        self._header.clicked.connect(self._toggle)
+        root.addWidget(self._header)
+
+        self._body = QWidget(self)
+        body = QVBoxLayout(self._body)
+        body.setContentsMargins(18, 0, 0, 0)
+        body.setSpacing(6)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        for mode, label, description in _INPUT_MODE_CHOICES:
+            radio = QRadioButton(label, self._body)
+            radio.setProperty("mode", mode)
+            self._radios[mode] = radio
+            self._group.addButton(radio)
+            body.addWidget(radio)
+            hint = QLabel(description, self._body)
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color: #555; margin-left: 22px;")
+            body.addWidget(hint)
+        note = QLabel(
+            "Галка «Брать последний свод частей», папка ДС, реестр и запасной "
+            "файл — на вкладке «RFP · Настройки». Если галка снята, читается "
+            "путь «Файл RFP», режимы ДС не используются. В профиле As-build "
+            "галка всегда выключена: там свой файл as-build.",
+            self._body,
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #444;")
+        body.addWidget(note)
+        self._body.hide()
+        root.addWidget(self._body)
+
+        self._group.blockSignals(True)
+        self._radios[INPUT_MODE_LEGACY_NET].setChecked(True)
+        self._sync_title(INPUT_MODE_LEGACY_NET)
+        self._group.blockSignals(False)
+        self._group.buttonClicked.connect(self._on_picked)
+
+    def is_expanded(self) -> bool:
+        """Return whether the mode list is visible."""
+        return self._expanded
+
+    def apply_config(self, config: dict) -> None:
+        """Select the mode stored in ``config`` without writing the file."""
+        mode = resolve_input_mode(config)
+        self._group.blockSignals(True)
+        self._radios[mode].setChecked(True)
+        self._group.blockSignals(False)
+        self._sync_title(mode)
+
+    def _toggle(self) -> None:
+        self._expanded = not self._expanded
+        self._body.setVisible(self._expanded)
+        self._arrow.setText("▾" if self._expanded else "▸")
+
+    def _sync_title(self, mode: str) -> None:
+        label = _INPUT_MODE_LABELS.get(mode, _INPUT_MODE_LABELS[INPUT_MODE_LEGACY_NET])
+        self._title.setText(f"Источник: {label}")
+        self._title.setToolTip(label)
+
+    def _on_picked(self, button: QAbstractButton) -> None:
+        mode = str(button.property("mode") or INPUT_MODE_LEGACY_NET)
+        self._sync_title(mode)
+        if self._persist(mode):
+            self.mode_changed.emit(mode)
+
+    def _persist(self, mode: str) -> bool:
+        try:
+            config = load_config()
+            parts = config.get("rfp_parts")
+            if not isinstance(parts, dict):
+                parts = {}
+                config["rfp_parts"] = parts
+            parts["input_mode"] = mode
+            saved = save_config(config)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Источник RFP",
+                f"Не удалось сохранить режим запуска:\n{exc}",
+            )
+            return False
+        if not saved:
+            QMessageBox.critical(
+                self,
+                "Источник RFP",
+                "Функция сохранения сообщила об ошибке. Режим не сохранён.",
+            )
+        return bool(saved)
+
+
 class RfpRunPanel(QWidget):
     """Run RFP↔MTO/VO and as-build checks with a live Job monitor."""
 
@@ -188,6 +369,9 @@ class RfpRunPanel(QWidget):
         self.reset_milestones()
 
     def _build_left(self, left: QWidget, left_layout: QVBoxLayout) -> None:
+        self._source_mode = shrink_h(_RfpInputModeBlock(left))
+        self._source_mode.mode_changed.connect(self._on_input_mode_changed)
+        left_layout.addWidget(self._source_mode, stretch=0)
         left_layout.addWidget(self._build_actions_group(left), stretch=0)
         left_layout.addWidget(self._build_results_group(left), stretch=0)
         left_layout.addWidget(self._build_progress_group(left), stretch=1)
@@ -322,7 +506,11 @@ class RfpRunPanel(QWidget):
         else:
             text = "Сравнить RFP ↔ MTO ↔ РКД"
         self._btn_rfp.setText(text)
+        self._source_mode.apply_config(config)
         self._refresh_rfp_source_label(config)
+
+    def _on_input_mode_changed(self, _mode: str) -> None:
+        self._refresh_rfp_source_label(load_config())
 
     def _refresh_rfp_source_label(self, config: dict) -> None:
         """Show which RFP workbook the main run button will load."""

@@ -23,11 +23,6 @@ from PySide6.QtWidgets import (
 )
 
 from RFQ.packing_list_provider import load_packing_dataset
-from RFQ.rfp_parts.ds_hybrid_preflight import (
-    INPUT_MODE_DS_ONLY,
-    INPUT_MODE_HYBRID,
-    INPUT_MODE_LEGACY_NET,
-)
 from RFQ.rfp_parts.ds_registry import DEFAULT_REGISTRY_PATH
 from RFQ.tags_rfp_compare.rfp_tags_utils import (
     DEFAULT_UNITS_SPLIT_BAN,
@@ -96,47 +91,18 @@ _ASBUILD_FIXED: dict[str, bool] = {
 }
 
 _ASBUILD_SOURCE_DISABLED: tuple[str, ...] = (
-    "rfp_parts.input_mode",
     "rfp_parts.ds_source_dir",
     "rfp_parts.ds_registry_path",
 )
 
-_INPUT_MODE_ITEMS: tuple[tuple[str, str], ...] = (
-    (
-        "Свод частей RFP (rfp_parts_net)",
-        INPUT_MODE_LEGACY_NET,
-    ),
-    (
-        "Свод ДС для запуска",
-        INPUT_MODE_DS_ONLY,
-    ),
-    (
-        "Свод ДС-RFP для запуска",
-        INPUT_MODE_HYBRID,
-    ),
-)
-
 _RFP_SOURCE_SPECS: tuple[_FieldSpec, ...] = (
-    _FieldSpec(
-        "rfp_parts.input_mode",
-        "Режим свода для Запуска",
-        "choice",
-        INPUT_MODE_LEGACY_NET,
-        help_text=(
-            "legacy_net — последний rfp_parts_net.xlsx (текущий production). "
-            "ds_only — «Свод ДС для запуска.xlsx» из «RFP сводный файл\\_ds_baseline». "
-            "hybrid — «Свод ДС-RFP для запуска.xlsx» из «_ds_hybrid». "
-            "Нет нужного файла — явная ошибка, без подстановки свода частей. "
-            "При выключенной галке ниже (as-build) режимы ДС не используются."
-        ),
-        choices=_INPUT_MODE_ITEMS,
-    ),
     _FieldSpec(
         "rfp_parts.use_latest_net",
         "Брать последний свод частей",
         default=True,
         help_text=(
-            "Вкл.: Step1 читает свод по режиму выше (части / ДС / hybrid). "
+            "Вкл.: Step1 читает свод по режиму с вкладки «RFP · Запуск» "
+            "(части / ДС / hybrid). "
             "Для частей — самый новый rfp_parts_net.xlsx из "
             "«RFP сводный файл\\YYYY.MM.DD_HH.MM». "
             "При выключенных тегах — соседний rfp_parts_net_no_tags.xlsx. "
@@ -622,21 +588,13 @@ class RfpSettingsPanel(QWidget):
         box = QGroupBox("Источник файла RFP для запуска", self)
         layout = QVBoxLayout(box)
         comment = QLabel(
-            "Как выбирается файл для кнопки «RFP · Запуск»:\n"
-            "• Режим «Свод частей» + галка включена — берётся самый новый "
-            "rfp_parts_net.xlsx из папки «RFP сводный файл\\YYYY.MM.DD_HH.MM» "
-            "(его собирает вкладка «RFP · Сбор частей»). Если в настройках "
-            "снята галка тегов — читается соседний rfp_parts_net_no_tags.xlsx "
-            "(лот как в ДС; боевой net не затирается).\n"
-            "• Режим «Свод ДС» / «Свод ДС-RFP» + галка включена — "
-            "«Свод ДС для запуска.xlsx» или «Свод ДС-RFP для запуска.xlsx» "
-            "из «RFP сводный файл\\_ds_baseline» / «_ds_hybrid». Нет файла — "
-            "ошибка, без подстановки свода частей.\n"
-            "• Галка снята — читается путь «Файл RFP» ниже (как раньше: "
-            "отдельная сводная книга). Режимы ДС не используются.\n"
-            "Если галка включена, а свода ещё нет, запуск остановится с ошибкой, "
-            "а не подставит старый файл. В профиле As-build галка всегда выключена: "
-            "там свой файл as-build.",
+            "Режим свода (части / ДС / ДС-RFP) выбирается на вкладке "
+            "«RFP · Запуск», в свёрнутом блоке вверху.\n"
+            "Галка включена — запуск читает свод выбранного режима. "
+            "Галка снята — читается путь «Файл RFP» ниже; режимы ДС не "
+            "используются. Если галка включена, а свода ещё нет, запуск "
+            "остановится с ошибкой, а не подставит старый файл. "
+            "В профиле As-build галка всегда выключена: там свой файл as-build.",
             box,
         )
         comment.setWordWrap(True)

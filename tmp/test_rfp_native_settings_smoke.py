@@ -178,8 +178,8 @@ class RfpNativeSettingsSmokeTest(unittest.TestCase):
         latest_net = self.panel._widgets["rfp_parts.use_latest_net"]
         self.assertFalse(latest_net.isChecked())
         self.assertFalse(latest_net.isEnabled())
-        mode_widget = self.panel._widgets["rfp_parts.input_mode"]
-        self.assertFalse(mode_widget.isEnabled())
+        self.assertNotIn("rfp_parts.input_mode", self.panel._widgets)
+        self.assertEqual(config["rfp_parts"]["input_mode"], "legacy_net")
 
         goto = next(
             button
@@ -193,12 +193,11 @@ class RfpNativeSettingsSmokeTest(unittest.TestCase):
     def test_latest_net_widget_maps_to_rfp_parts_use_latest_net(self) -> None:
         self.assertIn("rfp_parts.use_latest_net", self.panel._widgets)
         self.assertIn("paths.rfp_path", self.panel._widgets)
-        self.assertIn("rfp_parts.input_mode", self.panel._widgets)
-        mode_widget = self.panel._widgets["rfp_parts.input_mode"]
-        self.assertEqual(mode_widget.currentData(), "legacy_net")
+        self.assertNotIn("rfp_parts.input_mode", self.panel._widgets)
         self.assertEqual(
             get_default_config()["rfp_parts"]["input_mode"], "legacy_net"
         )
+        self.profiles["main"]["rfp_parts"]["input_mode"] = "hybrid"
         widget = self.panel._widgets["rfp_parts.use_latest_net"]
         self.assertTrue(widget.isChecked())
         widget.setChecked(False)
@@ -209,6 +208,7 @@ class RfpNativeSettingsSmokeTest(unittest.TestCase):
         self.panel.reload_from_disk()
         self.assertFalse(widget.isChecked())
         self.assertFalse(self.profiles["main"]["rfp_parts"]["use_latest_net"])
+        self.assertEqual(self.profiles["main"]["rfp_parts"]["input_mode"], "hybrid")
 
     def test_units_convert_matrix_default_main_asbuild_and_widget(self) -> None:
         main_default = get_default_config()

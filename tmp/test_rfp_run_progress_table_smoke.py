@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -13,9 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
+from RFQ.tags_rfp_compare.rfp_tags_utils import get_default_config
 from ds_compare_center.rfp_progress_parser import MILESTONE_IDS, MilestoneEvent
+import ds_compare_center.rfp_run_panel as run_module
 from ds_compare_center.rfp_run_panel import RfpRunPanel
 
 _LONG_DETAIL = (
@@ -80,6 +84,64 @@ class RfpRunProgressTableSmokeTest(unittest.TestCase):
         panel.close()
         panel.deleteLater()
         self.app.processEvents()
+
+    def test_input_mode_block_shows_mode_and_saves_choice(self) -> None:
+        config = get_default_config()
+        saved: dict[str, dict] = {}
+
+        def load() -> dict:
+            return copy.deepcopy(config)
+
+        def save(cfg: dict) -> bool:
+            saved["config"] = copy.deepcopy(cfg)
+            config.clear()
+            config.update(copy.deepcopy(cfg))
+            return True
+
+        with (
+            mock.patch.object(run_module, "load_config", side_effect=load),
+            mock.patch.object(run_module, "save_config", side_effect=save),
+            mock.patch.object(
+                run_module,
+                "resolve_effective_rfp_path",
+                side_effect=FileNotFoundError("нет файла"),
+            ),
+        ):
+            panel = RfpRunPanel()
+            panel.resize(520, 720)
+            panel.show()
+            self.app.processEvents()
+
+            block = panel._source_mode
+            self.assertFalse(block.is_expanded())
+            self.assertFalse(block._body.isVisible())
+            self.assertIn("Свод частей RFP (rfp_parts_net)", block._title.text())
+
+            block._header.clicked.emit()
+            self.app.processEvents()
+            self.assertTrue(block.is_expanded())
+            self.assertTrue(block._body.isVisible())
+            descriptions = "\n".join(
+                label.text() for label in block._body.findChildren(QLabel)
+            )
+            self.assertIn("rfp_parts_net.xlsx", descriptions)
+            self.assertIn("_ds_baseline", descriptions)
+            self.assertIn("_ds_hybrid", descriptions)
+
+            block._radios["hybrid"].click()
+            self.app.processEvents()
+            self.assertEqual(saved["config"]["rfp_parts"]["input_mode"], "hybrid")
+            self.assertIn("Свод ДС-RFP для запуска", block._title.text())
+            self.assertTrue(block.is_expanded())
+
+            block._header.clicked.emit()
+            self.app.processEvents()
+            self.assertFalse(block.is_expanded())
+            self.assertIn("Свод ДС-RFP для запуска", block._title.text())
+
+            panel.close()
+            panel.deleteLater()
+            self.app.processEvents()
 
 
 if __name__ == "__main__":
