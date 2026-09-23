@@ -14,7 +14,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, Slot, QPoint, QSettings, QSize
+from PySide6.QtCore import QEvent, QObject, QPoint, QSettings, QSize, Qt, Signal, Slot
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout,
     QBrush,
@@ -22,6 +22,7 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QGuiApplication,
+    QKeyEvent,
     QKeySequence,
     QPainter,
     QShortcut,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -49,6 +51,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from rd_catalog.approval_mail import (
     ApprovalMail,
@@ -58,6 +61,10 @@ from rd_catalog.approval_mail import (
     mail_line_transmittal,
     mail_mto_text,
     parse_msg_file,
+)
+from rd_catalog.approval_mail_revisions import (
+    load_packaged_revisions,
+    merge_revision_choices,
 )
 from rd_catalog.context_menu_qt import exec_tracked_menu
 from rd_catalog.context_menu_usage import MENU_APPROVAL_MAIL
@@ -156,7 +163,10 @@ _COLUMN_TIPS = {
     _COL_MARK: "Марка строки F. Можно выбрать или ввести.",
     _COL_DATE: "Дата события DD.MM.YYYY.",
     _COL_STAGE: "Стадия журнала F (как в строке записи).",
-    _COL_REV: "Ревизия OD в строке F.",
+    _COL_REV: (
+        "Ревизия OD в строке F. Список — из письма и файла ревизий, "
+        "собранного по строкам F с пометкой auto."
+    ),
     _COL_TRM: "TRM в строке F.",
     _COL_MTO: "Ревизия MTO, «Нет», или пусто — без суффикса MTO.",
 }
@@ -990,6 +1000,8 @@ class ApprovalMailTab(QWidget):
         }
         for column, field in _EDIT_FIELDS:
             options, value = by_field[field]
+            if field == "od_revision":
+                options = merge_revision_choices(options, load_packaged_revisions())
             combo = _make_part_combo(
                 self._table,
                 options,
@@ -1341,6 +1353,9 @@ def _combo_value(combo: QComboBox, *, field: str) -> str:
 
 def _set_combo_value(combo: QComboBox, value: str, *, stage: bool) -> None:
     combo.blockSignals(True)
+    completer = combo.completer()
+    if completer is not None:
+        completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
     try:
         if stage:
             pos = combo.findData(value)
@@ -1351,7 +1366,82 @@ def _set_combo_value(combo: QComboBox, value: str, *, stage: bool) -> None:
         elif combo.currentText() != value:
             combo.setEditText(value)
     finally:
+        if completer is not None:
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         combo.blockSignals(False)
+
+
+_NO_ARROW_STYLE = (
+    "QComboBox { border: none; padding-right: 2px; background: palette(base); }"
+    "QComboBox::drop-down { width: 0px; border: none; }"
+    "QComboBox::down-arrow { image: none; width: 0px; height: 0px; }"
+)
+_COMBO_LIST_TIP = "Двойной щелчок или ↓ — список. Можно ввести своё."
+
+
+class _ComboListOpener(QObject):
+    """Open a combo list that has no drop-down arrow.
+
+    Double-click and Down show the full list. Typing still uses the
+    completer popup; Down is left to that popup while it is open.
+    """
+
+    def __init__(self, combo: QComboBox) -> None:
+        super().__init__(combo)
+        self._combo = combo
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        del watched
+        combo = self._combo
+        if not isValid(combo) or not combo.isEnabled():
+            return False
+        if event.type() == QEvent.Type.MouseButtonDblClick:
+            _open_combo_list(combo)
+            return True
+        if (
+            isinstance(event, QKeyEvent)
+            and event.key() == Qt.Key.Key_Down
+            and event.modifiers() == Qt.KeyboardModifier.NoModifier
+        ):
+            completer = combo.completer()
+            popup = completer.popup() if completer is not None else None
+            if popup is not None and popup.isVisible():
+                return False
+            _open_combo_list(combo)
+            return True
+        return False
+
+
+def _open_combo_list(combo: QComboBox) -> None:
+    completer = combo.completer()
+    if completer is not None:
+        completer.popup().hide()
+    view = combo.view()
+    hint = view.sizeHintForColumn(0)
+    view.setMinimumWidth(max(combo.width(), hint + 28))
+    combo.showPopup()
+
+
+def _arm_combo_list(combo: QComboBox) -> None:
+    """Hide the arrow and filter the list while the user types."""
+
+    combo.setStyleSheet(_NO_ARROW_STYLE)
+    combo.setCursor(Qt.CursorShape.IBeamCursor)
+    combo.setToolTip(_COMBO_LIST_TIP)
+    edit = combo.lineEdit()
+    if edit is None:
+        return
+    completer = edit.completer()
+    if completer is None:
+        completer = QCompleter(combo.model(), combo)
+        edit.setCompleter(completer)
+    completer.setFilterMode(Qt.MatchFlag.MatchContains)
+    completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+    completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+    completer.activated.connect(lambda _text: edit.editingFinished.emit())
+    opener = _ComboListOpener(combo)
+    setattr(combo, "_list_opener", opener)
+    edit.installEventFilter(opener)
 
 
 def _make_part_combo(
@@ -1369,6 +1459,7 @@ def _make_part_combo(
     )
     combo.setMinimumContentsLength(10 if len(current) > 8 else 4)
     combo.setFrame(False)
+    combo.setMaxVisibleItems(16)
     if stage:
         combo.addItem("", "")
         for key in JOURNAL_STAGE_LABELS:
@@ -1391,6 +1482,7 @@ def _make_part_combo(
             seen.add(key)
             combo.addItem(value)
         combo.setEditText(current)
+    _arm_combo_list(combo)
     return combo
 
 
