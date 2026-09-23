@@ -1582,18 +1582,25 @@ def _parse_open_workbook(
     active_scan = next((item for item in scans if item.is_active), None)
     if active_scan is None or not active_scan.is_candidate:
         extra_bits: list[str] = []
-        if candidate_names and active_name not in candidate_names:
-            extra_bits.append(f"шапка на {', '.join(candidate_names)}")
         found_roles = active_scan.roles if active_scan is not None else ()
+        missing_required = [
+            _ROLE_SHORT_RU[role]
+            for role in CORE_ROLES
+            if role in REQUIRED_CANDIDATE_ROLES and role not in found_roles
+        ]
+        if missing_required:
+            extra_bits.append("нет обязательных ролей: " + ", ".join(missing_required))
         if found_roles:
             labels = [_ROLE_SHORT_RU.get(role, role) for role in found_roles]
             extra_bits.append("найдены роли: " + ", ".join(labels))
+        if candidate_names and active_name not in candidate_names:
+            extra_bits.append(f"шапка на {', '.join(candidate_names)}")
         extra = ("; " + "; ".join(extra_bits)) if extra_bits else ""
         issues.append(
             _issue(
                 ISSUE_NO_HEADER,
                 "ERROR",
-                f"активный лист {active_name!r} не является единственным data-sheet ДС"
+                f"активный лист {active_name!r} не прошёл проверку шапки ДС"
                 + extra,
                 path=source.path,
                 relpath=source.relpath,

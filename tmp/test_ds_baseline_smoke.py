@@ -29,6 +29,7 @@ from RFQ.rfp_parts.ds_baseline import (
     ISSUE_GROUP_FALLBACK,
     ISSUE_INTERNAL_SHIFT,
     ISSUE_MULTI_DATA_SHEET,
+    ISSUE_NO_HEADER,
     ISSUE_QTY_EMPTY,
     ISSUE_QTY_FORMULA,
     ISSUE_QTY_NEGATIVE,
@@ -770,6 +771,26 @@ class DsBaselineSmokeTest(unittest.TestCase):
             self.assertFalse(
                 any(item.code == "missing_core_role" for item in result.issues)
             )
+            self.assertEqual(result.positions, [])
+            self.assertTrue(result.blocking)
+
+    def test_no_ds_header_says_active_sheet_failed_header_check(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            header = list(DS_HEADER)
+            header[5] = "Прочее"
+            _write_xlsx(ds_root / "ДС99_upd.xlsx", [header, _ds_row()])
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            missing = [item for item in result.issues if item.code == ISSUE_NO_HEADER]
+            self.assertEqual(len(missing), 1, result.issues)
+            message = missing[0].message
+            self.assertIn("не прошёл проверку шапки ДС", message)
+            self.assertIn("нет обязательных ролей: Наименование", message)
+            self.assertNotIn("единственным data-sheet", message)
             self.assertEqual(result.positions, [])
             self.assertTrue(result.blocking)
 
