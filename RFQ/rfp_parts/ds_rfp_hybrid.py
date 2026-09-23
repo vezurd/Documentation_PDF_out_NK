@@ -521,7 +521,7 @@ def _rfp_key_groups(registry: DsRegistryDocument) -> dict[str, tuple[str, ...]]:
 def _rfp_file_groups(registry: DsRegistryDocument) -> dict[str, tuple[str, ...]]:
     """Map a registry RFP file name to the actual-DS group that named it."""
 
-    from RFQ.rfp_parts.ds_registry import canonical_supply_group_id
+    from RFQ.rfp_parts.ds_registry import _ds_file_names, canonical_supply_group_id
 
     mapping: dict[str, list[str]] = {}
     for row in registry.active_rows:
@@ -529,11 +529,10 @@ def _rfp_file_groups(registry: DsRegistryDocument) -> dict[str, tuple[str, ...]]
             continue
         group_id = canonical_supply_group_id(row.source_id)
         for rel in row.relations:
-            if not rel.rfp_file:
-                continue
-            groups = mapping.setdefault(rel.rfp_file.casefold(), [])
-            if group_id not in groups:
-                groups.append(group_id)
+            for name in _ds_file_names(rel.rfp_file):
+                groups = mapping.setdefault(name.casefold(), [])
+                if group_id not in groups:
+                    groups.append(group_id)
     return {key: tuple(groups) for key, groups in mapping.items()}
 
 

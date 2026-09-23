@@ -820,7 +820,8 @@ def _header_comment(header: str) -> str:
             "одному актуальному ДС. Несколько файлов одного номера суммируются."
         ),
         HDR_RFP_FILE: (
-            "Имя файла RFP. Если файла нет, ячейка жёлтая и в мешок RFP он не входит. "
+            "Имена файлов RFP, каждое с новой строки. Каждое имя сверяется отдельно. "
+            "Нет одного из имён — ячейка жёлтая, и в мешок RFP не входит только оно. "
             "Когда других файлов нет, свод остаётся из ДС."
         ),
         HDR_RFP_RECONCILE: (
@@ -1149,10 +1150,10 @@ def _iter_named_workbooks(root: Path, *, recursive: bool) -> list[Path]:
 
 
 def _ds_file_names(text: str) -> list[str]:
-    """Split a «Файл ДС» cell into one filename per line."""
+    """Split a «Файл ДС» or «Файл RFP» cell into one filename per line."""
 
     names: list[str] = []
-    for part in str(text or "").replace("\r\n", "\n").split("\n"):
+    for part in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         name = part.strip()
         if name:
             names.append(name)
@@ -1337,10 +1338,10 @@ def collect_orphan_rows(
         if rel.ul_folder
     }
     claimed_rfp_files = {
-        _norm_link(rel.rfp_file)
+        _norm_link(name)
         for row in rows
         for rel in row.relations
-        if rel.rfp_file
+        for name in _ds_file_names(rel.rfp_file)
     }
     claimed_rfp_keys = {
         rel.rfp_key
@@ -1635,61 +1636,63 @@ def validate_registry_rows(
                     )
                 else:
                     rfp_owner[rel.rfp_key] = row.source_id
-            if rel.rfp_file:
-                file_key = _norm_link(rel.rfp_file)
-                repeated_here = file_key in seen_files
-                if repeated_here:
-                    issues.append(
-                        _issue(
-                            ISSUE_DUPLICATE_LINK,
-                            "ERROR",
-                            f"файл RFP {rel.rfp_file!r} повторен внутри номера",
-                            painted,
-                            group_id=group_id,
-                            field="rfp_file",
+            file_names = _ds_file_names(rel.rfp_file)
+            if file_names:
+                for file_name in file_names:
+                    file_key = _norm_link(file_name)
+                    repeated_here = file_key in seen_files
+                    if repeated_here:
+                        issues.append(
+                            _issue(
+                                ISSUE_DUPLICATE_LINK,
+                                "ERROR",
+                                f"файл RFP {file_name!r} повторен внутри номера",
+                                painted,
+                                group_id=group_id,
+                                field="rfp_file",
+                            )
                         )
-                    )
-                seen_files.add(file_key)
-                owner = file_owner.get(file_key)
-                if owner and owner != row.source_id:
-                    issues.append(
-                        _issue(
-                            ISSUE_SHARED_RFP,
-                            "ERROR",
-                            (
-                                f"файл RFP {rel.rfp_file!r} указан у номеров "
-                                f"{format_registry_ds_number(owner)} и "
-                                f"{format_registry_ds_number(row.source_id)}"
-                            ),
-                            painted,
-                            group_id=group_id,
-                            field="rfp_file",
+                    seen_files.add(file_key)
+                    owner = file_owner.get(file_key)
+                    if owner and owner != row.source_id:
+                        issues.append(
+                            _issue(
+                                ISSUE_SHARED_RFP,
+                                "ERROR",
+                                (
+                                    f"файл RFP {file_name!r} указан у номеров "
+                                    f"{format_registry_ds_number(owner)} и "
+                                    f"{format_registry_ds_number(row.source_id)}"
+                                ),
+                                painted,
+                                group_id=group_id,
+                                field="rfp_file",
+                            )
                         )
-                    )
-                elif owner == row.source_id and not repeated_here:
-                    issues.append(
-                        _issue(
-                            ISSUE_DUPLICATE_LINK,
-                            "ERROR",
-                            f"файл RFP {rel.rfp_file!r} повторен внутри номера",
-                            painted,
-                            group_id=group_id,
-                            field="rfp_file",
+                    elif owner == row.source_id and not repeated_here:
+                        issues.append(
+                            _issue(
+                                ISSUE_DUPLICATE_LINK,
+                                "ERROR",
+                                f"файл RFP {file_name!r} повторен внутри номера",
+                                painted,
+                                group_id=group_id,
+                                field="rfp_file",
+                            )
                         )
-                    )
-                else:
-                    file_owner[file_key] = row.source_id
-                if rfp_root and file_key not in rfp_names:
-                    issues.append(
-                        _issue(
-                            ISSUE_RFP_FILE_MISSING,
-                            "WARN",
-                            f"нет файла RFP {rel.rfp_file!r}",
-                            painted,
-                            group_id=group_id,
-                            field="rfp_file",
+                    else:
+                        file_owner[file_key] = row.source_id
+                    if rfp_root and file_key not in rfp_names:
+                        issues.append(
+                            _issue(
+                                ISSUE_RFP_FILE_MISSING,
+                                "WARN",
+                                f"нет файла RFP {file_name!r}",
+                                painted,
+                                group_id=group_id,
+                                field="rfp_file",
+                            )
                         )
-                    )
             elif rel.rfp_key and rfp_root and rel.rfp_key not in rfp_index:
                 issues.append(
                     _issue(
@@ -2314,8 +2317,8 @@ def _legend_rows() -> list[tuple[str, str, str, str]]:
         (
             "Номер RFP и файл RFP",
             yellow,
-            "Один файл или пусто. Номер и файл не могут стоять на разных актуальных номерах и не повторяются внутри номера.",
-            "Несколько файлов номера суммируются. Точный дубль файла блокирует группу. Нет файла — жёлтая ячейка, в мешок RFP он не входит.",
+            "Несколько имён — каждое с новой строки. Одно и то же имя не повторяется внутри номера и не стоит на разных номерах.",
+            "Каждое имя сверяется отдельно. Нет одного из имён — жёлтая ячейка, в мешок RFP не входит только оно. Точный дубль файла блокирует группу.",
         ),
         (
             "Сверка RFP",
@@ -2788,13 +2791,9 @@ def _paint_flat_conflicts(
         if rfp_key:
             rfp_rows.setdefault(rfp_key, []).append((excel_row, row.source_id))
         if rfp_file:
-            file_rows.setdefault(_norm_link(rfp_file), []).append(
-                (excel_row, row.source_id)
-            )
-            if links.scanned_rfp and rfp_file.casefold() not in rfp_on_disk:
-                _paint_cell(
-                    ws.cell(row=excel_row, column=layout.flat_rfp_file),
-                    f"Нет файла RFP {rfp_file!r}. В мешок RFP он не входит.",
+            for name in _ds_file_names(rfp_file):
+                file_rows.setdefault(_norm_link(name), []).append(
+                    (excel_row, row.source_id)
                 )
         elif (
             links.scanned_rfp
@@ -2824,6 +2823,31 @@ def _paint_flat_conflicts(
     _shared(folder_rows, layout.flat_ul, "Папка УЛ")
     _shared(rfp_rows, layout.flat_rfp_number, "Номер RFP")
     _shared(file_rows, layout.flat_rfp_file, "Файл RFP")
+    if links.scanned_rfp:
+        for index, row in enumerate(rows):
+            rel = row.relations[0] if row.relations else None
+            rfp_file = rel.rfp_file if rel is not None else ""
+            names = _ds_file_names(rfp_file)
+            if not names or not row.source_id:
+                continue
+            missing = [name for name in names if name.casefold() not in rfp_on_disk]
+            if not missing:
+                continue
+            cell = ws.cell(row=index + 2, column=layout.flat_rfp_file)
+            rgb = str(getattr(getattr(cell.fill, "fgColor", None), "rgb", "") or "")
+            if rgb.upper().endswith("FFFF00"):
+                continue
+            if len(missing) == 1:
+                comment = (
+                    f"Нет файла RFP {missing[0]}. В мешок RFP он не входит."
+                )
+            else:
+                comment = (
+                    "Нет файлов RFP:\n"
+                    + "\n".join(missing)
+                    + "\nВ мешок RFP они не входят."
+                )
+            _paint_cell(cell, comment)
     if links.scanned_ul:
         for index, row in enumerate(rows):
             rel = row.relations[0] if row.relations else None

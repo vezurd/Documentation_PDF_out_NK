@@ -783,6 +783,91 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
             finally:
                 wb.close()
 
+    def test_rfp_file_cell_is_one_name_per_line(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            present = root / "ДС13._ (5)_7230-SOT.xlsx"
+            present.write_bytes(b"a")
+            other = root / "ДС13._ (6)_7412-SKUD.xlsx"
+            other.write_bytes(b"b")
+            missing = "нет такого.xlsx"
+
+            def row(source_id: str, rfp_file: str, rfp_key: str) -> DsRegistryRow:
+                return DsRegistryRow(
+                    status=STATUS_ACTIVE,
+                    source_id=source_id,
+                    relations=(
+                        DsRegistryRelation(
+                            group_id=f"ДС{source_id}",
+                            rfp_key=rfp_key,
+                            ul_folder="",
+                            mode=MODE_WHOLE,
+                            rfp_file=rfp_file,
+                            block_index=1,
+                        ),
+                    ),
+                )
+
+            mixed = f"{present.name}\n{missing}"
+            checked = validate_registry_rows(
+                [row("13", mixed, "13")], rfp_root=root
+            )
+            self.assertTrue(checked.is_ok, checked.issues)
+            missing_issues = [
+                issue
+                for issue in checked.issues
+                if issue.code == ISSUE_RFP_FILE_MISSING
+            ]
+            self.assertEqual(len(missing_issues), 1)
+            self.assertIn(missing, missing_issues[0].message)
+            self.assertNotIn(present.name, missing_issues[0].message)
+
+            both = f"{present.name}\n{other.name}"
+            complete = validate_registry_rows(
+                [row("13", both, "13")], rfp_root=root
+            )
+            self.assertFalse(
+                any(issue.code == ISSUE_RFP_FILE_MISSING for issue in complete.issues)
+            )
+
+            path = root / "registry.xlsx"
+            write_registry_workbook(
+                path,
+                [row("13", both, "13")],
+                links=RegistryLinks(
+                    scanned_rfp=True,
+                    rfp_files={"13": (present, other)},
+                ),
+            )
+            wb = _load_xlsx(path)
+            try:
+                ws = wb[REGISTRY_SHEET_NAME]
+                self.assertIn(present.name, str(ws["G2"].value))
+                self.assertIn(other.name, str(ws["G2"].value))
+                self.assertFalse(_fill_rgb(ws["G2"]).endswith("FFFF00"))
+                self.assertIsNone(ws["G2"].comment)
+            finally:
+                wb.close()
+
+            write_registry_workbook(
+                path,
+                [row("13", mixed, "13")],
+                links=RegistryLinks(
+                    scanned_rfp=True,
+                    rfp_files={"13": (present,)},
+                ),
+            )
+            wb = _load_xlsx(path)
+            try:
+                ws = wb[REGISTRY_SHEET_NAME]
+                self.assertTrue(_fill_rgb(ws["G2"]).endswith("FFFF00"))
+                comment = "" if ws["G2"].comment is None else str(ws["G2"].comment.text)
+                self.assertIn(missing, comment)
+                self.assertNotIn(present.name, comment)
+                self.assertNotIn("\\n", comment)
+            finally:
+                wb.close()
+
     def test_no_ul_warns_only_when_folder_exists(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
             root = Path(raw)

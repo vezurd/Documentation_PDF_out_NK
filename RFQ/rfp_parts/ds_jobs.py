@@ -56,6 +56,7 @@ from RFQ.rfp_parts.ds_registry import (
     MODE_NO_UL,
     DsRegistryDocument,
     DsRegistryError,
+    _ds_file_names,
     detect_registry_format,
     default_migration_report_path,
     ensure_registry_legend,
@@ -942,7 +943,9 @@ def _reconcile_missing_rfp(
         for rel in getattr(row, "relations", ()):
             if rel.rfp_file:
                 named = True
-                if rel.rfp_file.casefold() in on_disk:
+                if any(
+                    name.casefold() in on_disk for name in _ds_file_names(rel.rfp_file)
+                ):
                     present = True
             if rel.rfp_key and rfp_files.get(rel.rfp_key):
                 named = True
