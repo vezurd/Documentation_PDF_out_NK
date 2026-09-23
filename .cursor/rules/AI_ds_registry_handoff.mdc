@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Реестр ДС/УЛ — передача чату
 
-Снимок: **2026-09-23**. Аудит ДС, overlay и группы поставки — [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc). Этот файл только про лист реестра.
+Снимок: **2026-09-23**. Аудит ДС, overlay и группы поставки — [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc). Чтение книги и замечания по строкам — [AI_ds_validation.mdc](.cursor/rules/AI_ds_validation.mdc). Этот файл только про лист реестра.
 
 Чат **не пишет** канон. После правки кода человек перезапускает центр и жмёт «Проверить реестр».
 

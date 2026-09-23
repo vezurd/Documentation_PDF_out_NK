@@ -25,7 +25,7 @@ alwaysApply: false
 - **RFQ TPK / этап 2:** `RFQTPK`, `load_rfq_tpk_data`, **`ds_rfq_grouped_compare.py`**, **`ds_units_normalize.py`**, RFQ-only строки, колонки RFQ в grouped Excel
 - **кэш grouped compare:** `grouped_compare_cache.py`, `cache_ds_mto_result`
 - **настройки колонок Excel:** вкладка «Столбцы Excel», `ds_vs_mto_output.columns` в JSON, `column_config_from_output_settings`
-- **Не это правило:** финальный xlsx **RFP · Запуск** (Step4 столбцы/цвета/УЛ) → `AI_rfp_step4_excel.mdc`; доверенный ДС baseline / overlay RFP → `AI_ds_rfp_hybrid.mdc`; зачем/как VPN Cursor → `.cursor/rules/AI_cursor_vpn.mdc`
+- **Не это правило:** финальный xlsx **RFP · Запуск** (Step4 столбцы/цвета/УЛ) → `AI_rfp_step4_excel.mdc`; доверенный ДС baseline / overlay RFP → `AI_ds_rfp_hybrid.mdc`; валидация книги ДС → `AI_ds_validation.mdc`; зачем/как VPN Cursor → `.cursor/rules/AI_cursor_vpn.mdc`
 
 ## Точки входа
 
