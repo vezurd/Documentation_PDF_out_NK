@@ -1138,5 +1138,42 @@ class RegistryExcelFilterSmokeTest(unittest.TestCase):
             self.assertEqual(load_registry(path).rows[0].source_id, "11")
 
 
+class RegistrySheetLayoutSmokeTest(unittest.TestCase):
+    def test_keeps_widths_and_fits_multiline_height(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            path = Path(raw) / "registry.xlsx"
+            row = DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="13",
+                ds_file="один.xlsx\nдва.xlsx\nтри.xlsx",
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС13",
+                        rfp_key="13",
+                        ul_folder="согл УЛ ДС13",
+                        block_index=1,
+                    ),
+                ),
+            )
+            write_registry_workbook(path, [row])
+            book = _load_xlsx(path)
+            sheet = book["Реестр ДС"]
+            self.assertAlmostEqual(sheet.column_dimensions["D"].width, 93.57, places=2)
+            self.assertGreaterEqual(sheet.row_dimensions[1].height, 45)
+            self.assertEqual(sheet["A1"].alignment.horizontal, "center")
+            self.assertTrue(sheet["A1"].alignment.wrap_text)
+            self.assertEqual(sheet["D2"].alignment.horizontal, "left")
+            self.assertEqual(sheet["D2"].alignment.vertical, "center")
+            self.assertTrue(sheet["D2"].alignment.wrap_text)
+            self.assertGreaterEqual(sheet.row_dimensions[2].height, 45)
+            sheet.column_dimensions["D"].width = 40
+            book.save(path)
+            book.close()
+            write_registry_workbook(path, [row])
+            again = _load_xlsx(path)
+            self.assertEqual(again["Реестр ДС"].column_dimensions["D"].width, 40)
+            again.close()
+
+
 if __name__ == "__main__":
     unittest.main()

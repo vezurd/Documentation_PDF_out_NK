@@ -115,7 +115,10 @@ FLAT_HEADER_TITLES: tuple[str, ...] = (
     HDR_RFP_FILE,
     HDR_RFP_RECONCILE,
 )
-_FLAT_WIDTHS = (16, 24, 28, 42, 36, 16, 42, 18)
+_FLAT_WIDTHS = (16, 13.14, 12, 93.57, 36, 16, 95.29, 18)
+_LINE_HEIGHT = 15.0
+_HEADER_MIN_HEIGHT = 45.0
+_DATA_MIN_HEIGHT = 15.0
 
 CORE_HEADER_TITLES: tuple[str, ...] = (
     HDR_STATUS,
@@ -171,7 +174,7 @@ _FILL_BLANK = PatternFill(
 _FILL_TODO = _FILL_BLANK
 _FONT_DATA = Font(name="Calibri", size=11)
 _ALIGN_HEADER = Alignment(horizontal="center", vertical="center", wrap_text=True)
-_ALIGN_DATA = Alignment(horizontal="left", vertical="top", wrap_text=True)
+_ALIGN_DATA = Alignment(horizontal="left", vertical="center", wrap_text=True)
 _THIN = Side(style="thin", color="B0B0B0")
 _BLOCK_BORDER_COLORS = ("1B4F72", "548235", "C65911", "7030A0")
 _COMMENT_AUTHOR = "реестр ДС"
@@ -2102,6 +2105,61 @@ def _add_source_info_sheet(workbook: Workbook, rows: Sequence[DsRegistryRow]) ->
     sheet.sheet_properties.tabColor = "D9D9D9"
 
 
+def _visual_lines(text: object, width: float) -> int:
+    """How many wrapped lines ``text`` needs in a column of ``width`` characters."""
+
+    raw = "" if text is None else str(text)
+    if raw == "":
+        return 1
+    capacity = max(1, int(width) - 1)
+    total = 0
+    for part in raw.split("\n"):
+        if not part:
+            total += 1
+            continue
+        total += (len(part) + capacity - 1) // capacity
+    return max(1, total)
+
+
+def _row_height(lines: int, *, minimum: float) -> float:
+    return max(minimum, lines * _LINE_HEIGHT)
+
+
+def _existing_flat_widths(path: Path, defaults: tuple[float, ...]) -> tuple[float, ...]:
+    """Column widths already saved on the registry sheet, else ``defaults``.
+
+    A dated copy that does not exist yet takes widths from the canonical file
+    in the same folder. A filter Excel stored on the sheet is ignored.
+    """
+
+    source = path if path.is_file() else path.with_name(CANONICAL_REGISTRY_NAME)
+    if not source.is_file():
+        return defaults
+    try:
+        data = _xlsx_without_filter_columns(source.read_bytes())
+        workbook = load_workbook(BytesIO(data), data_only=False)
+    except (OSError, ValueError, BadZipFile):
+        return defaults
+    try:
+        if REGISTRY_SHEET_NAME not in workbook.sheetnames:
+            return defaults
+        sheet = workbook[REGISTRY_SHEET_NAME]
+        widths: list[float] = []
+        for index, default in enumerate(defaults, start=1):
+            saved = sheet.column_dimensions[get_column_letter(index)].width
+            widths.append(float(saved) if saved else default)
+        return tuple(widths)
+    finally:
+        workbook.close()
+
+
+def _fit_row(ws: Worksheet, excel_row: int, widths: Sequence[float], *, minimum: float) -> None:
+    lines = 1
+    for index, width in enumerate(widths, start=1):
+        lines = max(lines, _visual_lines(ws.cell(row=excel_row, column=index).value, width))
+    ws.row_dimensions[excel_row].height = _row_height(lines, minimum=minimum)
+
+
 def _write_text_cell(ws: Worksheet, row: int, col: int, value: str) -> None:
     if col <= 0:
         return
@@ -2766,6 +2824,11 @@ def write_registry_workbook(
         links: Optional DS/RFP lookup and the reconcile text written into the sheet.
             The reconcile column is not read back into decisions.
 
+    Column widths already stored on the registry sheet are kept. Header cells
+    stay centered, wrapped and coloured by role. Data cells are left-aligned,
+    vertically centered and wrapped. Row height follows the wrapped line count
+    so a multi-line file name stays visible.
+
     Returns:
         The written path.
 
@@ -2780,18 +2843,19 @@ def write_registry_workbook(
     last_data = max(len(sheet_rows), 1) + max(0, int(spare_rows))
     last_row = last_data + 1
     link_book = links or RegistryLinks()
+    widths = _existing_flat_widths(target, _FLAT_WIDTHS)
 
     wb = Workbook()
     ws = wb.active
     assert ws is not None
     ws.title = REGISTRY_SHEET_NAME
     ws.freeze_panes = "A2"
-    ws.row_dimensions[1].height = 36
 
     for col, header in enumerate(layout.headers, start=1):
         _apply_header_cell(ws.cell(row=1, column=col), header)
-    for col, width in enumerate(_FLAT_WIDTHS, start=1):
+    for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
+    _fit_row(ws, 1, widths, minimum=_HEADER_MIN_HEIGHT)
 
     for index, row in enumerate(sheet_rows):
         excel_row = index + 2
@@ -2833,7 +2897,7 @@ def write_registry_workbook(
             layout.flat_reconcile,
             link_book.reconcile_by_source.get(row.source_id, ""),
         )
-        ws.row_dimensions[excel_row].height = 18
+        _fit_row(ws, excel_row, widths, minimum=_DATA_MIN_HEIGHT)
 
     for excel_row in range(len(sheet_rows) + 2, last_row + 1):
         for col in range(1, layout.column_count + 1):
