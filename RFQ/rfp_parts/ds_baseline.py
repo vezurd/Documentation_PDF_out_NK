@@ -29,6 +29,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import WINDOWS_EPOCH
 from openpyxl.workbook.workbook import Workbook as OpenpyxlWorkbook
 from openpyxl.worksheet._reader import WorkSheetParser
+from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.worksheet.worksheet import Worksheet
 
 warnings.filterwarnings(
@@ -562,6 +563,48 @@ def _set_path_cell(cell, path: Path | str | None) -> None:
     if uri:
         cell.hyperlink = uri
         cell.font = _LINK_FONT
+
+
+_EXCEL_HYPERLINK_LIMIT = 65_000
+
+
+def _excel_jump_location(sheet: str, excel_row: int | None) -> str | None:
+    """``'Лист'!A12`` — same fragment Step4 writes for УЛ source links."""
+    name = str(sheet or "").strip()
+    if not name:
+        return None
+    cell = f"A{excel_row}" if isinstance(excel_row, int) and excel_row > 0 else "A1"
+    escaped = name.replace("'", "''")
+    return f"'{escaped}'!{cell}"
+
+
+def _set_jump_link(
+    cell,
+    path: Path | str | None,
+    *,
+    sheet: str = "",
+    excel_row: int | None = None,
+) -> bool:
+    """Open the source workbook and focus ``sheet!A{row}``, like Step4 УЛ.
+
+    Target is ``os.path.normpath`` (no ``Path.resolve()``, no ``file:`` URI).
+    Location is a separate OOXML field so Excel jumps to the cell.
+    """
+    if path is None or path == "":
+        return False
+    if cell.value is None or cell.value == "":
+        cell.value = str(path)
+    cell.alignment = _ALIGN_WRAP
+    target = os.path.normpath(str(path))
+    if not target:
+        return False
+    cell.hyperlink = Hyperlink(
+        ref=cell.coordinate,
+        target=target,
+        location=_excel_jump_location(sheet, excel_row),
+    )
+    cell.font = _LINK_FONT
+    return True
 
 
 def _atomic_write_bytes(target: Path, data: bytes) -> Path:
@@ -2093,8 +2136,56 @@ def _write_structure_report(
 ) -> Path:
     hb = DsHeartbeat(progress, "отчёт по структуре")
     wb = Workbook()
-    summary = wb.active
-    assert summary is not None
+    problems = wb.active
+    assert problems is not None
+    problems.title = "Проблемы строк"
+    problems.append(
+        [
+            "Уровень",
+            "Код",
+            "Файл",
+            "Путь",
+            "Лист",
+            "Строка",
+            "ID ДС",
+            "Группа",
+            "Сообщение",
+        ]
+    )
+    issue_count = len(issues)
+    linked = 0
+    for index, item in enumerate(issues, start=1):
+        problems.append(
+            [
+                item.level,
+                item.code,
+                item.relpath,
+                str(item.path) if item.path else "",
+                item.sheet,
+                item.excel_row,
+                item.source_id,
+                item.group_id,
+                item.message,
+            ]
+        )
+        excel_row = problems.max_row
+        _mark_level(problems.cell(row=excel_row, column=1), item.level)
+        if linked < _EXCEL_HYPERLINK_LIMIT and item.path:
+            if _set_jump_link(
+                problems.cell(row=excel_row, column=3),
+                item.path,
+                sheet=item.sheet,
+                excel_row=item.excel_row,
+            ):
+                linked += 1
+        if index == 1 or index % 500 == 0 or index == issue_count:
+            hb.tick(f"замечания {index}/{issue_count}")
+    _style_header(problems, 9)
+    problems.column_dimensions["C"].width = 36
+    problems.column_dimensions["D"].width = 70
+    problems.column_dimensions["I"].width = 70
+
+    summary = wb.create_sheet("Сводка")
     _write_summary_sheet(summary, result_head)
 
     files_ws = wb.create_sheet("Файлы ДС")
@@ -2187,43 +2278,7 @@ def _write_structure_report(
         _set_path_cell(sheets_ws.cell(row=sheets_ws.max_row, column=1), file_by_rel.get(relpath))
     _style_header(sheets_ws, 8)
     sheets_ws.column_dimensions["A"].width = 40
-
-    problems = wb.create_sheet("Проблемы строк")
-    problems.append(
-        [
-            "Уровень",
-            "Код",
-            "Файл",
-            "Путь",
-            "Лист",
-            "Строка",
-            "ID ДС",
-            "Группа",
-            "Сообщение",
-        ]
-    )
-    issue_count = len(issues)
-    for index, item in enumerate(issues, start=1):
-        problems.append(
-            [
-                item.level,
-                item.code,
-                item.relpath,
-                str(item.path) if item.path else "",
-                item.sheet,
-                item.excel_row,
-                item.source_id,
-                item.group_id,
-                item.message,
-            ]
-        )
-        _mark_level(problems.cell(row=problems.max_row, column=1), item.level)
-        if index == 1 or index % 500 == 0 or index == issue_count:
-            hb.tick(f"замечания {index}/{issue_count}")
-    _style_header(problems, 9)
-    problems.column_dimensions["C"].width = 36
-    problems.column_dimensions["D"].width = 70
-    problems.column_dimensions["I"].width = 70
+    wb.active = 0
     hb.tick("сохранение xlsx", force=True)
     saved = _save_workbook_atomic(path, wb, progress=progress)
     hb.finish("сохранён")
@@ -2274,6 +2329,8 @@ def _write_quality_report(
         rows: Sequence[DsBaselinePosition],
         extra_headers: Sequence[str] = (),
         extra_fn=None,
+        *,
+        jump_links: bool = False,
     ) -> None:
         ws = wb.create_sheet(title)
         headers = [
@@ -2290,15 +2347,24 @@ def _write_quality_report(
             *extra_headers,
         ]
         ws.append(list(headers))
+        linked = 0
         for item in rows:
             extra = extra_fn(item) if extra_fn else ()
             ws.append(_pos_row(item, extra))
+            if jump_links and linked < _EXCEL_HYPERLINK_LIMIT:
+                if _set_jump_link(
+                    ws.cell(row=ws.max_row, column=1),
+                    item.path,
+                    sheet=item.sheet,
+                    excel_row=item.excel_row,
+                ):
+                    linked += 1
         _style_header(ws, len(headers))
         ws.column_dimensions["A"].width = 36
         ws.column_dimensions["B"].width = 70
 
     empty_code = [item for item in positions if not item.code_normalized]
-    _write_pos_sheet("Позиции без кода", empty_code)
+    _write_pos_sheet("Позиции без кода", empty_code, jump_links=True)
 
     qty_issues = [
         item
@@ -2501,6 +2567,7 @@ def _write_sidecar_positions(
     rows: Sequence[Sequence[object]],
     path_cols: Sequence[int],
     progress: Callable[[str], None] | None = None,
+    jump_links: bool = False,
 ) -> Path:
     del path_cols
     hb = DsHeartbeat(progress, f"sidecar {title}")
@@ -2510,8 +2577,24 @@ def _write_sidecar_positions(
     ws.title = title
     ws.append(list(headers))
     row_count = len(rows)
+    linked = 0
     for index, row in enumerate(rows, start=1):
-        ws.append(list(row))
+        values = list(row)
+        ws.append(values)
+        if jump_links and linked < _EXCEL_HYPERLINK_LIMIT and len(values) >= 4:
+            path_obj = values[1]
+            sheet = str(values[2] or "")
+            excel_row = values[3]
+            row_number = (
+                excel_row if isinstance(excel_row, int) else None
+            )
+            if _set_jump_link(
+                ws.cell(row=ws.max_row, column=1),
+                path_obj if path_obj else None,
+                sheet=sheet,
+                excel_row=row_number,
+            ):
+                linked += 1
         if index == 1 or index % 500 == 0 or index == row_count:
             hb.tick(f"{index}/{row_count}")
     _style_header(ws, len(headers))
@@ -2877,6 +2960,7 @@ def build_ds_baseline(
             ],
             path_cols=(1, 2),
             progress=phase_callback,
+            jump_links=True,
         )
 
     duplicate_tags_path = None

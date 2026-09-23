@@ -479,6 +479,7 @@ class DsBaselineSmokeTest(unittest.TestCase):
 
             structure = _load_xlsx(result.structure_report_path)
             try:
+                self.assertEqual(structure.sheetnames[0], "Проблемы строк")
                 self.assertEqual(
                     set(structure.sheetnames),
                     {"Сводка", "Файлы ДС", "Колонки", "Листы", "Проблемы строк"},
@@ -493,6 +494,24 @@ class DsBaselineSmokeTest(unittest.TestCase):
                                 str(cell.hyperlink.target).startswith("file:")
                             )
                 self.assertTrue(linked)
+                problems = structure["Проблемы строк"]
+                jump = None
+                for row in problems.iter_rows(min_row=2, max_col=6):
+                    link = row[2].hyperlink
+                    sheet = str(row[4].value or "")
+                    excel_row = row[5].value
+                    if (
+                        link is not None
+                        and sheet
+                        and isinstance(excel_row, int)
+                    ):
+                        jump = (link, sheet, excel_row)
+                        break
+                self.assertIsNotNone(jump)
+                link, sheet, excel_row = jump
+                self.assertIn(".xlsx", str(link.target).casefold())
+                self.assertIn(sheet, str(link.location or ""))
+                self.assertIn(f"A{excel_row}", str(link.location or ""))
             finally:
                 structure.close()
 
@@ -513,12 +532,32 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 self.assertNotIn("Единицы и конвертация", quality.sheetnames)
                 empty_ws = quality["Позиции без кода"]
                 self.assertGreaterEqual(empty_ws.max_row, 2)
-                self.assertIsNone(empty_ws.cell(row=2, column=1).hyperlink)
+                empty_link = empty_ws.cell(row=2, column=1).hyperlink
+                self.assertIsNotNone(empty_link)
                 self.assertIsNone(empty_ws.cell(row=2, column=2).hyperlink)
+                empty_sheet = str(empty_ws.cell(row=2, column=3).value or "")
+                empty_row = empty_ws.cell(row=2, column=4).value
+                self.assertIn(empty_sheet, str(empty_link.location or ""))
+                self.assertIn(f"A{empty_row}", str(empty_link.location or ""))
+                self.assertIn(".xlsx", str(empty_link.target).casefold())
                 src_ws = quality["Источники"]
                 self.assertIsNotNone(src_ws.cell(row=2, column=2).hyperlink)
             finally:
                 quality.close()
+
+            empty_sidecar = _load_xlsx(result.empty_code_report_path)
+            try:
+                ws = empty_sidecar.active
+                self.assertEqual(ws.title, "Без кода")
+                sidecar_link = ws.cell(row=2, column=1).hyperlink
+                self.assertIsNotNone(sidecar_link)
+                sidecar_sheet = str(ws.cell(row=2, column=3).value or "")
+                sidecar_row = ws.cell(row=2, column=4).value
+                self.assertIn(sidecar_sheet, str(sidecar_link.location or ""))
+                self.assertIn(f"A{sidecar_row}", str(sidecar_link.location or ""))
+                self.assertIn(".xlsx", str(sidecar_link.target).casefold())
+            finally:
+                empty_sidecar.close()
 
             # Positions with empty CODE still present in memory.
             self.assertTrue(any(not item.code_normalized for item in result.positions))
