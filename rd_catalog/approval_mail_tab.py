@@ -14,7 +14,17 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSettings, QSize, Qt, Signal, Slot
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout,
     QBrush,
@@ -23,6 +33,7 @@ from PySide6.QtGui import (
     QDropEvent,
     QGuiApplication,
     QKeyEvent,
+    QMouseEvent,
     QKeySequence,
     QPainter,
     QShortcut,
@@ -1372,33 +1383,72 @@ def _set_combo_value(combo: QComboBox, value: str, *, stage: bool) -> None:
 
 
 _NO_ARROW_STYLE = (
-    "QComboBox { border: none; padding-right: 2px; background: palette(base); }"
+    "QComboBox { border: none; background-color: #ffffff; padding: 0px; }"
     "QComboBox::drop-down { width: 0px; border: none; }"
     "QComboBox::down-arrow { image: none; width: 0px; height: 0px; }"
+    "QComboBox QLineEdit {"
+    " background-color: #ffffff; color: #1a1a1a; border: none;"
+    " selection-background-color: #d6eaf8; selection-color: #1a1a1a;"
+    "}"
 )
-_COMBO_LIST_TIP = "Двойной щелчок или ↓ — список. Можно ввести своё."
+_COMBO_LIST_TIP = "Щелчок — список. Можно ввести своё."
+
+
+def _combo_popup_visible(combo: QComboBox) -> bool:
+    view = combo.view()
+    if view is None or not isValid(view):
+        return False
+    popup = view.window()
+    if popup is None or not isValid(popup) or popup is combo.window():
+        return view.isVisible()
+    return popup.isVisible()
+
+
+def _clear_full_selection(combo: QComboBox) -> None:
+    """Drop a select-all highlight so the field does not turn into a blue block."""
+
+    if not isValid(combo):
+        return
+    edit = combo.lineEdit()
+    if edit is None or not isValid(edit):
+        return
+    if edit.selectedText() == edit.text():
+        edit.deselect()
 
 
 class _ComboListOpener(QObject):
     """Open a combo list that has no drop-down arrow.
 
-    Double-click and Down show the full list. Typing still uses the
-    completer popup; Down is left to that popup while it is open.
+    A click opens the full list after the mouse release, so the release
+    does not immediately close it. Down does the same. Typing still uses
+    the completer popup; Down is left to that popup while it is open.
     """
 
     def __init__(self, combo: QComboBox) -> None:
         super().__init__(combo)
         self._combo = combo
+        self._popup_open_at_press = False
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         del watched
         combo = self._combo
         if not isValid(combo) or not combo.isEnabled():
             return False
-        if event.type() == QEvent.Type.MouseButtonDblClick:
-            _open_combo_list(combo)
-            return True
-        if (
+        if event.type() == QEvent.Type.FocusIn:
+            QTimer.singleShot(0, lambda c=combo: _clear_full_selection(c))
+        elif (
+            isinstance(event, QMouseEvent)
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            if event.type() == QEvent.Type.MouseButtonPress:
+                self._popup_open_at_press = _combo_popup_visible(combo)
+                QTimer.singleShot(0, lambda c=combo: _clear_full_selection(c))
+            elif (
+                event.type() == QEvent.Type.MouseButtonRelease
+                and not self._popup_open_at_press
+            ):
+                QTimer.singleShot(0, lambda c=combo: _open_combo_list(c))
+        elif (
             isinstance(event, QKeyEvent)
             and event.key() == Qt.Key.Key_Down
             and event.modifiers() == Qt.KeyboardModifier.NoModifier
@@ -1413,9 +1463,16 @@ class _ComboListOpener(QObject):
 
 
 def _open_combo_list(combo: QComboBox) -> None:
+    if not isValid(combo) or not combo.isEnabled():
+        return
+    if _combo_popup_visible(combo):
+        return
+    _clear_full_selection(combo)
     completer = combo.completer()
-    if completer is not None:
-        completer.popup().hide()
+    if completer is not None and isValid(completer):
+        popup = completer.popup()
+        if popup is not None and isValid(popup):
+            popup.hide()
     view = combo.view()
     hint = view.sizeHintForColumn(0)
     view.setMinimumWidth(max(combo.width(), hint + 28))
