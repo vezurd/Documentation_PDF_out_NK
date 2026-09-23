@@ -65,7 +65,9 @@ from RFQ.packing_list_provider import (
     packing_row_source,
     rfp_packing_match_key,
     rfp_row_actual_ds,
+    supply_ul_folders,
 )
+from RFQ.rfp_parts.ds_identity import parse_ul_folder_ds_identity
 from RFQ.tags_rfp_compare.rfp_supply_status import (
     CANONICAL_EXCLUDED_FROM_SUPPLY,
     is_excluded_from_supply,
@@ -242,6 +244,7 @@ class _RowAllocationState:
     rfp_tags: list[str] = field(default_factory=list)
     mto_tags: list[str] = field(default_factory=list)
     vo_tags: list[str] = field(default_factory=list)
+    queue_keys: tuple[tuple[str, str, str, str], ...] = ()
 
     def take(self, unit: _PackingUnit) -> None:
         """Append an allocated unit and keep the running delivered total in sync."""
@@ -543,6 +546,51 @@ def _whole_and_remainder(quantity: float) -> tuple[int, float]:
     return whole, remainder
 
 
+def _packing_row_folder_raw(row: RowStd) -> str:
+    """Return the first ANNOTATION path segment (physical UL folder name)."""
+    annotation, _sheet, _excel_row = packing_row_source(row)
+    normalized = annotation.replace("\\", "/")
+    parts = Path(normalized).parts
+    return parts[0] if parts else ""
+
+
+def _packing_row_folder_key(row: RowStd) -> str:
+    """Return the normalized physical UL folder key for a packing row."""
+    return normalize_packing_key_part(_packing_row_folder_raw(row))
+
+
+def _dataset_folders_by_parsed_actual(
+    dataset: PackingDataset,
+) -> dict[int, frozenset[str]]:
+    """Map parsed folder actual DS → folder keys present in this dataset."""
+    grouped: dict[int, set[str]] = defaultdict(set)
+    for row in dataset.rows:
+        raw = _packing_row_folder_raw(row)
+        parsed = parse_ul_folder_ds_identity(raw).actual
+        if parsed is None:
+            continue
+        grouped[parsed].add(normalize_packing_key_part(raw))
+    return {actual: frozenset(keys) for actual, keys in grouped.items()}
+
+
+def _eligible_folder_keys(
+    actual: int,
+    name_folders: dict[int, frozenset[str]],
+) -> frozenset[str]:
+    """Return folder keys this supply may take from in block A.
+
+    ``supply_ul_folders`` is ``None`` when there is no planting index or
+    ``actual`` is not a known source: name-match every folder in this
+    dataset whose parsed actual equals ``actual``. A frozenset (including
+    empty) is the registry set only — physical folders are not added just
+    because their names parse as the same number.
+    """
+    registry = supply_ul_folders(actual)
+    if registry is None:
+        return name_folders.get(actual, frozenset())
+    return registry
+
+
 def packing_queue_input_by_title(
     dataset: PackingDataset,
 ) -> tuple[float, int, dict[str, float]]:
@@ -551,8 +599,9 @@ def packing_queue_input_by_title(
     Skip rules must stay in sync with ``_build_unit_queues``: missing
     title/system/code, invalid (empty/non-finite/negative) quantity, and tags
     exceeding quantity are excluded (they never increment ``packing_units``).
-    Empty actual DS does not skip a row. Genuine fractions after units
-    conversion are queued and counted. Unavailable datasets yield zeros.
+    Empty actual DS or empty folder does not skip a row. Genuine fractions
+    after units conversion are queued and counted. Unavailable datasets
+    yield zeros.
 
     Returns:
         Total queued quantity, number of queued source rows, per-title sums.
@@ -565,7 +614,7 @@ def packing_queue_input_by_title(
     for row in dataset.rows:
         title_system_code = packing_row_key(row)
         key = rfp_packing_match_key(
-            packing_row_actual_ds(row) or "",
+            _packing_row_folder_key(row),
             *title_system_code,
         )
         if not all(key[1:]):
@@ -605,7 +654,7 @@ def _build_unit_queues(
         stats.packing_rows += 1
         title_system_code = packing_row_key(row)
         key = rfp_packing_match_key(
-            packing_row_actual_ds(row) or "",
+            _packing_row_folder_key(row),
             *title_system_code,
         )
         if not all(key[1:]):
@@ -699,14 +748,19 @@ def _build_unit_queues(
 
 def _candidate_key(
     row: RowStd,
-    available_keys: set[tuple[str, str, str, str]],
-) -> tuple[tuple[str, str, str, str] | None, str]:
+    queues: dict[tuple[str, str, str, str], deque[_PackingUnit]],
+    eligible_folders: frozenset[str],
+) -> tuple[
+    tuple[str, str, str, str] | None,
+    str,
+    tuple[tuple[str, str, str, str], ...],
+]:
     actual = rfp_row_actual_ds(row)
     if actual is None:
-        return None, ""
+        return None, "", ()
     parsed = parse_composite_title(row.get_value(DS_TITLE))
     if parsed is None:
-        return None, "malformed_title"
+        return None, "malformed_title", ()
     title, system = parsed
     struck_values = {
         normalize_packing_key_part(row.get_value(MTO_CODE_STRUCK)),
@@ -726,10 +780,17 @@ def _candidate_key(
         seen.add(code)
         if column == CODE_MTO and code in struck_values:
             continue
-        key = rfp_packing_match_key(actual, title, system, code)
-        if key in available_keys:
-            return key, fallback_name
-    return None, ""
+        queue_keys = tuple(
+            sorted(
+                rfp_packing_match_key(folder, title, system, code)
+                for folder in eligible_folders
+                if rfp_packing_match_key(folder, title, system, code) in queues
+            )
+        )
+        if queue_keys:
+            key = rfp_packing_match_key(actual, title, system, code)
+            return key, fallback_name, queue_keys
+    return None, "", ()
 
 
 def _row_capacity(row: RowStd) -> float:
@@ -830,10 +891,15 @@ def _reserved_tags_for_state(
     state: _RowAllocationState,
     states: list[_RowAllocationState],
 ) -> set[str]:
-    """Return sibling RFP tags still needed on the same packing queue key."""
+    """Return sibling RFP tags still needed on the same folder queue.
+
+    ``states`` must already be the rows whose ``queue_keys`` contain the
+    folder deque being scanned. Siblings are not grouped by ``state.key``
+    (that would miss another DS sharing the folder).
+    """
     reserved: set[str] = set()
     for other in states:
-        if other is state or other.key != state.key:
+        if other is state:
             continue
         if other.remaining_qty() <= _EPS:
             continue
@@ -997,6 +1063,37 @@ def _allocate_queue_phase(
         return
 
     raise ValueError(f"unknown allocation phase: {phase!r}")
+
+
+def _allocate_block_a_phase(
+    a_states: list[_RowAllocationState],
+    queues: dict[tuple[str, str, str, str], deque[_PackingUnit]],
+    phase: str,
+    *,
+    states_by_queue_key: dict[
+        tuple[str, str, str, str], list[_RowAllocationState]
+    ]
+    | None = None,
+) -> None:
+    """Run one global A phase, scanning each row's folder deques in order.
+
+    Does not concatenate deques. Stops walking folders when remaining qty
+    hits ``_EPS``. A3/A4 reservation is computed live per folder key.
+    """
+    reserve = phase in {"mto_tags", "blind"}
+    for state in a_states:
+        for queue_key in state.queue_keys:
+            if state.remaining_qty() <= _EPS:
+                break
+            queue = queues.get(queue_key)
+            if not queue:
+                continue
+            reserved: set[str] | frozenset[str] = frozenset()
+            if reserve and states_by_queue_key is not None:
+                reserved = _reserved_tags_for_state(
+                    state, states_by_queue_key.get(queue_key, [])
+                )
+            _allocate_queue_phase(queue, state, phase, reserved_tags=reserved)
 
 
 def _drain_leftover_queues(
@@ -1465,13 +1562,17 @@ def compare_rfp_rows_with_packing(
     """Allocate packing deliveries once across the current Step4 result.
 
     Block A runs four global passes over rows that have an actual DS, using
-    queues keyed by ``(actual, title, system, code)``: own RFP tags,
-    untagged slots, optional MTO tags, then blind same-code fill. Remaining
-    units are reindexed by ``(title, system, code)``. Block B plants that
-    leftover onto MTO-only rows (including MTO+VO on the same row). Block C
-    plants whatever is left onto VO-only rows. Units still unused become
-    packing-only leftover rows. Actual DS numbers stay in separate A
-    queues; there is no fallback to a key without actual.
+    queues keyed by physical UL folder ``(folder_key, title, system, code)``:
+    own RFP tags, untagged slots, optional MTO tags, then blind same-code
+    fill. A row takes from eligible folders for its supply id
+    (``rfp_row_actual_ds``): registry folder keys when the planting index
+    knows that id, otherwise every folder in this dataset whose parsed
+    name actual equals the id. Remaining units are reindexed by
+    ``(title, system, code)``. Block B plants that leftover onto MTO-only
+    rows (including MTO+VO on the same row). Block C plants whatever is
+    left onto VO-only rows. Units still unused become packing-only leftover
+    rows. Folder queues are not cloned; two DS numbers debit separate
+    ordered snapshots.
 
     Args:
         result_rows: Fully matched and already collapsed Step4 rows.
@@ -1479,7 +1580,8 @@ def compare_rfp_rows_with_packing(
         dataset: Validated shared packing cache dataset.
         use_mto_tags: If True, after RFP tags and untagged slots, match UL
             tags against ``TAG_MTO`` of the same row (skipping tags still
-            reserved by a sibling on the same key) before blind same-code fill.
+            reserved by a sibling on the same folder queue) before blind
+            same-code fill.
 
     Returns:
         The enriched list and a complete audit object.
@@ -1547,7 +1649,7 @@ def compare_rfp_rows_with_packing(
         raise RfpPackingFatalError(audit)
 
     remaining_ordered = dict(ordered_by_key)
-    available_keys = set(queues)
+    name_folders = _dataset_folders_by_parsed_actual(dataset)
     position_rows = [
         row for row in result_rows if row.row_type == RowType.position_row
     ]
@@ -1561,7 +1663,13 @@ def compare_rfp_rows_with_packing(
         for _original_index, row in allocation_order:
             if id(row) in excluded_ids:
                 continue
-            key, fallback = _candidate_key(row, available_keys)
+            actual = rfp_row_actual_ds(row)
+            eligible = (
+                _eligible_folder_keys(actual, name_folders)
+                if actual is not None
+                else frozenset()
+            )
+            key, fallback, queue_keys = _candidate_key(row, queues, eligible)
             if key is None:
                 parsed = parse_composite_title(row.get_value(DS_TITLE))
                 if parsed is None:
@@ -1631,41 +1739,35 @@ def compare_rfp_rows_with_packing(
                     rfp_tags=_unique_text(row.get_tags_list()),
                     mto_tags=_coerce_tag_values(row.get_value(TAG_MTO)),
                     vo_tags=_coerce_tag_values(row.get_value(TAG_VO)),
+                    queue_keys=queue_keys,
                 )
             )
-        states_by_key: dict[
+        states_by_queue_key: dict[
             tuple[str, str, str, str], list[_RowAllocationState]
         ] = defaultdict(list)
         for state in a_states:
-            states_by_key[state.key].append(state)
+            for queue_key in state.queue_keys:
+                states_by_queue_key[queue_key].append(state)
 
     with _phase(audit, "a1_rfp_tags"):
-        for state in a_states:
-            _allocate_queue_phase(queues[state.key], state, "rfp_tags")
+        _allocate_block_a_phase(a_states, queues, "rfp_tags")
     with _phase(audit, "a2_untagged"):
-        for state in a_states:
-            _allocate_queue_phase(queues[state.key], state, "untagged")
+        _allocate_block_a_phase(a_states, queues, "untagged")
     if use_mto_tags:
         with _phase(audit, "a3_mto_tags"):
-            for state in a_states:
-                _allocate_queue_phase(
-                    queues[state.key],
-                    state,
-                    "mto_tags",
-                    reserved_tags=_reserved_tags_for_state(
-                        state, states_by_key[state.key]
-                    ),
-                )
-    with _phase(audit, "a4_blind"):
-        for state in a_states:
-            _allocate_queue_phase(
-                queues[state.key],
-                state,
-                "blind",
-                reserved_tags=_reserved_tags_for_state(
-                    state, states_by_key[state.key]
-                ),
+            _allocate_block_a_phase(
+                a_states,
+                queues,
+                "mto_tags",
+                states_by_queue_key=states_by_queue_key,
             )
+    with _phase(audit, "a4_blind"):
+        _allocate_block_a_phase(
+            a_states,
+            queues,
+            "blind",
+            states_by_queue_key=states_by_queue_key,
+        )
 
     with _phase(audit, "drain_leftover"):
         leftover_queues = _drain_leftover_queues(queues)

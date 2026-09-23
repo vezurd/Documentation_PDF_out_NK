@@ -642,7 +642,7 @@ def _registry_next_step(
         if labels:
             blocked = (
                 f" Свод не пишется, пока не разобраны номера {labels_text}: "
-                "одна папка УЛ или один номер RFP стоят на разных ДС."
+                "один номер RFP или один файл RFP стоят на разных ДС."
             )
         return (
             f"Рабочий реестр один, в папке _RFP: {path}.{renamed}{blocked} "

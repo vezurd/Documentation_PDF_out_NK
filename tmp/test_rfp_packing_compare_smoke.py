@@ -84,9 +84,11 @@ from RFQ.packing_list_provider import (
     PackingDataset,
     PackingIssue,
     PackingQualityLevel,
+    RegistryPackingIndex,
     load_packing_dataset,
     normalize_packing_key_part,
     packing_match_key,
+    registry_packing_scope,
     rfp_packing_match_key,
     slim_packing_rows,
 )
@@ -1048,6 +1050,231 @@ class RfpPackingMatcherSmokeTest(unittest.TestCase):
         self.assertEqual(leftovers[0].get_value(UL_COMPARE_STATUS), STATUS_PACKING_ONLY)
         self.assertEqual(leftovers[0].get_value(DS_NAME), "ДС24_RFP_не_найден")
         self.assertEqual(leftovers[0].get_value(DS_ACTUAL), "ДС24")
+
+    def test_shared_folder_two_tags_registry_both_complete(self) -> None:
+        folder = "согл УЛ ДС15"
+        folder_key = normalize_packing_key_part(folder)
+        index = RegistryPackingIndex(
+            known_source_ids=frozenset({15, 61}),
+            ds_to_folders={
+                15: frozenset({folder_key}),
+                61: frozenset({folder_key}),
+            },
+            folder_owners={folder_key: frozenset({15, 61})},
+        )
+        row_15 = _row(ds_name="ДС15", quantity=1, tags="T15")
+        row_61 = _row(ds_name="ДС61", quantity=1, tags="T61")
+        packing = [
+            _row(
+                title="8950",
+                system="SOO1",
+                quantity=1,
+                tags=["T15"],
+                source=_ul_source("t15.xlsx", folder),
+                excel_row=10,
+            ),
+            _row(
+                title="8950",
+                system="SOO1",
+                quantity=1,
+                tags=["T61"],
+                source=_ul_source("t61.xlsx", folder),
+                excel_row=11,
+            ),
+        ]
+        ordered = {
+            rfp_packing_match_key(15, "8950", "SOO1", "CODE"): 1.0,
+            rfp_packing_match_key(61, "8950", "SOO1", "CODE"): 1.0,
+        }
+        with registry_packing_scope(index):
+            rows, _audit = compare_rfp_rows_with_packing(
+                [row_15, row_61],
+                ordered,
+                _dataset(packing),
+            )
+        self.assertEqual(row_15.get_value(UL_VALUES), 1)
+        self.assertEqual(row_61.get_value(UL_VALUES), 1)
+        self.assertEqual(row_15.get_value(UL_COMPARE_STATUS), STATUS_COMPLETE)
+        self.assertEqual(row_61.get_value(UL_COMPARE_STATUS), STATUS_COMPLETE)
+        self.assertFalse(_values(rows, STATUS_PACKING_ONLY))
+
+    def test_shared_folder_one_untagged_slot_not_cloned(self) -> None:
+        folder = "согл УЛ ДС15"
+        folder_key = normalize_packing_key_part(folder)
+        index = RegistryPackingIndex(
+            known_source_ids=frozenset({15, 61}),
+            ds_to_folders={
+                15: frozenset({folder_key}),
+                61: frozenset({folder_key}),
+            },
+            folder_owners={folder_key: frozenset({15, 61})},
+        )
+        row_15 = _row(ds_name="ДС15", quantity=1)
+        row_61 = _row(ds_name="ДС61", quantity=1)
+        packing = [
+            _row(
+                title="8950",
+                system="SOO1",
+                quantity=1,
+                source=_ul_source("shared.xlsx", folder),
+            )
+        ]
+        ordered = {
+            rfp_packing_match_key(15, "8950", "SOO1", "CODE"): 1.0,
+            rfp_packing_match_key(61, "8950", "SOO1", "CODE"): 1.0,
+        }
+        with registry_packing_scope(index):
+            rows, _audit = compare_rfp_rows_with_packing(
+                [row_15, row_61],
+                ordered,
+                _dataset(packing),
+            )
+        values = [row_15.get_value(UL_VALUES), row_61.get_value(UL_VALUES)]
+        numeric = [float(value) for value in values if value is not None]
+        self.assertEqual(len(numeric), 1)
+        self.assertEqual(sum(numeric), 1.0)
+        self.assertTrue(any(value is None for value in values))
+        self.assertEqual(
+            sum(1 for row in (row_15, row_61) if row.get_value(UL_VALUES) == 1),
+            1,
+        )
+        self.assertFalse(_values(rows, STATUS_PACKING_ONLY))
+
+    def test_one_ds_two_registry_folders_walks_both(self) -> None:
+        folder_a = "согл УЛ ДС1 ГФ 5титулов"
+        folder_b = "согл УЛ ДС7 ГФ 2 тит"
+        key_a = normalize_packing_key_part(folder_a)
+        key_b = normalize_packing_key_part(folder_b)
+        index = RegistryPackingIndex(
+            known_source_ids=frozenset({8}),
+            ds_to_folders={8: frozenset({key_a, key_b})},
+            folder_owners={key_a: frozenset({8}), key_b: frozenset({8})},
+        )
+        packing = [
+            _row(
+                title="8950",
+                system="SOO1",
+                quantity=1,
+                source=_ul_source("a.xlsx", folder_a),
+                excel_row=10,
+            ),
+            _row(
+                title="8950",
+                system="SOO1",
+                quantity=1,
+                source=_ul_source("b.xlsx", folder_b),
+                excel_row=11,
+            ),
+        ]
+        rfp_one = _row(ds_name="ДС8", quantity=1)
+        with registry_packing_scope(index):
+            rows_one, _audit = compare_rfp_rows_with_packing(
+                [rfp_one],
+                {rfp_packing_match_key(8, "8950", "SOO1", "CODE"): 1.0},
+                _dataset(packing),
+            )
+        self.assertEqual(rfp_one.get_value(UL_VALUES), 1)
+        self.assertEqual(rfp_one.get_value(UL_COMPARE_STATUS), STATUS_COMPLETE)
+        leftovers_one = _values(rows_one, STATUS_PACKING_ONLY)
+        self.assertEqual(len(leftovers_one), 1)
+
+        rfp_two = _row(ds_name="ДС8", quantity=2)
+        with registry_packing_scope(index):
+            rows_two, _audit = compare_rfp_rows_with_packing(
+                [rfp_two],
+                {rfp_packing_match_key(8, "8950", "SOO1", "CODE"): 2.0},
+                _dataset(packing),
+            )
+        self.assertEqual(rfp_two.get_value(UL_VALUES), 2)
+        self.assertEqual(rfp_two.get_value(UL_COMPARE_STATUS), STATUS_COMPLETE)
+        self.assertFalse(_values(rows_two, STATUS_PACKING_ONLY))
+
+    def test_registry_isolation_ds29_does_not_take_ds82_folder(self) -> None:
+        folder_29 = "согл УЛ ДС29"
+        folder_82 = "согл УЛ ДС82"
+        key_29 = normalize_packing_key_part(folder_29)
+        key_82 = normalize_packing_key_part(folder_82)
+        index = RegistryPackingIndex(
+            known_source_ids=frozenset({29, 82}),
+            ds_to_folders={
+                29: frozenset({key_29}),
+                82: frozenset({key_82}),
+            },
+            folder_owners={
+                key_29: frozenset({29}),
+                key_82: frozenset({82}),
+            },
+        )
+        row_29 = _row(ds_name="ДС29", title="8445-SOT", code="BCC0003052", quantity=1)
+        packing = [
+            _row(
+                title="8445",
+                system="SOT",
+                code="BCC0003052",
+                quantity=1,
+                source=_ul_source("file.xlsx", folder_82),
+            )
+        ]
+        with registry_packing_scope(index):
+            rows, _audit = compare_rfp_rows_with_packing(
+                [row_29],
+                {rfp_packing_match_key(29, "8445", "SOT", "BCC0003052"): 1.0},
+                _dataset(packing),
+            )
+        self.assertIsNone(row_29.get_value(UL_VALUES))
+        leftovers = _values(rows, STATUS_PACKING_ONLY)
+        self.assertEqual(len(leftovers), 1)
+        self.assertNotEqual(row_29.get_value(UL_COMPARE_STATUS), STATUS_COMPLETE)
+
+    def test_unknown_source_still_name_matches_own_folder(self) -> None:
+        folder_92 = "согл УЛ ДС92"
+        folder_15 = "согл УЛ ДС15"
+        key_15 = normalize_packing_key_part(folder_15)
+        index = RegistryPackingIndex(
+            known_source_ids=frozenset({15}),
+            ds_to_folders={15: frozenset({key_15})},
+            folder_owners={key_15: frozenset({15})},
+        )
+        rfp_match = _row(ds_name="ДС92_24Б", title="8950-SOO1", code="CODE")
+        packing_actual = _row(
+            title="8950",
+            system="SOO1",
+            code="CODE",
+            quantity=1,
+            source=_ul_source("file.xlsx", folder_92),
+        )
+        with registry_packing_scope(index):
+            compare_rfp_rows_with_packing(
+                [rfp_match],
+                {rfp_packing_match_key(92, "8950", "SOO1", "CODE"): 1.0},
+                _dataset([packing_actual]),
+            )
+        self.assertEqual(rfp_match.get_value(UL_COMPARE_STATUS), STATUS_COMPLETE)
+        self.assertEqual(rfp_match.get_value(UL_VALUES), 1.0)
+
+    def test_known_source_empty_folders_does_not_name_match(self) -> None:
+        index = RegistryPackingIndex(
+            known_source_ids=frozenset({15}),
+            ds_to_folders={},
+        )
+        rfp = _row(ds_name="ДС15", title="8950-SOO1", code="CODE", quantity=1)
+        packing = _row(
+            title="8950",
+            system="SOO1",
+            code="CODE",
+            quantity=1,
+            source=_ul_source("file.xlsx", "согл УЛ ДС15"),
+        )
+        with registry_packing_scope(index):
+            rows, _audit = compare_rfp_rows_with_packing(
+                [rfp],
+                {rfp_packing_match_key(15, "8950", "SOO1", "CODE"): 1.0},
+                _dataset([packing]),
+            )
+        self.assertIsNone(rfp.get_value(UL_VALUES))
+        leftovers = _values(rows, STATUS_PACKING_ONLY)
+        self.assertEqual(len(leftovers), 1)
+        self.assertEqual(leftovers[0].get_value(UL_COMPARE_STATUS), STATUS_PACKING_ONLY)
 
     def test_gf_folder_without_actual_does_not_land(self) -> None:
         rfp = _row(ds_name="ДС1", title="8950-SOO1", code="CODE", quantity=1)

@@ -207,12 +207,17 @@ def default_packing_cache_path() -> Path:
 class RegistryPackingIndex:
     """Actual DS numbers taken from the registry, not from folder or file names.
 
-    ``folder_to_actual`` keys are casefolded UL folder names.
-    ``rfp_number_to_actual`` maps the RFP number named on a row to that row's
-    actual DS. A clean registry has one owner per folder and per RFP number.
+    ``known_source_ids`` are every active digit-only source. ``ds_to_folders``
+    holds those ids that name at least one UL folder. ``folder_owners`` maps
+    a normalized folder key to every active source that names it.
+    ``rfp_number_to_actual`` maps an RFP number to a source only when exactly
+    one active source names that number. Folder keys use
+    ``normalize_packing_key_part`` (whitespace removed, casefold).
     """
 
-    folder_to_actual: dict[str, int] = field(default_factory=dict)
+    known_source_ids: frozenset[int] = field(default_factory=frozenset)
+    ds_to_folders: dict[int, frozenset[str]] = field(default_factory=dict)
+    folder_owners: dict[str, frozenset[int]] = field(default_factory=dict)
     rfp_number_to_actual: dict[int, int] = field(default_factory=dict)
 
 
@@ -233,6 +238,74 @@ def registry_packing_scope(
         yield
     finally:
         _REGISTRY_PACKING_INDEX.reset(token)
+
+
+def build_registry_planting_index(document) -> RegistryPackingIndex:
+    """Build planting maps from active registry rows.
+
+    Shared UL folders keep every owner. An RFP number maps to an actual DS
+    only when exactly one active source names it. ``validation.is_ok`` is
+    ignored so a shared RFP error does not drop folder links. History and
+    Disabled rows are not active. Non-digit source ids such as ``4905_1``
+    are omitted.
+
+    Args:
+        document: Loaded registry document. Only ``active_rows`` are read.
+
+    Returns:
+        Index over digit-only actual DS numbers.
+    """
+
+    known: set[int] = set()
+    folders_by_ds: dict[int, set[str]] = {}
+    owners_by_folder: dict[str, set[int]] = {}
+    rfp_owners: dict[int, set[int]] = {}
+    for row in document.active_rows:
+        if not row.source_id.isdigit():
+            continue
+        actual = int(row.source_id)
+        known.add(actual)
+        for rel in row.relations:
+            if rel.ul_folder:
+                key = normalize_packing_key_part(rel.ul_folder)
+                if key:
+                    folders_by_ds.setdefault(actual, set()).add(key)
+                    owners_by_folder.setdefault(key, set()).add(actual)
+            if rel.rfp_key.isdigit():
+                rfp_owners.setdefault(int(rel.rfp_key), set()).add(actual)
+    return RegistryPackingIndex(
+        known_source_ids=frozenset(known),
+        ds_to_folders={
+            ds_id: frozenset(keys) for ds_id, keys in folders_by_ds.items()
+        },
+        folder_owners={
+            key: frozenset(ids) for key, ids in owners_by_folder.items()
+        },
+        rfp_number_to_actual={
+            number: next(iter(ids))
+            for number, ids in rfp_owners.items()
+            if len(ids) == 1
+        },
+    )
+
+
+def supply_ul_folders(actual: int | None) -> frozenset[str] | None:
+    """Return UL folder keys named by ``actual`` in the current planting index.
+
+    Args:
+        actual: Actual DS number, or ``None``.
+
+    Returns:
+        ``None`` when there is no index, ``actual`` is ``None``, or the
+        number is not a known digit source (the caller should name-match).
+        An empty frozenset when the source is known and names no UL folder.
+        The folder set otherwise.
+    """
+
+    index = _REGISTRY_PACKING_INDEX.get()
+    if index is None or actual is None or actual not in index.known_source_ids:
+        return None
+    return index.ds_to_folders.get(actual, frozenset())
 
 
 def normalize_packing_key_part(value: object) -> str:
@@ -340,9 +413,9 @@ def packing_row_actual_ds(row: RowStd) -> int | None:
     folder = parts[0] if parts else ""
     index = _REGISTRY_PACKING_INDEX.get()
     if index is not None and folder:
-        override = index.folder_to_actual.get(folder.casefold())
-        if override is not None:
-            return override
+        owners = index.folder_owners.get(normalize_packing_key_part(folder))
+        if owners is not None and len(owners) == 1:
+            return next(iter(owners))
     return parse_ul_folder_ds_identity(folder).actual
 
 

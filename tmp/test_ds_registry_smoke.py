@@ -48,6 +48,7 @@ from RFQ.rfp_parts.ds_registry import (
     DsRegistryDocument,
     collect_orphan_rows,
     collapse_registry_rows,
+    copy_registry_snapshot,
     detect_registry_format,
     load_registry,
     migrate_registry,
@@ -120,7 +121,7 @@ class DsRegistrySmokeTest(unittest.TestCase):
             self.assertFalse(result.validation.is_ok)
             self.assertTrue(result.validation.blocks_overlay)
             codes = {item.code for item in result.validation.issues}
-            self.assertIn(ISSUE_SHARED_UL, codes)
+            self.assertNotIn(ISSUE_SHARED_UL, codes)
             self.assertIn(ISSUE_SHARED_RFP, codes)
 
             by_id = {row.source_id: row for row in result.rows if row.source_id}
@@ -739,7 +740,7 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
             finally:
                 wb.close()
 
-    def test_missing_ul_folder_is_blue_and_shared_stays_yellow(self) -> None:
+    def test_missing_ul_folder_is_blue_and_shared_folder_is_not_yellow(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
             path = Path(raw) / "registry.xlsx"
 
@@ -772,14 +773,17 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
             loaded = load_registry(path)
             codes = {issue.code for issue in loaded.validation.issues}
             self.assertNotIn("ul_folder_missing", codes)
-            self.assertIn(ISSUE_SHARED_UL, codes)
+            self.assertNotIn(ISSUE_SHARED_UL, codes)
+            self.assertTrue(loaded.validation.is_ok, loaded.validation.issues)
             wb = _load_xlsx(path)
             try:
                 ws = wb[REGISTRY_SHEET_NAME]
                 self.assertFalse(_fill_rgb(ws["E2"]).endswith("BDD7EE"))
                 self.assertTrue(_fill_rgb(ws["E3"]).endswith("BDD7EE"))
-                self.assertTrue(_fill_rgb(ws["E4"]).endswith("FFFF00"))
-                self.assertTrue(_fill_rgb(ws["E5"]).endswith("FFFF00"))
+                self.assertFalse(_fill_rgb(ws["E4"]).endswith("FFFF00"))
+                self.assertFalse(_fill_rgb(ws["E5"]).endswith("FFFF00"))
+                self.assertTrue(_fill_rgb(ws["E4"]).endswith("BDD7EE"))
+                self.assertTrue(_fill_rgb(ws["E5"]).endswith("BDD7EE"))
             finally:
                 wb.close()
 
@@ -1017,16 +1021,13 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
         from base.base_classes import RowStd
         from base.tables_columns import ANNOTATION, DS_NAME
         from RFQ.packing_list_provider import (
-            RegistryPackingIndex,
+            build_registry_planting_index,
             packing_row_actual_ds,
             registry_packing_scope,
             rfp_row_actual_ds,
         )
 
-        index = RegistryPackingIndex(
-            folder_to_actual=maps[0],
-            rfp_number_to_actual=maps[1],
-        )
+        index = build_registry_planting_index(document)
         packing = RowStd()
         packing.el[ANNOTATION].value = folder_1 + "/list.xlsx"
         rfp = RowStd()
@@ -1067,7 +1068,7 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
         ]
         blocked = validate_registry_rows(shared)
         codes = {item.code for item in blocked.issues}
-        self.assertIn(ISSUE_SHARED_UL, codes)
+        self.assertNotIn(ISSUE_SHARED_UL, codes)
         self.assertIn(ISSUE_SHARED_RFP, codes)
         self.assertTrue(blocked.blocks_overlay)
         dirty = DsRegistryDocument(
@@ -1077,6 +1078,152 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
             max_relation_blocks=1,
         )
         self.assertIsNone(registry_packing_maps(dirty))
+
+    def test_shared_ul_folder_is_valid_and_indexed(self) -> None:
+        folder = "согл УЛ общая"
+        rows = [
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="15",
+                excel_row=2,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС15",
+                        rfp_key="15",
+                        ul_folder=folder,
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="61",
+                excel_row=3,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС61",
+                        rfp_key="61",
+                        ul_folder=folder,
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="99",
+                excel_row=4,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС99",
+                        rfp_key="99",
+                        ul_folder="",
+                        block_index=1,
+                    ),
+                ),
+            ),
+        ]
+        checked = validate_registry_rows(rows)
+        self.assertTrue(checked.is_ok, checked.issues)
+        codes = {item.code for item in checked.issues}
+        self.assertNotIn(ISSUE_SHARED_UL, codes)
+        document = DsRegistryDocument(
+            path=Path("shared-folder.xlsx"),
+            rows=rows,
+            validation=checked,
+            max_relation_blocks=1,
+        )
+        from RFQ.packing_list_provider import (
+            build_registry_planting_index,
+            normalize_packing_key_part,
+            registry_packing_scope,
+            supply_ul_folders,
+        )
+
+        index = build_registry_planting_index(document)
+        folder_key = normalize_packing_key_part(folder)
+        self.assertEqual(index.folder_owners[folder_key], frozenset({15, 61}))
+        self.assertIn(folder_key, index.ds_to_folders[15])
+        self.assertIn(folder_key, index.ds_to_folders[61])
+        self.assertIn(99, index.known_source_ids)
+        self.assertNotIn(99, index.ds_to_folders)
+        with registry_packing_scope(index):
+            self.assertEqual(supply_ul_folders(15), frozenset({folder_key}))
+            self.assertEqual(supply_ul_folders(61), frozenset({folder_key}))
+            self.assertEqual(supply_ul_folders(99), frozenset())
+            self.assertIsNone(supply_ul_folders(12345))
+            self.assertIsNone(supply_ul_folders(None))
+
+    def test_duplicate_ul_folder_inside_one_number_is_error(self) -> None:
+        folder = "согл УЛ общая"
+        rows = [
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="15",
+                excel_row=2,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС15",
+                        rfp_key="15",
+                        ul_folder=folder,
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="61",
+                excel_row=3,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС61",
+                        rfp_key="61",
+                        ul_folder=folder,
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="61",
+                excel_row=4,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС61",
+                        rfp_key="62",
+                        ul_folder=folder,
+                        block_index=1,
+                    ),
+                ),
+            ),
+        ]
+        checked = validate_registry_rows(rows)
+        codes = {item.code for item in checked.issues}
+        self.assertIn(ISSUE_DUPLICATE_LINK, codes)
+        self.assertNotIn(ISSUE_SHARED_UL, codes)
+        self.assertFalse(checked.is_ok)
+
+    def test_copy_registry_snapshot_preserves_name_and_swallows_oserror(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            source = root / "Реестр_ДС_УЛ.xlsx"
+            source.write_bytes(b"registry-bytes")
+            dest_dir = root / "result"
+            dest_dir.mkdir()
+            dest = copy_registry_snapshot(source, dest_dir)
+            self.assertEqual(dest, dest_dir / source.name)
+            assert dest is not None
+            self.assertEqual(dest.read_bytes(), b"registry-bytes")
+
+            dated = root / "Реестр_ДС_УЛ_20260923_120000.xlsx"
+            dated.write_bytes(b"dated-bytes")
+            dated_dest = copy_registry_snapshot(dated, dest_dir)
+            self.assertEqual(dated_dest, dest_dir / dated.name)
+            assert dated_dest is not None
+            self.assertEqual(dated_dest.read_bytes(), b"dated-bytes")
+
+            not_a_dir = root / "not_a_dir.txt"
+            not_a_dir.write_bytes(b"x")
+            self.assertIsNone(copy_registry_snapshot(source, not_a_dir))
 
 
 class RegistryRescanSmokeTest(unittest.TestCase):

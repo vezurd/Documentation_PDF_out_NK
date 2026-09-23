@@ -1,8 +1,9 @@
 """Canonical DS registry: several sheet rows may share one actual DS number.
 
 One sheet row is one link (a UL folder, an RFP file, or both). Rows of the
-same actual number collapse into one specification bag. One folder or one
-RFP number/file cannot sit on two actual numbers. The working workbook lives
+same actual number collapse into one specification bag. The same UL folder
+may be named by several actual numbers. One RFP number or RFP file cannot
+sit on two actual numbers. The working workbook lives
 in ``_RFP`` as ``Реестр_ДС_УЛ.xlsx``. «Проверить реестр» renames a legacy
 file to ``Реестр_ДС_УЛ_old.xlsx`` and replaces it. If Excel holds the file
 open, a dated copy is written; the program reads the newest of the main file
@@ -1467,15 +1468,16 @@ def validate_registry_rows(
 ) -> DsRegistryValidation:
     """Validate logical rows. A repeated actual number is not an error.
 
-    The same UL folder, RFP number or RFP file on two actual numbers is an
-    error, as is a repeat inside one number. A named UL folder that is absent
-    from disk is painted blue and does not stop the summary. A named RFP file
-    that is absent is a warning: it stays out of the RFP bag.
+    The same RFP number or RFP file on two actual numbers is an error, as is
+    a UL folder repeated inside one number. Two actual numbers may name the
+    same UL folder. A named UL folder that is absent from disk is painted
+    blue and does not stop the summary. A named RFP file that is absent is a
+    warning: it stays out of the RFP bag.
     """
 
     del max_blocks  # wide-sheet width is not a rule anymore
     issues: list[DsRegistryIssue] = []
-    folder_owner: dict[str, str] = {}
+    folder_owners: dict[str, set[str]] = {}
     rfp_owner: dict[str, str] = {}
     file_owner: dict[str, str] = {}
     rfp_index = index_rfp_files(rfp_root) if rfp_root else {}
@@ -1559,24 +1561,8 @@ def validate_registry_rows(
                         )
                     )
                 seen_folders.add(key)
-                owner = folder_owner.get(key)
-                if owner and owner != row.source_id:
-                    issues.append(
-                        _issue(
-                            ISSUE_SHARED_UL,
-                            "ERROR",
-                            (
-                                f"папка УЛ {rel.ul_folder!r} указана у номеров "
-                                f"{format_registry_ds_number(owner)} и "
-                                f"{format_registry_ds_number(row.source_id)}"
-                            ),
-                            painted,
-                            group_id=group_id,
-                            block_index=rel.block_index,
-                            field="ul_folder",
-                        )
-                    )
-                elif owner == row.source_id and not repeated_here:
+                owners = folder_owners.setdefault(key, set())
+                if row.source_id in owners and not repeated_here:
                     issues.append(
                         _issue(
                             ISSUE_DUPLICATE_LINK,
@@ -1588,8 +1574,7 @@ def validate_registry_rows(
                             field="ul_folder",
                         )
                     )
-                else:
-                    folder_owner[key] = row.source_id
+                owners.add(row.source_id)
             if rel.rfp_key:
                 repeated_here = rel.rfp_key in seen_rfp
                 if repeated_here:
@@ -2687,12 +2672,14 @@ def registry_packing_maps(
     """Return folder and RFP-number maps for a clean registry.
 
     Conflicts make the document invalid; the caller then keeps the name parser.
-    Only integer actual numbers are packing keys.
+    Only integer actual numbers are packing keys. A UL folder named by more
+    than one active source is omitted so this one-int map cannot point a
+    shared folder at a single DS.
     """
 
     if not document.validation.is_ok:
         return None
-    folders: dict[str, int] = {}
+    folder_owners: dict[str, set[int]] = {}
     numbers: dict[int, int] = {}
     for row in document.active_rows:
         if not row.source_id.isdigit():
@@ -2700,10 +2687,46 @@ def registry_packing_maps(
         actual = int(row.source_id)
         for rel in row.relations:
             if rel.ul_folder:
-                folders[rel.ul_folder.casefold()] = actual
+                folder_owners.setdefault(rel.ul_folder.casefold(), set()).add(
+                    actual
+                )
             if rel.rfp_key.isdigit():
                 numbers[int(rel.rfp_key)] = actual
+    folders = {
+        key: next(iter(owners))
+        for key, owners in folder_owners.items()
+        if len(owners) == 1
+    }
     return folders, numbers
+
+
+def copy_registry_snapshot(source: Path, dest_dir: Path) -> Path | None:
+    """Copy the registry workbook into the Step4 result folder.
+
+    The destination name is ``source.name``, so a dated registry stays dated
+    and the canonical ``Реестр_ДС_УЛ.xlsx`` keeps that name. A same-path
+    request returns that path without copying. An ``OSError`` is printed in
+    Russian and does not raise.
+
+    Args:
+        source: Registry file that was loaded.
+        dest_dir: Step4 result directory.
+
+    Returns:
+        Destination path, or ``None`` when the copy could not be written.
+    """
+
+    try:
+        source = Path(source)
+        dest_dir = Path(dest_dir)
+        dest = dest_dir / source.name
+        if source.resolve() == dest.resolve():
+            return dest
+        shutil.copy2(source, dest)
+    except OSError as exc:
+        print(f"УЛ: копия реестра не записана в папку результата: {exc}")
+        return None
+    return dest
 
 
 def expand_registry_rows(rows: Sequence[DsRegistryRow]) -> list[DsRegistryRow]:
@@ -2754,8 +2777,9 @@ def _paint_flat_conflicts(
 ) -> None:
     """Yellow cells for conflicts, orphans and a missing named RFP file.
 
-    A named UL folder that is not on disk is light blue, unless the same cell
-    is already yellow from a shared-folder conflict.
+    A UL folder is yellow only when the same number repeats it. Several
+    numbers naming one folder are not a conflict. A named UL folder that is
+    not on disk is light blue, unless the same cell is already yellow.
     """
 
     folder_rows: dict[str, list[tuple[int, str]]] = {}
@@ -2820,7 +2844,14 @@ def _paint_flat_conflicts(
                 for excel_row, _source in items:
                     _paint_cell(ws.cell(row=excel_row, column=column), comment)
 
-    _shared(folder_rows, layout.flat_ul, "Папка УЛ")
+    for items in folder_rows.values():
+        owners = {source for _row, source in items if source}
+        if len(items) > 1 and len(owners) <= 1:
+            comment = "Папка УЛ повторяется внутри одного номера"
+            for excel_row, _source in items:
+                _paint_cell(
+                    ws.cell(row=excel_row, column=layout.flat_ul), comment
+                )
     _shared(rfp_rows, layout.flat_rfp_number, "Номер RFP")
     _shared(file_rows, layout.flat_rfp_file, "Файл RFP")
     if links.scanned_rfp:

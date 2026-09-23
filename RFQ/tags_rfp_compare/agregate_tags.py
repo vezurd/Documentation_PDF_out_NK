@@ -172,10 +172,15 @@ def _load_config_override(config_path: str) -> Dict[str, Any]:
 # ГЛАВНАЯ ФУНКЦИЯ
 # ============================================================================
 
-def _registry_packing_index(rfp_parts_cfg: Dict[str, Any], include_packing_lists: bool):
-    """Load a clean DS registry into the Step4 packing-key override.
+def _registry_packing_index(
+    rfp_parts_cfg: Dict[str, Any],
+    include_packing_lists: bool,
+    result_dir: str,
+):
+    """Load a DS registry into the Step4 packing-key override.
 
-    A missing file or a registry with errors leaves name parsing in place.
+    A missing file leaves name parsing in place. Validation errors do not
+    drop UL folder links. The loaded workbook is copied into ``result_dir``.
     """
 
     if not include_packing_lists:
@@ -183,10 +188,10 @@ def _registry_packing_index(rfp_parts_cfg: Dict[str, Any], include_packing_lists
     try:
         from pathlib import Path
 
-        from RFQ.packing_list_provider import RegistryPackingIndex
+        from RFQ.packing_list_provider import build_registry_planting_index
         from RFQ.rfp_parts.ds_registry import (
+            copy_registry_snapshot,
             load_registry,
-            registry_packing_maps,
             resolve_latest_registry,
         )
     except ImportError:
@@ -198,17 +203,12 @@ def _registry_packing_index(rfp_parts_cfg: Dict[str, Any], include_packing_lists
         target = latest if latest.is_file() else Path(raw) if raw else latest
         if not target.is_file():
             return None
-        maps = registry_packing_maps(load_registry(target))
+        document = load_registry(target)
     except Exception as exc:
         print(f"УЛ: реестр ДС не применён к ключу посадки: {exc}")
         return None
-    if maps is None:
-        return None
-    folders, numbers = maps
-    return RegistryPackingIndex(
-        folder_to_actual=folders,
-        rfp_number_to_actual=numbers,
-    )
+    copy_registry_snapshot(target, Path(result_dir))
+    return build_registry_planting_index(document)
 
 
 def main(config_override: Optional[Dict[str, Any]] = None):
@@ -786,7 +786,7 @@ def main(config_override: Optional[Dict[str, Any]] = None):
             gem_supply_codes=gem_supply_codes,
             rfp_paths_by_key=rfp_paths_by_key,
             registry_packing_index=_registry_packing_index(
-                rfp_parts_cfg, include_packing_lists
+                rfp_parts_cfg, include_packing_lists, result_dir
             ),
         )
     except (QuantityBalanceFatalError, RfpPackingFatalError) as exc:
