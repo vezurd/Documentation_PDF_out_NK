@@ -14,7 +14,7 @@ import re
 import time
 import warnings
 from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
@@ -2156,6 +2156,31 @@ class RfQDsUnitsConverter:
 # ---------------------------------------------------------------------------
 
 
+def _filename_column_width(names: Iterable[object]) -> float:
+    """Excel width so a DS filename stays on one line.
+
+    The 2026-09-23 audit max is 95 characters
+    (``ДС_13/10_Спецификация №12_…BOM-0001)_v2.xlsx``). Width is that
+    length plus a small pad; Calibri wraps the last glyph at a tight fit.
+    """
+
+    longest = 0
+    for name in names:
+        longest = max(longest, len(str(name or "")))
+    return float(min(255, max(longest + 3, 18)))
+
+
+def _order_sheets(wb: Workbook, names: Sequence[str], *, active: str) -> None:
+    """Put review sheets first and open the workbook on ``active``."""
+
+    for index, name in enumerate(name for name in names if name in wb.sheetnames):
+        current = wb.sheetnames.index(name)
+        if current != index:
+            wb.move_sheet(wb[name], offset=index - current)
+    if active in wb.sheetnames:
+        wb.active = wb[active]
+
+
 def _style_header(ws: Worksheet, width: int) -> None:
     for col in range(1, width + 1):
         cell = ws.cell(row=1, column=col)
@@ -2239,7 +2264,6 @@ def _write_structure_report(
             "Уровень",
             "Код",
             "Файл",
-            "Путь",
             "Лист",
             "Строка",
             "ID ДС",
@@ -2249,13 +2273,14 @@ def _write_structure_report(
     )
     issue_count = len(issues)
     linked = 0
+    file_names: list[str] = []
     for index, item in enumerate(issues, start=1):
+        file_names.append(item.relpath)
         problems.append(
             [
                 item.level,
                 item.code,
                 item.relpath,
-                str(item.path) if item.path else "",
                 item.sheet,
                 item.excel_row,
                 item.source_id,
@@ -2275,10 +2300,9 @@ def _write_structure_report(
                 linked += 1
         if index == 1 or index % 500 == 0 or index == issue_count:
             hb.tick(f"замечания {index}/{issue_count}")
-    _style_header(problems, 9)
-    problems.column_dimensions["C"].width = 36
-    problems.column_dimensions["D"].width = 70
-    problems.column_dimensions["I"].width = 70
+    _style_header(problems, 8)
+    problems.column_dimensions["C"].width = _filename_column_width(file_names)
+    problems.column_dimensions["H"].width = 70
 
     summary = wb.create_sheet("Сводка")
     _write_summary_sheet(summary, result_head)
@@ -2373,7 +2397,11 @@ def _write_structure_report(
         _set_path_cell(sheets_ws.cell(row=sheets_ws.max_row, column=1), file_by_rel.get(relpath))
     _style_header(sheets_ws, 8)
     sheets_ws.column_dimensions["A"].width = 40
-    wb.active = 0
+    _order_sheets(
+        wb,
+        ["Проблемы строк", "Сводка", "Файлы ДС", "Колонки", "Листы"],
+        active="Проблемы строк",
+    )
     hb.tick("сохранение xlsx", force=True)
     saved = _save_workbook_atomic(path, wb, progress=progress)
     hb.finish("сохранён")
@@ -2694,6 +2722,20 @@ def _write_quality_report(
     _style_header(src_ws, 5)
     src_ws.column_dimensions["A"].width = 40
     src_ws.column_dimensions["B"].width = 70
+    _order_sheets(
+        wb,
+        [
+            "Сводка",
+            "Позиции без кода",
+            "Количества",
+            "Дубли",
+            "Теги",
+            "Коды вне Google",
+            "Единицы и конвертация",
+            "Источники",
+        ],
+        active="Сводка",
+    )
     hb.tick("сохранение xlsx", force=True)
     saved = _save_workbook_atomic(path, wb, progress=progress)
     hb.finish("сохранён")
@@ -2708,6 +2750,7 @@ def _write_sidecar_positions(
     path_cols: Sequence[int],
     progress: Callable[[str], None] | None = None,
     jump_links: bool = False,
+    link_paths: Sequence[Path | str | None] | None = None,
 ) -> Path:
     del path_cols
     hb = DsHeartbeat(progress, f"sidecar {title}")
@@ -2721,13 +2764,16 @@ def _write_sidecar_positions(
     for index, row in enumerate(rows, start=1):
         values = list(row)
         ws.append(values)
-        if jump_links and linked < _EXCEL_HYPERLINK_LIMIT and len(values) >= 4:
-            path_obj = values[1]
-            sheet = str(values[2] or "")
-            excel_row = values[3]
-            row_number = (
-                excel_row if isinstance(excel_row, int) else None
-            )
+        if jump_links and linked < _EXCEL_HYPERLINK_LIMIT and len(values) >= 3:
+            if link_paths is not None:
+                path_obj = link_paths[index - 1]
+                sheet = str(values[1] or "")
+                excel_row = values[2]
+            else:
+                path_obj = values[1] if len(values) >= 4 else None
+                sheet = str(values[2] or "") if len(values) >= 4 else ""
+                excel_row = values[3] if len(values) >= 4 else None
+            row_number = excel_row if isinstance(excel_row, int) else None
             if _set_jump_link(
                 ws.cell(row=ws.max_row, column=1),
                 path_obj if path_obj else None,
@@ -2738,6 +2784,11 @@ def _write_sidecar_positions(
         if index == 1 or index % 500 == 0 or index == row_count:
             hb.tick(f"{index}/{row_count}")
     _style_header(ws, len(headers))
+    if headers and headers[0] == "Файл":
+        ws.column_dimensions["A"].width = _filename_column_width(
+            row[0] for row in rows if row
+        )
+    wb.active = ws
     hb.tick("сохранение xlsx", force=True)
     saved = _save_workbook_atomic(path, wb, progress=progress)
     hb.finish("сохранён")
@@ -3084,7 +3135,6 @@ def build_ds_baseline(
             "Без кода",
             [
                 "Файл",
-                "Путь",
                 "Лист",
                 "Строка",
                 "ID ДС",
@@ -3096,7 +3146,6 @@ def build_ds_baseline(
             [
                 [
                     item.relpath,
-                    str(item.path),
                     item.sheet,
                     item.excel_row,
                     item.source_id,
@@ -3107,9 +3156,10 @@ def build_ds_baseline(
                 ]
                 for item in empty_code_rows
             ],
-            path_cols=(1, 2),
+            path_cols=(),
             progress=phase_callback,
             jump_links=True,
+            link_paths=[item.path for item in empty_code_rows],
         )
 
     duplicate_tags_path = None

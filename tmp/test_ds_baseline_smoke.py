@@ -496,11 +496,27 @@ class DsBaselineSmokeTest(unittest.TestCase):
                             )
                 self.assertTrue(linked)
                 problems = structure["Проблемы строк"]
+                self.assertEqual(
+                    [cell.value for cell in problems[1]],
+                    [
+                        "Уровень",
+                        "Код",
+                        "Файл",
+                        "Лист",
+                        "Строка",
+                        "ID ДС",
+                        "Группа",
+                        "Сообщение",
+                    ],
+                )
+                self.assertEqual(structure.sheetnames[0], "Проблемы строк")
+                self.assertEqual(structure.sheetnames[-3:], ["Файлы ДС", "Колонки", "Листы"])
+                self.assertEqual(structure.active.title, "Проблемы строк")
                 jump = None
-                for row in problems.iter_rows(min_row=2, max_col=6):
+                for row in problems.iter_rows(min_row=2, max_col=5):
                     link = row[2].hyperlink
-                    sheet = str(row[4].value or "")
-                    excel_row = row[5].value
+                    sheet = str(row[3].value or "")
+                    excel_row = row[4].value
                     if (
                         link is not None
                         and sheet
@@ -519,17 +535,18 @@ class DsBaselineSmokeTest(unittest.TestCase):
             quality = _load_xlsx(result.quality_report_path)
             try:
                 self.assertEqual(
-                    set(quality.sheetnames),
-                    {
+                    quality.sheetnames,
+                    [
                         "Сводка",
                         "Позиции без кода",
                         "Количества",
-                        "Теги",
                         "Дубли",
+                        "Теги",
                         "Коды вне Google",
                         "Источники",
-                    },
+                    ],
                 )
+                self.assertEqual(quality.active.title, "Сводка")
                 self.assertNotIn("Единицы и конвертация", quality.sheetnames)
                 empty_ws = quality["Позиции без кода"]
                 self.assertGreaterEqual(empty_ws.max_row, 2)
@@ -560,10 +577,14 @@ class DsBaselineSmokeTest(unittest.TestCase):
             try:
                 ws = empty_sidecar.active
                 self.assertEqual(ws.title, "Без кода")
+                self.assertEqual(empty_sidecar.active.title, "Без кода")
+                self.assertNotIn("Путь", [cell.value for cell in ws[1]])
                 sidecar_link = ws.cell(row=2, column=1).hyperlink
                 self.assertIsNotNone(sidecar_link)
-                sidecar_sheet = str(ws.cell(row=2, column=3).value or "")
-                sidecar_row = ws.cell(row=2, column=4).value
+                file_name = str(ws.cell(row=2, column=1).value or "")
+                self.assertGreaterEqual(ws.column_dimensions["A"].width, len(file_name) + 3)
+                sidecar_sheet = str(ws.cell(row=2, column=2).value or "")
+                sidecar_row = ws.cell(row=2, column=3).value
                 self.assertIn(sidecar_sheet, str(sidecar_link.location or ""))
                 self.assertIn(f"A{sidecar_row}", str(sidecar_link.location or ""))
                 self.assertIn(".xlsx", str(sidecar_link.target).casefold())
