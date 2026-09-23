@@ -753,9 +753,9 @@ def _id_boundary_ok(
     """True when ``remainder`` does not continue the matched source ID.
 
     ``4905_1`` must not collapse to ``4905`` when ``4905_1`` is an active id.
-    A bare ``_1`` at the end of the stem is not a file index. ``_1.`` /
-    ``_1_`` / ``_1 `` is an index of the shorter id
-    (``ДС_50_1._Спецификация`` → 50). A revision tail ``_24Б`` is a boundary.
+    A file index is ``_1`` at the end of the stem (``ДС4905_1.xlsx`` → 4905
+    when 4905_1 is not in the registry), ``_1.`` / ``_1_`` / ``_1 ``
+    (``ДС_50_1._Спецификация`` → 50), or a revision tail ``_24Б``.
     """
 
     if not remainder:
@@ -768,11 +768,7 @@ def _id_boundary_ok(
             index += 1
         if _registered_longer_id(source_id, remainder[1:index], active_ids):
             return False
-        if index < len(remainder) and remainder[index].isalpha():
-            return True
-        if index < len(remainder) and not remainder[index].isalnum():
-            return True
-        return False
+        return True
     return True
 
 
@@ -780,9 +776,10 @@ def _id_boundary_ok(
 def _filename_prefix_id(file_name: str, active_ids: Sequence[str]) -> str | None:
     """Read the DS number only from the start of the file name.
 
-    Accepted anchors: ``ДС13.xlsx``, ``ДС_50_1._…``, ``ДС4905_1.xlsx``,
-    ``ДС_75_Приложение…``. A specification number or an older DS mentioned
-    later (``№75``, ``ДС 70 на уменьшение``) is not an id.
+    Accepted anchors: ``ДС13.xlsx``, ``ДС_50_1._…``, ``ДС4905_1.xlsx``
+    (4905, unless ``4905_1`` is registered), ``ДС_75_Приложение…``.
+    A specification number or an older DS mentioned later (``№75``,
+    ``ДС 70 на уменьшение``) is not an id.
     """
 
     stem = Path(file_name).stem.strip()
@@ -810,8 +807,8 @@ def resolve_ds_source_id(
 
     The number is only the parent folder ``ДС_<id>`` / ``ДС<id>`` or the
     leading token of the file name. Text after that anchor is not searched.
-    ``4905_1`` never collapses to ``4905``. A file index ``_1.`` does not
-    create a new id.
+    ``ДС4905_1.xlsx`` belongs to 4905 unless ``4905_1`` itself is an active
+    registry id. A file index ``_1.`` does not create a new id.
     """
 
     if not active_ids:

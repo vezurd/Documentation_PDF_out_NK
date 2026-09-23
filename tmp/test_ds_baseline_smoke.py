@@ -321,9 +321,9 @@ class DsSourceIdResolveSmokeTest(unittest.TestCase):
         self.assertEqual(long_id.source_id, "4905_1")
         self.assertNotEqual(long_id.source_id, "4905")
 
-        only_short = resolve_ds_source_id("4905_1.xlsx", ("4905",))
-        self.assertIsNone(only_short.source_id)
-        self.assertEqual(only_short.method, "unresolved")
+        only_short = resolve_ds_source_id("ДС4905_1.xlsx", ("4905",))
+        self.assertEqual(only_short.source_id, "4905")
+        self.assertEqual(only_short.method, "filename_prefix")
 
         buried = resolve_ds_source_id("archive/copy_ДС88_ДС37.xlsx", active)
         self.assertEqual(buried.method, "unresolved")
