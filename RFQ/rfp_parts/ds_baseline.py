@@ -193,11 +193,22 @@ _FOOTER_NEEDLES = (
     "общая сумма",
     "передан через диадок",
     "банковские реквизиты",
+    "наименование банка",
+    "порядок оплаты",
+    "срок поставки",
     "инн ",
     "кпп ",
     "р/счет",
     "р/счёт",
+    "к/счет",
+    "к/счёт",
     "бик:",
+    "на основании устава",
+)
+_UNDERSCORE_RUN_RE = re.compile(r"_{4,}")
+_SIGNATURE_NAME_RE = re.compile(
+    r"/?[А-ЯЁA-Z][а-яёa-z]+[А-ЯЁA-Z]\.?[А-ЯЁA-Z]?\.?/?$",
+    re.IGNORECASE,
 )
 
 # More specific roles first so «Наименование … Поставщика» is not NAME.
@@ -1033,6 +1044,22 @@ def _has_footer_needle(text: object) -> bool:
     return any(needle in folded for needle in _FOOTER_NEEDLES)
 
 
+def _is_signature_text(value: object) -> bool:
+    """True for a footer signature, not for a procurement or 1C code.
+
+    Matches ``/Савва С.В./``, ``/Никифоров И.С./`` and a line of
+    underscores. Digit codes and product names do not match.
+    """
+
+    text = _cell_text(value).strip()
+    if not text:
+        return False
+    if _UNDERSCORE_RUN_RE.search(text):
+        return True
+    compact = "".join(text.split())
+    return _SIGNATURE_NAME_RE.fullmatch(compact) is not None
+
+
 def _is_contract_scaffold(
     *,
     code_normalized: str,
@@ -1043,11 +1070,18 @@ def _is_contract_scaffold(
     """True when the row is clause, signature, or bank text, not a position.
 
     A material row has a procurement code, a 1C code, a unit, or any
-    quantity cell (number, zero, formula, or non-numeric text). Title,
-    section, RD name, and supplier name alone are the contract footer
-    and must not raise empty-code or empty-qty.
+    quantity cell (number, zero, formula, or non-numeric text). A
+    signature in the 1C column is not a 1C code. Title, section, RD
+    name, and supplier name alone are the contract footer and must not
+    raise empty-code or empty-qty.
     """
 
+    if _is_signature_text(code_normalized):
+        code_normalized = ""
+    if _is_signature_text(code_1c):
+        code_1c = ""
+    if _is_signature_text(units):
+        units = ""
     if code_normalized or code_1c.strip() or units.strip():
         return False
     return qty_error == ISSUE_QTY_EMPTY
@@ -1059,13 +1093,24 @@ def _qty_formula_is_aggregate(text: object) -> bool:
 
 
 def _all_core_ref(shifted: Sequence[object]) -> bool:
+    """True when every filled core cell is ``#REF!`` and at least one is.
+
+    A blank cell does not keep the row: broken formulas under the table
+    leave one empty column and must not become quantity errors.
+    """
+
     if CORE_WIDTH <= 0:
         return False
+    saw_ref = False
     for index in range(CORE_WIDTH):
         value = shifted[index] if index < len(shifted) else None
-        if _cell_text(value).strip().casefold() != "#ref!":
+        text = _cell_text(value).strip().casefold()
+        if not text:
+            continue
+        if text != "#ref!":
             return False
-    return True
+        saw_ref = True
+    return saw_ref
 
 
 def _unit_words_in_text(text: object) -> tuple[str, ...]:
@@ -1766,6 +1811,10 @@ def _parse_open_workbook(
         has_formula = qty_col_index in formula_cols
         if has_formula:
             qty_probe_error = ISSUE_QTY_FORMULA
+        if _is_signature_text(qty_raw_text) or _is_signature_text(qty_formula_obj):
+            qty_probe = None
+            qty_probe_error = ISSUE_QTY_EMPTY
+            has_formula = False
         code_normalized = normalize_code(code)
         if _is_contract_scaffold(
             code_normalized=code_normalized,
@@ -2429,6 +2478,7 @@ def _write_quality_report(
     qty_ws.append(
         ["Уровень", "Код", "Файл", "Путь", "Лист", "Строка", "Сообщение"]
     )
+    qty_linked = 0
     for item in qty_issues:
         qty_ws.append(
             [
@@ -2442,6 +2492,14 @@ def _write_quality_report(
             ]
         )
         _mark_level(qty_ws.cell(row=qty_ws.max_row, column=1), item.level)
+        if qty_linked < _EXCEL_HYPERLINK_LIMIT and item.path:
+            if _set_jump_link(
+                qty_ws.cell(row=qty_ws.max_row, column=3),
+                item.path,
+                sheet=item.sheet,
+                excel_row=item.excel_row,
+            ):
+                qty_linked += 1
     _style_header(qty_ws, 7)
     qty_ws.column_dimensions["C"].width = 36
     qty_ws.column_dimensions["D"].width = 70
@@ -2469,6 +2527,7 @@ def _write_quality_report(
             ]
         )
         units_count = len(units_rows)
+        units_linked = 0
         for index, item in enumerate(units_rows, start=1):
             units_ws.append(
                 [
@@ -2488,6 +2547,14 @@ def _write_quality_report(
                     item.conversion_trace,
                 ]
             )
+            if units_linked < _EXCEL_HYPERLINK_LIMIT and item.path:
+                if _set_jump_link(
+                    units_ws.cell(row=units_ws.max_row, column=1),
+                    item.path,
+                    sheet=item.sheet,
+                    excel_row=item.excel_row,
+                ):
+                    units_linked += 1
             if index == 1 or index % 500 == 0 or index == units_count:
                 hb.tick(f"единицы {index}/{units_count}")
         _style_header(units_ws, 12)
@@ -2513,6 +2580,7 @@ def _write_quality_report(
             "Замечание",
         ]
     )
+    tags_linked = 0
     for item in positions:
         note = "; ".join(tag_notes.get((item.relpath, item.excel_row), ()))
         if not note:
@@ -2530,6 +2598,14 @@ def _write_quality_report(
                 note,
             ]
         )
+        if tags_linked < _EXCEL_HYPERLINK_LIMIT and item.path:
+            if _set_jump_link(
+                tags_ws.cell(row=tags_ws.max_row, column=1),
+                item.path,
+                sheet=item.sheet,
+                excel_row=item.excel_row,
+            ):
+                tags_linked += 1
     _style_header(tags_ws, 9)
     tags_ws.column_dimensions["A"].width = 36
     tags_ws.column_dimensions["B"].width = 70
@@ -2538,6 +2614,7 @@ def _write_quality_report(
     dup_ws.append(
         ["Уровень", "Код", "Файл", "Путь", "Лист", "Строка", "Сообщение"]
     )
+    dup_linked = 0
     for item in issues:
         if item.code not in {ISSUE_EXACT_DUPLICATE, ISSUE_TAG_DUPLICATE}:
             continue
@@ -2553,6 +2630,14 @@ def _write_quality_report(
             ]
         )
         _mark_level(dup_ws.cell(row=dup_ws.max_row, column=1), item.level)
+        if dup_linked < _EXCEL_HYPERLINK_LIMIT and item.path:
+            if _set_jump_link(
+                dup_ws.cell(row=dup_ws.max_row, column=3),
+                item.path,
+                sheet=item.sheet,
+                excel_row=item.excel_row,
+            ):
+                dup_linked += 1
     _style_header(dup_ws, 7)
     dup_ws.column_dimensions["C"].width = 36
     dup_ws.column_dimensions["D"].width = 70
@@ -2561,6 +2646,7 @@ def _write_quality_report(
     google_ws.append(
         ["Файл", "Путь", "Лист", "Строка", "Код", "Наименование", "Сообщение"]
     )
+    google_linked = 0
     for item in issues:
         if item.code != ISSUE_UNKNOWN_GOOGLE:
             continue
@@ -2575,6 +2661,14 @@ def _write_quality_report(
                 item.message,
             ]
         )
+        if google_linked < _EXCEL_HYPERLINK_LIMIT and item.path:
+            if _set_jump_link(
+                google_ws.cell(row=google_ws.max_row, column=1),
+                item.path,
+                sheet=item.sheet,
+                excel_row=item.excel_row,
+            ):
+                google_linked += 1
     pos_by_loc = {(p.relpath, p.excel_row): p for p in positions}
     for row in range(2, google_ws.max_row + 1):
         rel = str(google_ws.cell(row=row, column=1).value or "")

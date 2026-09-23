@@ -543,6 +543,16 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 self.assertIn(".xlsx", str(empty_link.target).casefold())
                 src_ws = quality["Источники"]
                 self.assertIsNotNone(src_ws.cell(row=2, column=2).hyperlink)
+                qty_ws = quality["Количества"]
+                self.assertGreaterEqual(qty_ws.max_row, 2)
+                qty_link = qty_ws.cell(row=2, column=3).hyperlink
+                self.assertIsNotNone(qty_link)
+                qty_sheet = str(qty_ws.cell(row=2, column=5).value or "")
+                qty_row = qty_ws.cell(row=2, column=6).value
+                self.assertIn(qty_sheet, str(qty_link.location or ""))
+                self.assertIn(f"A{qty_row}", str(qty_link.location or ""))
+                self.assertIn(".xlsx", str(qty_link.target).casefold())
+                self.assertIsNone(qty_ws.cell(row=2, column=4).hyperlink)
             finally:
                 quality.close()
 
@@ -819,6 +829,132 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 any(item.code == ISSUE_EMPTY_CODE for item in result.issues)
             )
             self.assertFalse(result.blocking, result.summary_line())
+
+    def test_contract_footer_without_material_fields_is_not_a_position(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            blank = [""] * 12
+
+            def clause(title: str = "", name: str = "") -> list[object]:
+                row = list(blank)
+                row[1] = title
+                row[5] = name
+                return row
+
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    DS_HEADER,
+                    _ds_row(npp=1, qty=2),
+                    clause(title="2. Условия уже отсечены отдельной фразой нет"),
+                    clause(title="Покупатель перечисляет денежные средства"),
+                    clause(name='ООО "Би.Си.Си."'),
+                    clause(title="к/счет: 30101810200000000823"),
+                    clause(name="___________________ / Сергеев С.Д. /"),
+                    _ds_row(
+                        npp=2,
+                        code="",
+                        code_1c="",
+                        name="Металлодетектор",
+                        units="шт",
+                        qty=2,
+                    ),
+                    _ds_row(
+                        npp=3,
+                        code="",
+                        code_1c="",
+                        name="Кабель без количества",
+                        units="м",
+                        qty=None,
+                    ),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            self.assertEqual(len(result.positions), 3)
+            self.assertEqual(
+                [item.excel_row for item in result.positions],
+                [2, 8, 9],
+            )
+            empty_codes = [
+                item for item in result.issues if item.code == ISSUE_EMPTY_CODE
+            ]
+            self.assertEqual([item.excel_row for item in empty_codes], [8, 9])
+            qty_empty = [
+                item for item in result.issues if item.code == ISSUE_QTY_EMPTY
+            ]
+            self.assertEqual([item.excel_row for item in qty_empty], [9])
+
+    def test_signature_and_ref_footer_are_not_positions(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            blank = [""] * 12
+
+            def put(column: int, text: str) -> list[object]:
+                row = list(blank)
+                row[column] = text
+                return row
+
+            ref_row = ["#REF!"] * 12
+            ref_row[2] = ""
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    DS_HEADER,
+                    _ds_row(npp=1, qty=2),
+                    put(6, "/Савва С.В./"),
+                    put(6, "/Никифоров И.С./"),
+                    put(6, "_________________________________________/Савва С."),
+                    put(11, "____________________________________/Григорьев М.С./"),
+                    ref_row,
+                    _ds_row(
+                        npp=2,
+                        code="",
+                        code_1c="002601499",
+                        name="Кабель без кода РД",
+                        units="",
+                        qty=None,
+                    ),
+                    _ds_row(
+                        npp=3,
+                        code="",
+                        code_1c="",
+                        name="Металлодетектор",
+                        units="шт",
+                        qty=2,
+                    ),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            self.assertEqual(
+                [item.excel_row for item in result.positions],
+                [2, 8, 9],
+            )
+            empty_codes = [
+                item.excel_row
+                for item in result.issues
+                if item.code == ISSUE_EMPTY_CODE
+            ]
+            self.assertEqual(empty_codes, [8, 9])
+            self.assertFalse(
+                any(item.code == ISSUE_QTY_FORMULA for item in result.issues)
+            )
+            self.assertFalse(
+                any(item.code == "qty_non_numeric" for item in result.issues)
+            )
+            qty_empty = [
+                item.excel_row
+                for item in result.issues
+                if item.code == ISSUE_QTY_EMPTY
+            ]
+            self.assertEqual(qty_empty, [8])
 
     def test_empty_code_row_stays_a_position(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
