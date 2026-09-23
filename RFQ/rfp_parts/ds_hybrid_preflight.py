@@ -30,6 +30,7 @@ from RFQ.rfp_parts.ds_baseline import (
     _tree_fingerprint,
     build_ds_baseline,
     collect_ds_workbooks,
+    latest_audit_report_dir,
 )
 from RFQ.rfp_parts.ds_registry import (
     DEFAULT_REGISTRY_PATH,
@@ -192,13 +193,14 @@ def copy_ds_sidecars_to_result_dir(
     stamp_dir: Path | str | None,
     result_dir: Path | str | None,
 ) -> list[Path]:
-    """Copy Russian-named DS/hybrid reports from the stable dir into result_dir.
+    """Copy Russian-named DS/hybrid reports from the latest stamp folder.
 
-    The net workbooks themselves are not copied. Missing sources are skipped.
-    ``OSError`` is printed and the file is skipped (not silent).
+    The net workbooks themselves are not copied. When ``stamp_dir`` contains
+    ``YYYY.MM.DD_HH.MM`` children, only the newest of those is read. Missing
+    sources are skipped. ``OSError`` is printed and the file is skipped.
 
     Args:
-        stamp_dir: ``_ds_baseline`` or ``_ds_hybrid`` folder beside the net.
+        stamp_dir: ``_ds_baseline``, ``_ds_hybrid``, or one stamp child.
         result_dir: Launch ``_результат_проверки_*`` folder.
 
     Returns:
@@ -207,7 +209,9 @@ def copy_ds_sidecars_to_result_dir(
 
     if stamp_dir is None or result_dir is None:
         return []
-    src_dir = Path(stamp_dir)
+    src_dir = latest_audit_report_dir(stamp_dir)
+    if src_dir is None:
+        return []
     dest_dir = Path(result_dir)
     try:
         if not src_dir.is_dir():
@@ -317,7 +321,7 @@ def ensure_ds_baseline_current(
     if result.blocking or result.baseline_path is None:
         raise DsBaselineBlockedError(
             result.summary_line(),
-            output_dir=out_dir,
+            output_dir=result.output_dir,
             result=result,
         )
     written = Path(result.baseline_path)
@@ -462,7 +466,7 @@ def ensure_ds_hybrid_current(
         if baseline_result.blocking or baseline_result.baseline_path is None:
             raise DsBaselineBlockedError(
                 baseline_result.summary_line(),
-                output_dir=ds_baseline_output_dir(reports),
+                output_dir=baseline_result.output_dir,
                 result=baseline_result,
             )
     hybrid_result = build_ds_rfp_hybrid(
@@ -478,7 +482,7 @@ def ensure_ds_hybrid_current(
     if hybrid_result.blocking or hybrid_result.hybrid_path is None:
         raise DsHybridBlockedError(
             hybrid_result.summary_line(),
-            output_dir=hybrid_dir,
+            output_dir=hybrid_result.output_dir,
             result=hybrid_result,
         )
     written = Path(hybrid_result.hybrid_path)

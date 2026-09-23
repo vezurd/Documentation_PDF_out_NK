@@ -1318,7 +1318,7 @@ def run_ds_baseline_job(
             kind="baseline",
             document=document,
             registry_format=fmt,
-            output_dir=reports,
+            output_dir=baseline.output_dir,
             source_root=source,
             ul_root=ul_path,
             baseline=baseline,
@@ -1326,7 +1326,7 @@ def run_ds_baseline_job(
             extra_warn=extra_warn,
         )
     )
-    result_path = baseline.baseline_path or reports
+    result_path = baseline.baseline_path or baseline.output_dir
     return DsJobResult(
         success=not baseline.blocking,
         message=snapshot.summary,
@@ -1423,7 +1423,7 @@ def run_ds_hybrid_job(
             kind="hybrid",
             document=document,
             registry_format=fmt,
-            output_dir=reports,
+            output_dir=hybrid.output_dir,
             source_root=source,
             rfp_root=rfp_path,
             ul_root=ul_path,

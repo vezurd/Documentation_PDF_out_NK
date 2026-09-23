@@ -563,6 +563,12 @@ class DsBaselineSmokeTest(unittest.TestCase):
             self.assertIsNotNone(result.baseline_path)
             self.assertTrue(result.baseline_path.is_file())
             self.assertEqual(result.baseline_path.name, BASELINE_XLSX_NAME)
+            self.assertEqual(result.baseline_path.parent, out_dir)
+            self.assertEqual(result.structure_report_path.parent.parent, out_dir)
+            self.assertRegex(
+                result.structure_report_path.parent.name,
+                r"^\d{4}\.\d{2}\.\d{2}_\d{2}\.\d{2}(?:_\d+)?$",
+            )
             self.assertTrue(result.structure_report_path.is_file())
             self.assertTrue(result.quality_report_path.is_file())
             self.assertIsNone(result.empty_code_report_path)

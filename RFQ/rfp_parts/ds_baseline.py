@@ -79,6 +79,8 @@ EMPTY_CODE_REPORT_PREFIX = "Отчет по позициям без кода - �
 DUPLICATE_TAGS_REPORT_PREFIX = "Отчет по дублям тегов - ДС"
 TAG_MISMATCH_REPORT_PREFIX = "Отчет по несоответствию тегов - ДС"
 STAMP_FORMAT = "%Y%m%d_%H%M%S"
+AUDIT_DIR_FORMAT = "%Y.%m.%d_%H.%M"
+_AUDIT_DIR_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}_\d{2}\.\d{2}(?:_\d+)?$")
 CORE_WIDTH = 12
 HEADER_SCAN_ROWS = 80
 SCAN_MAX_COL = 64
@@ -647,6 +649,68 @@ def _skip_reason(
         except OSError:
             pass
     return None
+
+
+def make_audit_stamp_dir(
+    parent: str | Path,
+    *,
+    when: datetime | None = None,
+) -> Path:
+    """Create ``parent/YYYY.MM.DD_HH.MM`` for one audit run.
+
+    Explorer name-sort then lists older runs above newer ones. A second run
+    in the same minute is ``_2``, ``_3``, and so on.
+
+    Args:
+        parent: Stable folder such as ``_ds_baseline``.
+        when: Folder clock. Default is now.
+
+    Returns:
+        The created directory.
+    """
+
+    root = Path(parent)
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = (when or datetime.now()).strftime(AUDIT_DIR_FORMAT)
+    candidate = root / stamp
+    if not candidate.exists():
+        candidate.mkdir()
+        return candidate
+    suffix = 2
+    while True:
+        candidate = root / f"{stamp}_{suffix}"
+        if not candidate.exists():
+            candidate.mkdir()
+            return candidate
+        suffix += 1
+
+
+def latest_audit_report_dir(directory: str | Path | None) -> Path | None:
+    """Return ``directory`` when it is a stamp folder, else its newest child.
+
+    Args:
+        directory: A stamp folder or the stable parent that contains them.
+
+    Returns:
+        The folder whose name sorts last, or ``directory`` when it has no
+        stamp children. ``None`` when ``directory`` is missing.
+    """
+
+    if directory is None:
+        return None
+    root = Path(directory)
+    if _AUDIT_DIR_RE.match(root.name):
+        return root
+    children: list[Path] = []
+    try:
+        for child in root.iterdir():
+            if child.is_dir() and _AUDIT_DIR_RE.match(child.name):
+                children.append(child)
+    except OSError:
+        return root
+    if not children:
+        return root
+    return max(children, key=lambda item: item.name)
 
 
 def collect_ds_workbooks(
@@ -2584,7 +2648,8 @@ def build_ds_baseline(
     Args:
         source_root: Recursive folder of DS xlsx/xlsm.
         registry: Already loaded canonical registry document.
-        output_dir: Destination for reports and the baseline. Required; never
+        output_dir: Stable folder for ``Свод ДС для запуска.xlsx``. Reports of
+            this run go into a ``YYYY.MM.DD_HH.MM`` child. Required; never
             defaults to UNC.
         write_baseline: When True, write ``Свод ДС для запуска.xlsx`` iff there
             are zero blocking issues.
@@ -2607,8 +2672,9 @@ def build_ds_baseline(
     """
 
     root = Path(source_root)
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    stable_dir = Path(output_dir)
+    stable_dir.mkdir(parents=True, exist_ok=True)
+    report_dir = make_audit_stamp_dir(stable_dir)
     stamp_value = stamp or datetime.now().strftime(STAMP_FORMAT)
     issues: list[DsBaselineIssue] = _copy_registry_issues(registry)
     if phase_callback is not None:
@@ -2730,12 +2796,12 @@ def build_ds_baseline(
     blocking = blocking_count > 0
     done_groups(f"{len(groups)} групп")
 
-    structure_path = out_dir / f"{STRUCTURE_REPORT_PREFIX}_{stamp_value}.xlsx"
-    quality_path = out_dir / f"{QUALITY_REPORT_PREFIX}_{stamp_value}.xlsx"
+    structure_path = report_dir / f"{STRUCTURE_REPORT_PREFIX}_{stamp_value}.xlsx"
+    quality_path = report_dir / f"{QUALITY_REPORT_PREFIX}_{stamp_value}.xlsx"
     summary_rows: list[tuple[str, object]] = [
         ("Корень ДС", root),
         ("Реестр", registry.path),
-        ("Папка отчётов", out_dir),
+        ("Папка отчётов", report_dir),
         ("Алгоритм", ALGORITHM_VERSION),
         ("Штамп", stamp_value),
         ("Файлов ДС", len(files)),
@@ -2780,7 +2846,7 @@ def build_ds_baseline(
     empty_code_path = None
     empty_code_rows = [item for item in positions if not item.code_normalized]
     if empty_code_rows:
-        empty_code_path = out_dir / f"{EMPTY_CODE_REPORT_PREFIX}_{stamp_value}.xlsx"
+        empty_code_path = report_dir / f"{EMPTY_CODE_REPORT_PREFIX}_{stamp_value}.xlsx"
         _write_sidecar_positions(
             empty_code_path,
             "Без кода",
@@ -2817,7 +2883,7 @@ def build_ds_baseline(
     dup_tag_issues = [item for item in issues if item.code == ISSUE_TAG_DUPLICATE]
     if dup_tag_issues:
         duplicate_tags_path = (
-            out_dir / f"{DUPLICATE_TAGS_REPORT_PREFIX}_{stamp_value}.xlsx"
+            report_dir / f"{DUPLICATE_TAGS_REPORT_PREFIX}_{stamp_value}.xlsx"
         )
         _write_sidecar_positions(
             duplicate_tags_path,
@@ -2842,7 +2908,7 @@ def build_ds_baseline(
     mismatch_issues = [item for item in issues if item.code == ISSUE_TAG_MISMATCH]
     if mismatch_issues:
         tag_mismatch_path = (
-            out_dir / f"{TAG_MISMATCH_REPORT_PREFIX}_{stamp_value}.xlsx"
+            report_dir / f"{TAG_MISMATCH_REPORT_PREFIX}_{stamp_value}.xlsx"
         )
         _write_sidecar_positions(
             tag_mismatch_path,
@@ -2866,13 +2932,13 @@ def build_ds_baseline(
     fractional_paths: tuple[Path, ...] = ()
     if conversion_plan is not None and conversion_plan.fractional_issues:
         fractional_paths = tuple(
-            write_fractional_conversion_logs(conversion_plan, out_dir)
+            write_fractional_conversion_logs(conversion_plan, report_dir)
         )
 
     baseline_path = None
     if write_baseline and not blocking:
         done_baseline = _phase_timer(phase_callback, f"запись {BASELINE_XLSX_NAME}")
-        target = out_dir / BASELINE_XLSX_NAME
+        target = stable_dir / BASELINE_XLSX_NAME
         tmp_path = target.with_name(
             f".{target.stem}.{os.getpid()}.tmp{target.suffix}"
         )
@@ -2890,7 +2956,7 @@ def build_ds_baseline(
 
     return DsBaselineResult(
         source_root=root,
-        output_dir=out_dir,
+        output_dir=report_dir,
         registry_path=registry.path,
         stamp=stamp_value,
         fingerprint=fingerprint,

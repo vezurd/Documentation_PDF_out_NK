@@ -330,7 +330,7 @@ class DsJobsSmokeTest(unittest.TestCase):
             self.assertTrue(
                 any(
                     path.name.startswith(HYBRID_REPORT_PREFIX)
-                    for path in reports.glob("*.xlsx")
+                    for path in reports.rglob("*.xlsx")
                 )
             )
 

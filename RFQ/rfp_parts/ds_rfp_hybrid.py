@@ -40,6 +40,7 @@ from RFQ.rfp_parts.analyze_rfp_parts import (
 )
 from RFQ.rfp_parts.ds_baseline import (
     BASELINE_XLSX_NAME,
+    _AUDIT_DIR_RE,
     DsBaselineIssue,
     DsBaselinePosition,
     DsBaselineResult,
@@ -55,6 +56,7 @@ from RFQ.rfp_parts.ds_baseline import (
     _set_path_cell,
     _style_header,
     _write_summary_sheet,
+    make_audit_stamp_dir,
 )
 from RFQ.rfp_parts.ds_identity import DsIdentity, parse_rfp_ds_identity
 from RFQ.rfp_parts.ds_registry import DsRegistryDocument
@@ -153,16 +155,24 @@ def find_latest_hybrid_report(directory: str | Path | None) -> Path | None:
     root = Path(directory)
     prefix = HYBRID_REPORT_PREFIX.casefold()
     matches: list[Path] = []
+    scan_dirs = [root]
     try:
-        for path in root.iterdir():
-            if not path.is_file():
-                continue
-            name = path.name
-            if name.startswith("~$"):
-                continue
-            folded = name.casefold()
-            if folded.startswith(prefix) and folded.endswith(".xlsx"):
-                matches.append(path)
+        for child in root.iterdir():
+            if child.is_dir() and _AUDIT_DIR_RE.match(child.name):
+                scan_dirs.append(child)
+    except OSError:
+        return None
+    try:
+        for folder in scan_dirs:
+            for path in folder.iterdir():
+                if not path.is_file():
+                    continue
+                name = path.name
+                if name.startswith("~$"):
+                    continue
+                folded = name.casefold()
+                if folded.startswith(prefix) and folded.endswith(".xlsx"):
+                    matches.append(path)
     except OSError:
         return None
     if not matches:
@@ -1017,8 +1027,10 @@ def build_ds_rfp_hybrid(
         baseline: Result of ``build_ds_baseline`` (positions already converted).
         registry: Loaded canonical registry (rfp_key ↔ group_id).
         rfp_root: Root-only folder of RFP workbooks.
-        output_dir: Destination for the report and hybrid. Required; never
-            defaults to UNC.
+        output_dir: Stable folder for ``Свод ДС-RFP для запуска.xlsx``. The audit
+            report goes into a ``YYYY.MM.DD_HH.MM`` child (the same child as
+            the baseline reports when they were just written here). Required;
+            never defaults to UNC.
         write_hybrid: When True, write ``Свод ДС-RFP для запуска.xlsx`` iff
             the baseline has zero blockers and this stage has zero global
             blockers.
@@ -1036,8 +1048,16 @@ def build_ds_rfp_hybrid(
     """
 
     root = Path(rfp_root)
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    stable_dir = Path(output_dir)
+    stable_dir.mkdir(parents=True, exist_ok=True)
+    baseline_reports = baseline.output_dir
+    if (
+        baseline_reports.parent == stable_dir
+        and _AUDIT_DIR_RE.match(baseline_reports.name)
+    ):
+        report_dir = baseline_reports
+    else:
+        report_dir = make_audit_stamp_dir(stable_dir)
     stamp_value = stamp or datetime.now().strftime(STAMP_FORMAT)
     issues: list[DsRfpHybridIssue] = []
     if not root.is_dir():
@@ -1452,12 +1472,12 @@ def build_ds_rfp_hybrid(
     fractional_paths: tuple[Path, ...] = ()
     if conversion_plan is not None and conversion_plan.fractional_issues:
         fractional_paths = tuple(
-            write_fractional_conversion_logs(conversion_plan, out_dir)
+            write_fractional_conversion_logs(conversion_plan, report_dir)
         )
 
     hybrid_path: Path | None = None
     if write_hybrid and not blocking:
-        target = out_dir / HYBRID_XLSX_NAME
+        target = stable_dir / HYBRID_XLSX_NAME
         tmp_path = target.with_name(
             f".{target.stem}.{os.getpid()}.tmp{target.suffix}"
         )
@@ -1471,11 +1491,11 @@ def build_ds_rfp_hybrid(
             tmp_path.unlink(missing_ok=True)
             raise
 
-    report_path = out_dir / hybrid_report_filename(stamp_value)
+    report_path = report_dir / hybrid_report_filename(stamp_value)
     summary_rows: list[tuple[str, object]] = [
         ("Корень RFP", root),
         ("Реестр", registry.path),
-        ("Папка отчётов", out_dir),
+        ("Папка отчётов", report_dir),
         ("Алгоритм", ALGORITHM_VERSION),
         ("Штамп", stamp_value),
         ("Fingerprint", fingerprint),
@@ -1511,7 +1531,7 @@ def build_ds_rfp_hybrid(
 
     return DsRfpHybridResult(
         rfp_root=root,
-        output_dir=out_dir,
+        output_dir=report_dir,
         registry_path=registry.path,
         stamp=stamp_value,
         fingerprint=fingerprint,

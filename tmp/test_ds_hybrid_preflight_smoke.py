@@ -232,7 +232,7 @@ class DsBaselinePreflightSmokeTest(unittest.TestCase):
             self.assertTrue(
                 any(
                     path.name.startswith(STRUCTURE_REPORT_PREFIX)
-                    for path in ds_baseline_output_dir(reports).glob("*.xlsx")
+                    for path in ds_baseline_output_dir(reports).rglob("*.xlsx")
                 )
             )
 
