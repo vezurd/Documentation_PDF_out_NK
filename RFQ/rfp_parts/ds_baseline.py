@@ -153,6 +153,58 @@ ISSUE_WORKBOOK = "workbook_read_error"
 ISSUE_UNITS_CONVERT = "units_conversion_error"
 ISSUE_REGISTRY = "registry_error"
 
+_LEVEL_LABELS = {
+    "ERROR": "Ошибка",
+    "WARN": "Предупреждение",
+    "OVERLAY": "Наложение",
+}
+_ISSUE_LABELS = {
+    ISSUE_UNRESOLVED_ID: "Номер ДС не найден",
+    ISSUE_AMBIGUOUS_ID: "Номер ДС неоднозначен",
+    ISSUE_MULTI_DATA_SHEET: "Несколько листов позиций",
+    ISSUE_NO_HEADER: "Нет шапки ДС",
+    ISSUE_INTERNAL_SHIFT: "Раскладка не A–L",
+    ISSUE_MISSING_ROLE: "Нет обязательной колонки",
+    ISSUE_NOT_ENOUGH_COLUMNS: "Мало столбцов",
+    ISSUE_QTY_FORMULA: "Формула в количестве",
+    ISSUE_QTY_EMPTY: "Пустое количество",
+    ISSUE_QTY_NON_NUMERIC: "Количество не число",
+    ISSUE_QTY_NON_FINITE: "Количество не конечное",
+    ISSUE_QTY_NEGATIVE: "Отрицательное количество",
+    ISSUE_QTY_ZERO: "Нулевое количество",
+    ISSUE_EMPTY_CODE: "Пустой закупочный код",
+    ISSUE_UNKNOWN_GOOGLE: "Код вне Google",
+    ISSUE_EXACT_DUPLICATE: "Дубль строки",
+    ISSUE_TAG_DUPLICATE: "Дубль тега",
+    ISSUE_TAG_MISMATCH: "Расхождение количества тега",
+    ISSUE_GROUP_FALLBACK: "Группа по имени файла",
+    ISSUE_WORKBOOK: "Файл не прочитан",
+    ISSUE_UNITS_CONVERT: "Ошибка конвертации",
+    ISSUE_REGISTRY: "Ошибка реестра",
+    "missing_source_id": "Нет номера ДС",
+    "duplicate_source_id": "Повтор номера ДС",
+    "missing_relation": "Нет связи в реестре",
+    "partial_block": "Неполный блок реестра",
+    "gapped_block": "Разрыв блока реестра",
+    "group_mismatch": "Разные данные номера",
+    "rfp_key_conflict": "Конфликт номера RFP",
+    "ul_required": "Нужна папка УЛ",
+    "filters_required": "Нужны фильтры",
+    "multi_link_needs_split": "Несколько связей",
+    "invalid_status": "Неверный статус",
+    "invalid_mode": "Неверный режим",
+    "ul_unparsed": "Папка УЛ не разобрана",
+    "ul_identity_mismatch": "Папка УЛ не совпала",
+    "ul_folder_missing": "Нет папки УЛ",
+    "ul_unexpected": "Лишняя папка УЛ",
+    "shared_ul_folder": "Общая папка УЛ",
+    "shared_rfp": "Общий файл RFP",
+    "duplicate_link": "Повтор связи",
+    "identity_split": "Разошлись данные номера",
+    "orphan_unassigned": "Файл не назначен",
+    "rfp_file_missing": "Нет файла RFP",
+}
+
 _EXCEL_SUFFIXES = frozenset({".xlsx", ".xlsm"})
 _WS_RE = re.compile(r"\s+")
 _TAG_SPLIT_RE = re.compile(r"[;,\n\r]+")
@@ -2189,6 +2241,29 @@ class RfQDsUnitsConverter:
 # ---------------------------------------------------------------------------
 
 
+def _level_label(level: str) -> str:
+    """Russian level shown in the summary workbook. Machine level stays on the issue."""
+
+    return _LEVEL_LABELS.get(level, level)
+
+
+def _issue_label(code: str) -> str:
+    """Russian issue name for column B. Unknown codes stay as stored."""
+
+    return _ISSUE_LABELS.get(code, code)
+
+
+def _fitted_column_width(values: Iterable[object], *, floor: float = 8) -> float:
+    """Width so header and cell text stay on one line. Cap keeps a stray long cell in check."""
+
+    longest = 0
+    for value in values:
+        if value is None:
+            continue
+        longest = max(longest, len(str(value)))
+    return float(min(80, max(longest + 3, floor)))
+
+
 def _filename_column_width(names: Iterable[object]) -> float:
     """Excel width so a DS filename stays on one line.
 
@@ -2311,8 +2386,8 @@ def _write_structure_report(
         file_names.append(item.relpath)
         problems.append(
             [
-                item.level,
-                item.code,
+                _level_label(item.level),
+                _issue_label(item.code),
                 item.relpath,
                 item.sheet,
                 item.excel_row,
@@ -2335,7 +2410,25 @@ def _write_structure_report(
         if index == 1 or index % 500 == 0 or index == issue_count:
             hb.tick(f"замечания {index}/{issue_count}")
     _style_header(problems, 8)
+    problems.column_dimensions["A"].width = _fitted_column_width(
+        ["Уровень", *(_level_label(item.level) for item in issues)]
+    )
+    problems.column_dimensions["B"].width = _fitted_column_width(
+        ["Код", *(_issue_label(item.code) for item in issues)]
+    )
     problems.column_dimensions["C"].width = _filename_column_width(file_names)
+    problems.column_dimensions["D"].width = _fitted_column_width(
+        ["Лист", *(item.sheet for item in issues)]
+    )
+    problems.column_dimensions["E"].width = _fitted_column_width(
+        ["Строка", *(item.excel_row for item in issues)]
+    )
+    problems.column_dimensions["F"].width = _fitted_column_width(
+        ["ID ДС", *(item.source_id for item in issues)]
+    )
+    problems.column_dimensions["G"].width = _fitted_column_width(
+        ["Группа", *(item.group_id for item in issues)]
+    )
     problems.column_dimensions["H"].width = 70
 
     summary = wb.create_sheet("Сводка")

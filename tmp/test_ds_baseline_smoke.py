@@ -498,6 +498,23 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 self.assertEqual(structure.sheetnames[0], "Проблемы строк")
                 self.assertEqual(structure.sheetnames[-3:], ["Файлы ДС", "Колонки", "Листы"])
                 self.assertEqual(structure.active.title, "Проблемы строк")
+                labels = {
+                    problems.cell(row=row, column=2).value
+                    for row in range(2, problems.max_row + 1)
+                }
+                levels = {
+                    problems.cell(row=row, column=1).value
+                    for row in range(2, problems.max_row + 1)
+                }
+                self.assertIn("Пустой закупочный код", labels)
+                self.assertNotIn("empty_procurement_code", labels)
+                self.assertIn("Ошибка", levels)
+                self.assertNotIn("ERROR", levels)
+                self.assertGreaterEqual(
+                    problems.column_dimensions["B"].width,
+                    len("Пустой закупочный код") + 3,
+                )
+                self.assertEqual(problems.column_dimensions["H"].width, 70)
                 jump = None
                 for row in problems.iter_rows(min_row=2, max_col=5):
                     link = row[2].hyperlink
