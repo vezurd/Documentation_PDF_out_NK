@@ -22,8 +22,6 @@ if str(ROOT) not in sys.path:
 import base.t_comm_initial_classes as t_com_init_cls
 from RFQ.rfp_parts.ds_baseline import (
     BASELINE_XLSX_NAME,
-    DUPLICATE_TAGS_REPORT_PREFIX,
-    EMPTY_CODE_REPORT_PREFIX,
     ISSUE_EMPTY_CODE,
     ISSUE_EXACT_DUPLICATE,
     ISSUE_GROUP_FALLBACK,
@@ -38,9 +36,7 @@ from RFQ.rfp_parts.ds_baseline import (
     ISSUE_TAG_MISMATCH,
     ISSUE_UNKNOWN_GOOGLE,
     ISSUE_UNRESOLVED_ID,
-    QUALITY_REPORT_PREFIX,
     STRUCTURE_REPORT_PREFIX,
-    TAG_MISMATCH_REPORT_PREFIX,
     IdentityDsUnitsConverter,
     _path_uri,
     build_ds_baseline,
@@ -417,31 +413,21 @@ class DsBaselineSmokeTest(unittest.TestCase):
             self.assertFalse((out_dir / BASELINE_XLSX_NAME).exists())
             self.assertIsNotNone(result.structure_report_path)
             self.assertTrue(result.structure_report_path.is_file())
-            self.assertTrue(result.quality_report_path.is_file())
-            self.assertTrue(result.empty_code_report_path.is_file())
-            self.assertTrue(result.duplicate_tags_report_path.is_file())
-            self.assertTrue(result.tag_mismatch_report_path.is_file())
+            self.assertIsNone(result.quality_report_path)
+            self.assertIsNone(result.empty_code_report_path)
+            self.assertIsNone(result.duplicate_tags_report_path)
+            self.assertIsNone(result.tag_mismatch_report_path)
             self.assertTrue(
                 result.structure_report_path.name.startswith(STRUCTURE_REPORT_PREFIX)
             )
-            self.assertTrue(
-                result.quality_report_path.name.startswith(QUALITY_REPORT_PREFIX)
-            )
             self.assertIn(STAMP, result.structure_report_path.name)
-            self.assertIn(STAMP, result.empty_code_report_path.name)
-            self.assertTrue(
-                result.empty_code_report_path.name.startswith(EMPTY_CODE_REPORT_PREFIX)
+            empty_msg = next(
+                item.message
+                for item in result.issues
+                if item.code == ISSUE_EMPTY_CODE and "Кабель" in item.message
             )
-            self.assertTrue(
-                result.duplicate_tags_report_path.name.startswith(
-                    DUPLICATE_TAGS_REPORT_PREFIX
-                )
-            )
-            self.assertTrue(
-                result.tag_mismatch_report_path.name.startswith(
-                    TAG_MISMATCH_REPORT_PREFIX
-                )
-            )
+            self.assertIn("2", empty_msg)
+            self.assertIn("шт", empty_msg)
 
             codes = {item.code for item in result.issues}
             self.assertIn(ISSUE_INTERNAL_SHIFT, codes)
@@ -532,65 +518,6 @@ class DsBaselineSmokeTest(unittest.TestCase):
             finally:
                 structure.close()
 
-            quality = _load_xlsx(result.quality_report_path)
-            try:
-                self.assertEqual(
-                    quality.sheetnames,
-                    [
-                        "Позиции без кода",
-                        "Количества",
-                        "Сводка",
-                        "Дубли",
-                        "Теги",
-                        "Коды вне Google",
-                        "Источники",
-                    ],
-                )
-                self.assertEqual(quality.active.title, "Позиции без кода")
-                self.assertNotIn("Единицы и конвертация", quality.sheetnames)
-                empty_ws = quality["Позиции без кода"]
-                self.assertGreaterEqual(empty_ws.max_row, 2)
-                empty_link = empty_ws.cell(row=2, column=1).hyperlink
-                self.assertIsNotNone(empty_link)
-                self.assertIsNone(empty_ws.cell(row=2, column=2).hyperlink)
-                empty_sheet = str(empty_ws.cell(row=2, column=3).value or "")
-                empty_row = empty_ws.cell(row=2, column=4).value
-                self.assertIn(empty_sheet, str(empty_link.location or ""))
-                self.assertIn(f"A{empty_row}", str(empty_link.location or ""))
-                self.assertIn(".xlsx", str(empty_link.target).casefold())
-                src_ws = quality["Источники"]
-                self.assertIsNotNone(src_ws.cell(row=2, column=2).hyperlink)
-                qty_ws = quality["Количества"]
-                self.assertGreaterEqual(qty_ws.max_row, 2)
-                qty_link = qty_ws.cell(row=2, column=3).hyperlink
-                self.assertIsNotNone(qty_link)
-                qty_sheet = str(qty_ws.cell(row=2, column=5).value or "")
-                qty_row = qty_ws.cell(row=2, column=6).value
-                self.assertIn(qty_sheet, str(qty_link.location or ""))
-                self.assertIn(f"A{qty_row}", str(qty_link.location or ""))
-                self.assertIn(".xlsx", str(qty_link.target).casefold())
-                self.assertIsNone(qty_ws.cell(row=2, column=4).hyperlink)
-            finally:
-                quality.close()
-
-            empty_sidecar = _load_xlsx(result.empty_code_report_path)
-            try:
-                ws = empty_sidecar.active
-                self.assertEqual(ws.title, "Без кода")
-                self.assertEqual(empty_sidecar.active.title, "Без кода")
-                self.assertNotIn("Путь", [cell.value for cell in ws[1]])
-                sidecar_link = ws.cell(row=2, column=1).hyperlink
-                self.assertIsNotNone(sidecar_link)
-                file_name = str(ws.cell(row=2, column=1).value or "")
-                self.assertGreaterEqual(ws.column_dimensions["A"].width, len(file_name) + 3)
-                sidecar_sheet = str(ws.cell(row=2, column=2).value or "")
-                sidecar_row = ws.cell(row=2, column=3).value
-                self.assertIn(sidecar_sheet, str(sidecar_link.location or ""))
-                self.assertIn(f"A{sidecar_row}", str(sidecar_link.location or ""))
-                self.assertIn(".xlsx", str(sidecar_link.target).casefold())
-            finally:
-                empty_sidecar.close()
-
             # Positions with empty CODE still present in memory.
             self.assertTrue(any(not item.code_normalized for item in result.positions))
 
@@ -641,7 +568,7 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 r"^\d{4}\.\d{2}\.\d{2}_\d{2}\.\d{2}(?:_\d+)?$",
             )
             self.assertTrue(result.structure_report_path.is_file())
-            self.assertTrue(result.quality_report_path.is_file())
+            self.assertIsNone(result.quality_report_path)
             self.assertIsNone(result.empty_code_report_path)
 
             by_source = {item.source_id: item for item in result.positions}
@@ -727,26 +654,6 @@ class DsBaselineSmokeTest(unittest.TestCase):
             bag8 = next(item for item in result.groups if item.group_id == "ДС8")
             self.assertFalse(bag8.fallback)
             self.assertFalse(bag8.overlay_blocked)
-
-            quality = _load_xlsx(result.quality_report_path)
-            try:
-                self.assertNotIn("Единицы и конвертация", quality.sheetnames)
-                self.assertEqual(
-                    set(quality.sheetnames),
-                    {
-                        "Сводка",
-                        "Позиции без кода",
-                        "Количества",
-                        "Теги",
-                        "Дубли",
-                        "Коды вне Google",
-                        "Источники",
-                    },
-                )
-                src_ws = quality["Источники"]
-                self.assertIsNotNone(src_ws.cell(row=2, column=2).hyperlink)
-            finally:
-                quality.close()
 
     def test_spec_header_with_tag_word_is_not_tag_column(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:

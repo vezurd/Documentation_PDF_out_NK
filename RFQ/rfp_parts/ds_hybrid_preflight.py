@@ -61,6 +61,7 @@ STATE_JSON_NAME = "ds_preflight_state.json"
 
 SIDECAR_NAME_PREFIXES: tuple[str, ...] = (
     STRUCTURE_REPORT_PREFIX,
+    "Отчет по структуре файлов - ДС",
     QUALITY_REPORT_PREFIX,
     EMPTY_CODE_REPORT_PREFIX,
     DUPLICATE_TAGS_REPORT_PREFIX,

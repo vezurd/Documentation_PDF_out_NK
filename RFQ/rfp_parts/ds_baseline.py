@@ -74,7 +74,7 @@ IssueLevel = Literal["ERROR", "WARN", "OVERLAY"]
 
 ALGORITHM_VERSION = "ds_baseline_v2"
 BASELINE_XLSX_NAME = "Свод ДС для запуска.xlsx"
-STRUCTURE_REPORT_PREFIX = "Отчет по структуре файлов - ДС"
+STRUCTURE_REPORT_PREFIX = "Сводный отчет по ошибкам - ДС"
 QUALITY_REPORT_PREFIX = "Отчет по качеству данных - ДС"
 EMPTY_CODE_REPORT_PREFIX = "Отчет по позициям без кода - ДС"
 DUPLICATE_TAGS_REPORT_PREFIX = "Отчет по дублям тегов - ДС"
@@ -305,6 +305,7 @@ _SKIP_NAME_PREFIXES = (
     "реестр дс",
     "свод_дс",
     "свод дс",
+    "сводный отчет по ошибкам - дс",
     "отчет по структуре файлов - дс_",
     "отчет по качеству данных - дс_",
     "отчет по позициям без кода - дс_",
@@ -1087,6 +1088,31 @@ def _is_contract_scaffold(
     return qty_error == ISSUE_QTY_EMPTY
 
 
+def _position_comment(
+    *,
+    name: str,
+    supplier: str,
+    code: str,
+    qty_text: str,
+    units: str,
+) -> str:
+    """Tail for a summary row: what the position is, without a second workbook."""
+
+    label = name.strip() or supplier.strip()
+    parts: list[str] = []
+    if label:
+        parts.append(label)
+    code_text = code.strip()
+    if code_text and not _is_signature_text(code_text):
+        parts.append(code_text)
+    amount = " ".join(part for part in (qty_text.strip(), units.strip()) if part)
+    if amount:
+        parts.append(amount)
+    if not parts:
+        return ""
+    return " · " + " · ".join(parts)
+
+
 def _qty_formula_is_aggregate(text: object) -> bool:
     folded = _cell_text(text).strip().casefold().replace(" ", "")
     return folded.startswith("=sum") or folded.startswith("=subtotal")
@@ -1823,12 +1849,19 @@ def _parse_open_workbook(
             qty_error=qty_probe_error,
         ):
             continue
+        detail = _position_comment(
+            name=name,
+            supplier=supplier,
+            code=code,
+            qty_text="" if _is_signature_text(qty_raw_text) else qty_raw_text,
+            units=units,
+        )
         if has_formula:
             issues.append(
                 _issue(
                     ISSUE_QTY_FORMULA,
                     "ERROR",
-                    f"в количестве формула {qty_raw_text or '(data_only пусто)'}",
+                    f"в количестве формула {qty_raw_text or '(data_only пусто)'}{detail}",
                     path=source.path,
                     relpath=source.relpath,
                     sheet=sheet_name,
@@ -1845,7 +1878,7 @@ def _parse_open_workbook(
                     _issue(
                         ISSUE_QTY_NEGATIVE,
                         "ERROR",
-                        f"отрицательное количество {qty_raw_text}",
+                        f"отрицательное количество {qty_raw_text}{detail}",
                         path=source.path,
                         relpath=source.relpath,
                         sheet=sheet_name,
@@ -1858,7 +1891,7 @@ def _parse_open_workbook(
                     _issue(
                         ISSUE_QTY_EMPTY,
                         "ERROR",
-                        "пустое количество",
+                        f"пустое количество{detail}",
                         path=source.path,
                         relpath=source.relpath,
                         sheet=sheet_name,
@@ -1871,7 +1904,7 @@ def _parse_open_workbook(
                     _issue(
                         ISSUE_QTY_NON_FINITE,
                         "ERROR",
-                        f"количество не конечное {qty_raw_text}",
+                        f"количество не конечное {qty_raw_text}{detail}",
                         path=source.path,
                         relpath=source.relpath,
                         sheet=sheet_name,
@@ -1884,7 +1917,7 @@ def _parse_open_workbook(
                     _issue(
                         ISSUE_QTY_NON_NUMERIC,
                         "ERROR",
-                        f"количество не число {qty_raw_text!r}",
+                        f"количество не число {qty_raw_text!r}{detail}",
                         path=source.path,
                         relpath=source.relpath,
                         sheet=sheet_name,
@@ -1897,7 +1930,7 @@ def _parse_open_workbook(
                     _issue(
                         ISSUE_QTY_ZERO,
                         "WARN",
-                        "нулевое количество",
+                        f"нулевое количество{detail}",
                         path=source.path,
                         relpath=source.relpath,
                         sheet=sheet_name,
@@ -1911,7 +1944,7 @@ def _parse_open_workbook(
                 _issue(
                     ISSUE_EMPTY_CODE,
                     "ERROR",
-                    "пустой закупочный код",
+                    f"пустой закупочный код{detail}",
                     path=source.path,
                     relpath=source.relpath,
                     sheet=sheet_name,
@@ -2254,7 +2287,7 @@ def _write_structure_report(
     issues: Sequence[DsBaselineIssue],
     progress: Callable[[str], None] | None = None,
 ) -> Path:
-    hb = DsHeartbeat(progress, "отчёт по структуре")
+    hb = DsHeartbeat(progress, "сводный отчёт")
     wb = Workbook()
     problems = wb.active
     assert problems is not None
@@ -2290,6 +2323,7 @@ def _write_structure_report(
         )
         excel_row = problems.max_row
         _mark_level(problems.cell(row=excel_row, column=1), item.level)
+        problems.cell(row=excel_row, column=8).alignment = _ALIGN_WRAP
         if linked < _EXCEL_HYPERLINK_LIMIT and item.path:
             if _set_jump_link(
                 problems.cell(row=excel_row, column=3),
@@ -3080,7 +3114,6 @@ def build_ds_baseline(
     done_groups(f"{len(groups)} групп")
 
     structure_path = report_dir / f"{STRUCTURE_REPORT_PREFIX}_{stamp_value}.xlsx"
-    quality_path = report_dir / f"{QUALITY_REPORT_PREFIX}_{stamp_value}.xlsx"
     summary_rows: list[tuple[str, object]] = [
         ("Корень ДС", root),
         ("Реестр", registry.path),
@@ -3100,7 +3133,7 @@ def build_ds_baseline(
     ]
     _emit_phase(
         phase_callback,
-        f"отчёт по структуре ({len(files)} файлов, {len(issues)} замечаний, "
+        f"сводный отчёт ({len(files)} файлов, {len(issues)} замечаний, "
         f"{len(positions)} позиций)",
     )
     _write_structure_report(
@@ -3113,105 +3146,6 @@ def build_ds_baseline(
         issues=issues,
         progress=phase_callback,
     )
-    _emit_phase(
-        phase_callback,
-        f"отчёт по качеству ({len(positions)} позиций)",
-    )
-    _write_quality_report(
-        quality_path,
-        result_head=summary_rows,
-        positions=positions,
-        issues=issues,
-        files=files,
-        progress=phase_callback,
-    )
-
-    empty_code_path = None
-    empty_code_rows = [item for item in positions if not item.code_normalized]
-    if empty_code_rows:
-        empty_code_path = report_dir / f"{EMPTY_CODE_REPORT_PREFIX}_{stamp_value}.xlsx"
-        _write_sidecar_positions(
-            empty_code_path,
-            "Без кода",
-            [
-                "Файл",
-                "Лист",
-                "Строка",
-                "ID ДС",
-                "Группа",
-                "Наименование",
-                "Кол-во",
-                "Ед. изм.",
-            ],
-            [
-                [
-                    item.relpath,
-                    item.sheet,
-                    item.excel_row,
-                    item.source_id,
-                    item.group_label,
-                    item.name,
-                    item.qty_raw,
-                    item.units,
-                ]
-                for item in empty_code_rows
-            ],
-            path_cols=(),
-            progress=phase_callback,
-            jump_links=True,
-            link_paths=[item.path for item in empty_code_rows],
-        )
-
-    duplicate_tags_path = None
-    dup_tag_issues = [item for item in issues if item.code == ISSUE_TAG_DUPLICATE]
-    if dup_tag_issues:
-        duplicate_tags_path = (
-            report_dir / f"{DUPLICATE_TAGS_REPORT_PREFIX}_{stamp_value}.xlsx"
-        )
-        _write_sidecar_positions(
-            duplicate_tags_path,
-            "Дубли тегов",
-            ["Файл", "Путь", "Лист", "Строка", "ID ДС", "Сообщение"],
-            [
-                [
-                    item.relpath,
-                    str(item.path) if item.path else "",
-                    item.sheet,
-                    item.excel_row,
-                    item.source_id,
-                    item.message,
-                ]
-                for item in dup_tag_issues
-            ],
-            path_cols=(1, 2),
-            progress=phase_callback,
-        )
-
-    tag_mismatch_path = None
-    mismatch_issues = [item for item in issues if item.code == ISSUE_TAG_MISMATCH]
-    if mismatch_issues:
-        tag_mismatch_path = (
-            report_dir / f"{TAG_MISMATCH_REPORT_PREFIX}_{stamp_value}.xlsx"
-        )
-        _write_sidecar_positions(
-            tag_mismatch_path,
-            "Несоответствие тегов",
-            ["Файл", "Путь", "Лист", "Строка", "ID ДС", "Сообщение"],
-            [
-                [
-                    item.relpath,
-                    str(item.path) if item.path else "",
-                    item.sheet,
-                    item.excel_row,
-                    item.source_id,
-                    item.message,
-                ]
-                for item in mismatch_issues
-            ],
-            path_cols=(1, 2),
-            progress=phase_callback,
-        )
-
     fractional_paths: tuple[Path, ...] = ()
     if conversion_plan is not None and conversion_plan.fractional_issues:
         fractional_paths = tuple(
@@ -3257,9 +3191,9 @@ def build_ds_baseline(
         blocking=blocking,
         baseline_path=baseline_path,
         structure_report_path=structure_path,
-        quality_report_path=quality_path,
-        empty_code_report_path=empty_code_path,
-        duplicate_tags_report_path=duplicate_tags_path,
-        tag_mismatch_report_path=tag_mismatch_path,
+        quality_report_path=None,
+        empty_code_report_path=None,
+        duplicate_tags_report_path=None,
+        tag_mismatch_report_path=None,
         fractional_log_paths=fractional_paths,
     )
