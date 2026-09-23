@@ -56,6 +56,7 @@ from RFQ.rfp_parts.ds_baseline import (
     _set_path_cell,
     _style_header,
     _write_summary_sheet,
+    _is_units_setup_error,
     make_audit_stamp_dir,
 )
 from RFQ.rfp_parts.ds_identity import DsIdentity, parse_rfp_ds_identity
@@ -1276,14 +1277,27 @@ def build_ds_rfp_hybrid(
                 )
                 item.extract_error = True
     except UnitsConversionError as exc:
-        issues.append(
-            _issue(
-                ISSUE_UNITS_CONVERT,
-                "ERROR",
-                str(exc),
-                global_blocker=True,
+        if _is_units_setup_error(exc):
+            print(
+                "Конвертация единиц пропущена "
+                f"({exc}). В отчёт по книгам ДС это не пишется.",
+                flush=True,
             )
-        )
+            batch = IdentityRfpUnitsConverter().convert_records(all_records)
+            converted = list(batch.converted)
+            offset = 0
+            for item, count in spans:
+                item.records = converted[offset : offset + count]
+                offset += count
+        else:
+            issues.append(
+                _issue(
+                    ISSUE_UNITS_CONVERT,
+                    "ERROR",
+                    str(exc),
+                    global_blocker=True,
+                )
+            )
 
     baseline_groups = {item.group_id: item for item in baseline.groups}
     positions_by_group: dict[str, list[DsBaselinePosition]] = defaultdict(list)

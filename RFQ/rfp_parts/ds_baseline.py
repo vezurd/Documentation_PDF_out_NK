@@ -2139,6 +2139,19 @@ def _identity_trace(
     )
 
 
+def _is_units_setup_error(exc: BaseException) -> bool:
+    """True when conversion was not given Google or the matrix.
+
+    That is a run setup failure. It must not become a row on the DS audit
+    sheet. A missing coefficient inside a real conversion stays a finding.
+    """
+
+    text = str(exc)
+    return (
+        "IdentityDsUnitsConverter" in text or "IdentityRfpUnitsConverter" in text
+    )
+
+
 class IdentityDsUnitsConverter:
     """Offline converter: identity qty/unit, status/trace preserved, no I/O."""
 
@@ -3156,13 +3169,22 @@ def build_ds_baseline(
                 _issue(ISSUE_UNITS_CONVERT, "WARN", warning, blocking=False)
             )
     except UnitsConversionError as exc:
-        issues.append(
-            _issue(
-                ISSUE_UNITS_CONVERT,
-                "ERROR",
-                str(exc),
+        if _is_units_setup_error(exc):
+            print(
+                "Конвертация единиц пропущена "
+                f"({exc}). В отчёт по книгам ДС это не пишется.",
+                flush=True,
             )
-        )
+            batch = IdentityDsUnitsConverter().convert_positions(positions)
+            positions = list(batch.converted)
+        else:
+            issues.append(
+                _issue(
+                    ISSUE_UNITS_CONVERT,
+                    "ERROR",
+                    str(exc),
+                )
+            )
     done_convert(f"{len(positions)} позиций")
 
     done_tags = _phase_timer(phase_callback, "дубли тегов между строками")

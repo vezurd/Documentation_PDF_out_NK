@@ -1044,6 +1044,26 @@ class DsBaselineTagDuplicateSmokeTest(unittest.TestCase):
                 phases,
             )
 
+    def test_missing_units_setup_is_not_a_report_issue(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(ds_root / "ДС13.xlsx", [DS_HEADER, _ds_row()])
+            registry = load_registry(registry_path)
+            result = build_ds_baseline(
+                ds_root,
+                registry,
+                out_dir,
+                write_baseline=False,
+                stamp=STAMP,
+            )
+            blob = "\n".join(item.message for item in result.issues)
+            self.assertNotIn("IdentityDsUnitsConverter", blob)
+            self.assertNotIn("google_index", blob)
+
 
 class DsBaselinePathUriSmokeTest(unittest.TestCase):
     def test_absolute_uri_does_not_call_resolve(self) -> None:

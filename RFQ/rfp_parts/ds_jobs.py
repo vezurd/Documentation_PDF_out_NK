@@ -40,11 +40,13 @@ from RFQ.rfp_parts.ds_baseline import (
     ISSUE_TAG_MISMATCH,
     ISSUE_UNKNOWN_GOOGLE,
     DsBaselineResult,
+    IdentityDsUnitsConverter,
     build_ds_baseline,
     collect_ds_workbooks,
     resolve_ds_source_id,
 )
 from RFQ.rfp_parts.ds_progress import DsFileProgressTracker, DsProgressSession
+from RFQ.units_convert.models import UnitsConversionError
 from RFQ.rfp_parts.ds_registry import (
     CANONICAL_REGISTRY_NAME,
     DEFAULT_REGISTRY_PATH,
@@ -1264,6 +1266,54 @@ def run_ds_registry_check_job(
     return DsJobResult(success=success, message=snapshot.summary, result_path=str(result_path))
 
 
+def _with_units_sources(kwargs: dict[str, Any], *, rfp: bool) -> dict[str, Any]:
+    """Attach Google and the units matrix unless the caller passed a converter.
+
+    A missing source is announced on the monitor and replaced with an identity
+    converter. That sentence is not a DS-workbook finding.
+    """
+
+    out = dict(kwargs)
+    ds_ready = out.get("converter") is not None or (
+        out.get("google_index") is not None and out.get("matrix_path")
+    )
+    rfp_ready = (not rfp) or out.get("rfp_converter") is not None or (
+        out.get("google_index") is not None and out.get("matrix_path")
+    )
+    if ds_ready and rfp_ready:
+        return out
+    try:
+        from RFQ.rfp_parts.ds_hybrid_preflight import _resolve_units_inputs
+        from RFQ.tags_rfp_compare.rfp_tags_utils import load_config
+
+        google, matrix = _resolve_units_inputs(
+            converter=None,
+            google_index=None,
+            matrix_path=None,
+            config=load_config(),
+        )
+        if google is None or matrix is None:
+            raise UnitsConversionError(
+                "конвертация ДС требует google_index и matrix_path; "
+                "для offline-тестов передайте IdentityDsUnitsConverter"
+            )
+    except Exception as exc:
+        _emit(
+            "Конвертация единиц пропущена "
+            f"({exc}). В отчёт по книгам ДС это не пишется."
+        )
+        if out.get("converter") is None:
+            out["converter"] = IdentityDsUnitsConverter()
+        if rfp and out.get("rfp_converter") is None:
+            from RFQ.rfp_parts.ds_rfp_hybrid import IdentityRfpUnitsConverter
+
+            out["rfp_converter"] = IdentityRfpUnitsConverter()
+        return out
+    out.setdefault("google_index", google)
+    out.setdefault("matrix_path", matrix)
+    return out
+
+
 def run_ds_baseline_job(
     source_root: str | Path | None = None,
     registry_path: str | Path | None = None,
@@ -1307,7 +1357,7 @@ def run_ds_baseline_job(
     session, _tracker, progress_hooks = _baseline_progress_hooks("ДС")
     audit_start = time.perf_counter()
     session.phase_start("аудит ДС")
-    merged_kwargs = {**kwargs, **progress_hooks}
+    merged_kwargs = {**_with_units_sources(kwargs, rfp=False), **progress_hooks}
     try:
         baseline = build_ds_baseline(source, document, reports, **merged_kwargs)
     except Exception as exc:
@@ -1384,6 +1434,7 @@ def run_ds_hybrid_job(
     extra_warn += migrate_warn
     if document is None:
         return _fail(load_err or "реестр не прочитан")
+    kwargs = _with_units_sources(kwargs, rfp=True)
     ds_kwargs = {
         key: value
         for key, value in kwargs.items()
