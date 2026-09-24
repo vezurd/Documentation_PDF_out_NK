@@ -1689,6 +1689,39 @@ def main() -> None:
         item.setData(rd_window._ROLE_MONITOR, None)
         window._apply_kits_filter()
         assert not window._kits_table.isRowHidden(0)
+        from rd_catalog.monitor_views import (
+            ROBOT_ORIGIN_FILL,
+            ROBOT_ORPHAN_FILL,
+        )
+
+        base_painted = window._kits_monitor_row_for(kit_row)
+        robot_cell = base_painted.cells["Робот МТО · рев."]
+        red_painted = replace(
+            base_painted,
+            robot_present=True,
+            cells={
+                **base_painted.cells,
+                "Робот МТО · рев.": replace(robot_cell, fill=ROBOT_ORPHAN_FILL),
+            },
+        )
+        green_painted = replace(
+            base_painted,
+            robot_present=True,
+            cells={
+                **base_painted.cells,
+                "Робот МТО · рев.": replace(robot_cell, fill=ROBOT_ORIGIN_FILL),
+            },
+        )
+        item.setData(rd_window._ROLE_MONITOR, red_painted)
+        window._kits_no_robot.setChecked(True)
+        assert not window._kits_table.isRowHidden(0)
+        item.setData(rd_window._ROLE_MONITOR, green_painted)
+        window._apply_kits_filter()
+        assert window._kits_table.isRowHidden(0)
+        item.setData(rd_window._ROLE_MONITOR, None)
+        window._kits_no_robot.setChecked(False)
+        window._apply_kits_filter()
+        assert not window._kits_table.isRowHidden(0)
         assert window._select_kit_row("5850", "SKUD")
         assert window._kits_table.currentRow() == 0
         assert window._tabs.tabText(window._tabs.indexOf(window._kits_tab)) == (

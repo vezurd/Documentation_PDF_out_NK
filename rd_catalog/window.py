@@ -288,6 +288,7 @@ from rd_catalog.monitor_views import (
     KitCardMonitor,
     KitsMonitorRow,
     MonitorCell,
+    ROBOT_ORPHAN_FILL,
     MtoKitFlags,
     auto_mto_rd_target,
     build_kits_monitor_row,
@@ -1148,6 +1149,20 @@ def _compact_diff(row: dict[str, Any]) -> str:
     return " ".join(parts) + (f"; {issues}" if issues else "")
 
 
+def _kits_no_robot_match(painted: KitsMonitorRow) -> bool:
+    """Return whether «Нет у робота» should keep this kit row.
+
+    Absent robot files stay visible. A present file stays visible only when
+    «Робот МТО · рев.» is painted orphan-red. Origin green and a confirmed
+    accept (green instead of red) stay hidden.
+    """
+
+    if not painted.robot_present:
+        return True
+    cell = painted.cells.get("Робот МТО · рев.")
+    return cell is not None and cell.fill == ROBOT_ORPHAN_FILL
+
+
 class CatalogWindow(QMainWindow):
     """Display persisted catalog state and orchestrate one background scan."""
 
@@ -1619,6 +1634,10 @@ class CatalogWindow(QMainWindow):
         filters.addWidget(self._kits_mismatch)
         self._kits_no_rd = QCheckBox("Нет в РД", tab)
         self._kits_no_robot = QCheckBox("Нет у робота", tab)
+        self._kits_no_robot.setToolTip(
+            "Нет файла у робота, либо ячейка «Робот МТО · рев.» залита красным "
+            "(файл есть, но это не копия РД и не копия SQ)."
+        )
         self._kits_no_google = QCheckBox("Нет в Google", tab)
         for box in (
             self._kits_no_rd,
@@ -4200,7 +4219,7 @@ class CatalogWindow(QMainWindow):
                 visible = False
             if require_no_rd and painted.rd_present:
                 visible = False
-            if require_no_robot and painted.robot_present:
+            if require_no_robot and not _kits_no_robot_match(painted):
                 visible = False
             if require_no_google and not painted.has_google_or_issuance:
                 visible = False
