@@ -11,9 +11,12 @@ import html
 from dataclasses import dataclass
 from pathlib import Path
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from RFQ.rfp_parts.analyze_rfp_parts import (
+    DEFAULT_REPORTS_BASE_DIR,
+    make_reports_out_dir,
     _cell,
     _choose_part_sheet,
     _find_header_on_sheet,
@@ -27,6 +30,11 @@ from RFQ.rfp_parts.analyze_rfp_parts import (
 from tags.tag_parser import get_tag
 
 _COPY_HEADERS = ("Имя файла", "Кол-во тегов", "Кол-во позиций", "Примечание")
+CENSUS_DIR_NAME = "_теги_позиций_RFP"
+CENSUS_XLSX_NAME = "Теги и позиции RFP.xlsx"
+_SUSPECT_FILL = PatternFill(fill_type="solid", fgColor="FFF8C5")
+_HEADER_FONT = Font(bold=True)
+_WRAP = Alignment(vertical="center", wrap_text=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,15 +225,55 @@ def scan_rfp_tag_census(rfp_root: str | Path) -> RfpTagCensus:
     return RfpTagCensus(rfp_root=root, rows=tuple(rows))
 
 
+def census_reports_dir() -> Path:
+    """Folder ``RFP сводный файл/_теги_позиций_RFP`` (not a parts stamp)."""
+    return DEFAULT_REPORTS_BASE_DIR / CENSUS_DIR_NAME
+
+
+def write_rfp_tag_census_xlsx(census: RfpTagCensus, dest: Path) -> Path:
+    """Write the census table. Suspect rows (positions, no tags) are yellow.
+
+    Args:
+        census: Scan result.
+        dest: Target ``.xlsx`` path. Parent folders are created.
+
+    Returns:
+        ``dest``.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Теги и позиции"
+    ws.append(list(_COPY_HEADERS))
+    for cell in ws[1]:
+        cell.font = _HEADER_FONT
+        cell.alignment = _WRAP
+    for row in census.rows:
+        ws.append([row.file_name, row.tag_count, row.position_count, row.note])
+        if row.suspect:
+            for cell in ws[ws.max_row]:
+                cell.fill = _SUSPECT_FILL
+    ws.auto_filter.ref = ws.dimensions
+    ws.freeze_panes = "A2"
+    ws.column_dimensions["A"].width = 52
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 36
+    wb.save(dest)
+    wb.close()
+    return dest
+
+
 def run_rfp_tag_census_job(rfp_root: str | Path) -> RfpTagCensusJobResult:
-    """Scan the RFP root and print a copyable table.
+    """Scan the RFP root, print a copyable table, and save an xlsx.
 
     Args:
         rfp_root: Folder ``RFP_Зиновьев``.
 
     Returns:
-        Success when the folder was read. The table stays in
-        :func:`get_last_rfp_tag_census`.
+        Success when the folder was read and the workbook was saved.
+        The table stays in :func:`get_last_rfp_tag_census`. ``result_path``
+        is the xlsx under ``_теги_позиций_RFP``.
     """
     global _last_census
     root = Path(rfp_root)
@@ -240,4 +288,14 @@ def run_rfp_tag_census_job(rfp_root: str | Path) -> RfpTagCensusJobResult:
     _last_census = census
     _emit(census.summary())
     _emit(census.copy_tsv())
-    return RfpTagCensusJobResult(True, census.summary(), None)
+    dest = make_reports_out_dir(base=census_reports_dir()) / CENSUS_XLSX_NAME
+    try:
+        write_rfp_tag_census_xlsx(census, dest)
+    except OSError as exc:
+        return RfpTagCensusJobResult(
+            False,
+            f"{census.summary()}. xlsx не записан: {exc}",
+            None,
+        )
+    _emit(str(dest))
+    return RfpTagCensusJobResult(True, f"{census.summary()}. {dest.name}", str(dest))

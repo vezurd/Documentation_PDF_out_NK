@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
-from RFQ.rfp_parts.rfp_tag_census import scan_rfp_tag_census
+from RFQ.rfp_parts.rfp_tag_census import scan_rfp_tag_census, write_rfp_tag_census_xlsx
 
 _HEADER = (
     "№ п/п",
@@ -61,6 +61,14 @@ class RfpTagCensusSmoke(unittest.TestCase):
             wb.close()
 
             census = scan_rfp_tag_census(folder)
+            xlsx = folder / "out.xlsx"
+            write_rfp_tag_census_xlsx(census, xlsx)
+            saved = load_workbook(xlsx, read_only=True, data_only=True)
+            try:
+                sheet = saved.active
+                values = list(sheet.iter_rows(values_only=True))
+            finally:
+                saved.close()
 
         by_name = {row.file_name: row for row in census.rows}
         self.assertEqual(by_name["b_real.xlsx"].tag_count, 1)
@@ -75,6 +83,10 @@ class RfpTagCensusSmoke(unittest.TestCase):
         self.assertIn("a_shifted_ds.xlsx\t0\t1", text)
         self.assertIn("<table", census.copy_html())
         self.assertEqual(census.suspect_count, 1)
+        self.assertEqual(values[0][0], "Имя файла")
+        self.assertEqual(values[1][0], "a_shifted_ds.xlsx")
+        self.assertEqual(values[1][1], 0)
+        self.assertEqual(values[1][2], 1)
 
 
 if __name__ == "__main__":

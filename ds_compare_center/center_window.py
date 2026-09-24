@@ -1251,11 +1251,16 @@ class CenterWindow(QWidget):
                 self._rfp_parts_panel.show_one_file_reports(Path(rp))
             return
         if self._last_job_title == _JOB_TITLE_RFP_TAGS:
-            self._rfp_parts_panel.monitor.finish_job(success, message, None)
+            self._rfp_parts_panel.monitor.finish_job(success, message, rp)
             if success:
                 census = get_last_rfp_tag_census()
                 if census is not None:
                     self._rfp_parts_panel.show_tag_census(census)
+            if success and rp and os.path.isfile(rp):
+                try:
+                    open_dir(str(Path(rp).parent))
+                except Exception:
+                    pass
             return
         if self._last_job_title in _JOB_TITLES_DS_COCKPIT:
             self._rfp_parts_panel.monitor.finish_job(success, message, rp)
