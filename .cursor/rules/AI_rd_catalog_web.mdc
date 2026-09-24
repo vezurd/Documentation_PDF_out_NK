@@ -54,11 +54,11 @@ WEB **не** писатель. Пустой `kit_pipeline` → пустые ли
 - АН vs-*: [`rd_catalog/an_compare.py`](rd_catalog/an_compare.py) (`AN_VS_*_FILL`)
 - pipeline fill: `status_colors.color_for`
 
-`TDO_STATUSES` (per-rev heatmap/worklist) = `{tdo_review, code_a, code_b, code_c}` — живёт в `monitor_views`, вкладки **импортируют**. Комплекты «Прошли ТДО» — **другое**: `pipeline.status in {tdo_review, agreed}`. Не смешивать.
+`TDO_STATUSES` (per-rev heatmap/worklist) = `{tdo_review, code_a, code_b, code_c}` — живёт в `monitor_views`, вкладки **импортируют**. Счётчик шапки Комплектов «ТДО» — **другое**: `kit_tdo_passed` (`pipeline.status in {tdo_review, agreed}`). Чекбокса «Прошли ТДО» на Комплектах нет. Не смешивать.
 
 API: `load_catalog_monitor(database, config) -> CatalogMonitor` (read-only). Ленивая карточка: `monitor.kit_card(title, mark)`. `as_json()` для FastAPI (`dataclasses.asdict`, enum → value). WEB кэш вызывает `load_catalog_monitor(..., sheets=WEB_MONITOR_SHEETS)` — только Комплекты + АН (heatmap/журнал/перечень/готовность/коллизии DTO не собираются). Qt по-прежнему `sheets=None` = все листы.
 
-Листы v1 и ключи колонок Комплектов — как `_KITS_HEADERS` в [`rd_catalog/window.py`](rd_catalog/window.py). `KitsMonitorRow.cells[header]`, плюс `kit_key`, `haystack`, флаги фильтров (`rd_present`, `kit_ok`, `code_a`, `kit_tdo_passed`, `as_build`, `has_mto_problem`, `an_closes_auto_mto`, …). `matrix` (`KitMatrixRow`) можно держать на Qt-стороне для open/copy; в JSON — пути пакетов, не Qt-объект.
+Листы v1 и ключи колонок Комплектов — как `_KITS_HEADERS` в [`rd_catalog/window.py`](rd_catalog/window.py). `KitsMonitorRow.cells[header]`, плюс `kit_key`, `haystack`, флаги фильтров (`rd_present`, `kit_ok`, `code_a`, `kit_tdo_passed`, `as_build`, `has_mto_problem`, `an_closes_auto_mto`, …). WEB «Скрыть Ок» (`#flt-hide-ok`, по умолчанию выключен) прячет строки с `kit_ok`. Чекбоксов «Прошли ТДО» и «АН закрывает Авто МТО» на Комплектах нет. `matrix` (`KitMatrixRow`) можно держать на Qt-стороне для open/copy; в JSON — пути пакетов, не Qt-объект.
 
 Heatmap: universe = present + canonical layout + не skip + не ban (как `_document_tree_kit_identities`). Колонки ревизий **не** переставлять. «РД · рев.» heatmap = official disk snapshot + суффикс ` AB`; если send/F нет в «Для передачи» — тот же статус `01-AN01 Нет в РД` и fill `rd_missing_transfer`.
 

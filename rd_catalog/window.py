@@ -1634,9 +1634,9 @@ class CatalogWindow(QMainWindow):
         self._kits_code_a.setToolTip(
             "Только комплекты с действующим кодом A."
         )
-        self._kits_tdo = QCheckBox("Прошли ТДО", tab)
-        self._kits_tdo.setToolTip(
-            "Комплекты, прошедшие ТДО (включая полученные коды)."
+        self._kits_hide_ok = QCheckBox("Скрыть Ок", tab)
+        self._kits_hide_ok.setToolTip(
+            "Скрыть комплекты, у которых в столбце «Ок» стоит «да»."
         )
         self._kits_no_as_build = QCheckBox("Без as-build", tab)
         self._kits_no_as_build.setToolTip(
@@ -1650,15 +1650,10 @@ class CatalogWindow(QMainWindow):
         self._kits_mto_problems.setToolTip(
             "Комплекты, где не хватает MTO или есть коллизии по ревизии."
         )
-        self._kits_an_closes = QCheckBox("АН закрывает Авто МТО", tab)
-        self._kits_an_closes.setToolTip(
-            "Комплекты, где файлы АН закрывают расхождение Авто МТО с MTO РД."
-        )
         for box in (
             self._kits_code_a,
-            self._kits_tdo,
+            self._kits_hide_ok,
             self._kits_mto_problems,
-            self._kits_an_closes,
         ):
             box.toggled.connect(self._apply_kits_filter)
             mto_filters.addWidget(box)
@@ -4184,13 +4179,10 @@ class CatalogWindow(QMainWindow):
         require_no_robot = self._kits_no_robot.isChecked()
         require_no_google = self._kits_no_google.isChecked()
         require_code_a = self._kits_code_a.isChecked()
-        require_tdo = self._kits_tdo.isChecked()
+        hide_ok = self._kits_hide_ok.isChecked()
         hide_as_build = self._kits_no_as_build.isChecked()
         require_as_build = self._kits_only_as_build.isChecked()
         require_mto_problems = self._kits_mto_problems.isChecked()
-        require_an_closes = (
-            hasattr(self, "_kits_an_closes") and self._kits_an_closes.isChecked()
-        )
         progress_rows: list[KitsMonitorRow] = []
         visible_count = 0
         for row_index in range(self._kits_table.rowCount()):
@@ -4214,15 +4206,13 @@ class CatalogWindow(QMainWindow):
                 visible = False
             if require_code_a and not painted.code_a:
                 visible = False
-            if require_tdo and not painted.kit_tdo_passed:
+            if hide_ok and painted.kit_ok:
                 visible = False
             if hide_as_build and painted.as_build:
                 visible = False
             if require_as_build and not painted.as_build:
                 visible = False
             if require_mto_problems and not painted.has_mto_problem:
-                visible = False
-            if require_an_closes and not painted.an_closes_auto_mto:
                 visible = False
             banned = row is not None and self._is_banned_pair(
                 row.title, row.mark, row.title_system
@@ -11326,14 +11316,13 @@ class CatalogWindow(QMainWindow):
             (self._kits_no_robot, "window/kits_filter_no_robot"),
             (self._kits_no_google, "window/kits_filter_no_google"),
             (self._kits_code_a, "window/kits_filter_code_a"),
-            (self._kits_tdo, "window/kits_filter_tdo"),
+            (self._kits_hide_ok, "window/kits_filter_hide_ok"),
             (self._kits_no_as_build, "window/kits_filter_no_as_build"),
             (
                 self._kits_only_as_build,
                 "window/kits_filter_only_as_build",
             ),
             (self._kits_mto_problems, "window/kits_filter_mto_problems"),
-            (self._kits_an_closes, "window/kits_filter_an_closes"),
         )
         widgets = (self._kits_filter, *(box for box, _key in boxes))
         for widget in widgets:
@@ -11375,7 +11364,7 @@ class CatalogWindow(QMainWindow):
             "window/kits_filter_code_a", self._kits_code_a.isChecked()
         )
         self._settings.setValue(
-            "window/kits_filter_tdo", self._kits_tdo.isChecked()
+            "window/kits_filter_hide_ok", self._kits_hide_ok.isChecked()
         )
         self._settings.setValue(
             "window/kits_filter_no_as_build",
@@ -11388,10 +11377,6 @@ class CatalogWindow(QMainWindow):
         self._settings.setValue(
             "window/kits_filter_mto_problems",
             self._kits_mto_problems.isChecked(),
-        )
-        self._settings.setValue(
-            "window/kits_filter_an_closes",
-            self._kits_an_closes.isChecked(),
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:

@@ -1284,11 +1284,13 @@ def main() -> None:
         assert history_headers.index("Статус MTO") == history_headers.index("AB") + 4
         assert window._mto_no_as_build.text() == "Без as-build"
         assert window._kits_code_a.text() == "Код A"
-        assert window._kits_tdo.text() == "Прошли ТДО"
+        assert window._kits_hide_ok.text() == "Скрыть Ок"
+        assert not window._kits_hide_ok.isChecked()
+        assert not hasattr(window, "_kits_tdo")
+        assert not hasattr(window, "_kits_an_closes")
         assert window._kits_no_as_build.text() == "Без as-build"
         assert window._kits_only_as_build.text() == "Только as-build"
         assert window._kits_mto_problems.text() == "Проблемы MTO"
-        assert window._kits_an_closes.text() == "АН закрывает Авто МТО"
         assert window._kits_legend_button.text() == rd_window.KITS_PAINT_LEGEND_BUTTON
         legend = KitsPaintLegendDialog(window._status_colors, window)
         assert legend.windowTitle()
@@ -1675,6 +1677,17 @@ def main() -> None:
         )
         window._apply_kits_filter()
         window._update_kits_tab_label()
+        assert not window._kits_table.isRowHidden(0)
+        ok_painted = replace(
+            window._kits_monitor_row_for(kit_row),
+            kit_ok=True,
+        )
+        item.setData(rd_window._ROLE_MONITOR, ok_painted)
+        window._kits_hide_ok.setChecked(True)
+        assert window._kits_table.isRowHidden(0)
+        window._kits_hide_ok.setChecked(False)
+        item.setData(rd_window._ROLE_MONITOR, None)
+        window._apply_kits_filter()
         assert not window._kits_table.isRowHidden(0)
         assert window._select_kit_row("5850", "SKUD")
         assert window._kits_table.currentRow() == 0

@@ -30,11 +30,10 @@
     tabBar: document.getElementById("tab-bar"),
     filterKits: document.getElementById("filter-kits"),
     codeA: document.getElementById("flt-code-a"),
-    tdo: document.getElementById("flt-tdo"),
+    hideOk: document.getElementById("flt-hide-ok"),
     noAb: document.getElementById("flt-no-ab"),
     onlyAb: document.getElementById("flt-only-ab"),
     mtoProblems: document.getElementById("flt-mto-problems"),
-    anCloses: document.getElementById("flt-an-closes"),
     legendBtn: document.getElementById("btn-kits-legend"),
     xlsxBtn: document.getElementById("btn-kits-xlsx"),
     legendDialog: document.getElementById("kits-legend-dialog"),
@@ -303,19 +302,17 @@
   function kitsFilterFn(needle) {
     const textFn = textFilter(needle);
     const codeA = els.codeA.checked;
-    const tdo = els.tdo.checked;
+    const hideOk = els.hideOk.checked;
     const noAb = els.noAb.checked;
     const onlyAb = els.onlyAb.checked;
     const mtoProblems = els.mtoProblems.checked;
-    const anCloses = els.anCloses.checked;
     return function (data) {
       if (textFn && !textFn(data)) return false;
       if (codeA && !data.code_a) return false;
-      if (tdo && !data.kit_tdo_passed) return false;
+      if (hideOk && data.kit_ok) return false;
       if (noAb && data.as_build) return false;
       if (onlyAb && !data.as_build) return false;
       if (mtoProblems && !data.has_mto_problem) return false;
-      if (anCloses && !data.an_closes_auto_mto) return false;
       return true;
     };
   }
@@ -996,7 +993,7 @@
         applyTabFilter(tabId);
       });
     });
-    [els.codeA, els.tdo, els.noAb, els.onlyAb, els.mtoProblems, els.anCloses].forEach(
+    [els.codeA, els.hideOk, els.noAb, els.onlyAb, els.mtoProblems].forEach(
       function (box) {
         box.addEventListener("change", function () {
           if (box === els.noAb && els.noAb.checked) els.onlyAb.checked = false;
