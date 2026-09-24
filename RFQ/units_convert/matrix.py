@@ -129,6 +129,19 @@ def _apply_source_names_to_row(
         )
 
 
+def _local_material_name(row: MatrixRow) -> str:
+    """Visible name for a code that is not in the Google base.
+
+    Column B stays empty otherwise, and the only copy of the name sits in a
+    comment on «Найденная ЕИ». Collision rows often have a different name per
+    unit, so every unique line is kept.
+    """
+    lines: list[str] = []
+    for pair in row.pairs:
+        lines.extend(str(pair.source_names or "").splitlines())
+    return format_source_name_comment(lines)
+
+
 @dataclass
 class MatrixPair:
     """One source-unit to coefficient mapping in the matrix."""
@@ -742,7 +755,7 @@ def reconcile_matrix(
             rows[code_norm] = row
         elif code_display_by_code.get(code_norm):
             row.code_display = code_display_by_code[code_norm]
-        row.google_name = google_name if google_norm else ""
+        row.google_name = google_name if google_norm else row.google_name
         previous_google = row.google_normalized
         previous_status = row.code_status
         bound_target = False
@@ -809,6 +822,8 @@ def reconcile_matrix(
             in_google=bool(google_norm),
             names_for_units=names_by_code.get(code_norm, {}),
         )
+        if not google_norm:
+            row.google_name = _local_material_name(row)
         _sort_pairs(row)
         if bound_target and _has_question_placeholder(row):
             row.code_status = STATUS_NEEDS_CLARIFICATION_RU

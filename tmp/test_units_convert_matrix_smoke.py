@@ -335,6 +335,7 @@ class UnitsConvertMatrixSmokeTest(unittest.TestCase):
         wb = load_workbook(self.matrix_path)
         try:
             ws = wb.active
+            self.assertEqual(ws["B2"].value, "Кабель силовой 1кВ")
             self.assertEqual(ws["E2"].value, "шт")
             comment = ws["E2"].comment
             self.assertIsNotNone(comment)
@@ -369,10 +370,36 @@ class UnitsConvertMatrixSmokeTest(unittest.TestCase):
         row = document.rows[0]
         self.assertEqual(row.code_status, "collision")
         self.assertEqual(row.google_normalized, "")
+        self.assertEqual(row.google_name, "")
         self.assertEqual(
             {pair.source_normalized for pair in row.pairs},
             {"шт", "м"},
         )
+
+    def test_collision_without_google_writes_both_names_to_column_b(self) -> None:
+        google = build_google_units_index([])
+        with self.assertRaises(UnitsConversionError):
+            build_conversion_plan(
+                [
+                    _request("r1", code="BCC0033", units="компл", qty="1", name="Щит распределительный"),
+                    _request("r2", code="BCC0033", units="шт", qty="1", name="Шкаф силовой"),
+                ],
+                google,
+                self.matrix_path,
+            )
+        document = load_matrix(self.matrix_path)
+        self.assertEqual(
+            document.rows[0].google_name,
+            "Щит распределительный\nШкаф силовой",
+        )
+        wb = load_workbook(self.matrix_path)
+        try:
+            self.assertEqual(
+                wb.active["B2"].value,
+                "Щит распределительный\nШкаф силовой",
+            )
+        finally:
+            wb.close()
 
     def test_matrix_google_column_resolves_collision_without_google_base(self) -> None:
         google = build_google_units_index([])
