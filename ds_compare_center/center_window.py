@@ -55,6 +55,10 @@ from RFQ.rfp_parts.one_file_check import (
     run_ul_one_file_job,
 )
 from RFQ.rfp_parts.pdf_rfp_extract import get_last_pdf_rfp_result, run_pdf_rfp_job
+from RFQ.rfp_parts.rfp_tag_census import (
+    get_last_rfp_tag_census,
+    run_rfp_tag_census_job,
+)
 from RFQ.tags_rfp_compare.ds_manager_roster import (
     get_last_ds_roster_compare,
     resolve_ds_manager_matrix_path,
@@ -149,6 +153,7 @@ _JOB_TITLE_DS_COVERAGE = "ДС: только покрытие"
 _JOB_TITLE_DS_REGISTRY = "ДС: проверить реестр"
 _JOB_TITLE_RFP_ONE = "RFP: проверить один файл"
 _JOB_TITLE_DS_ONE = "ДС: проверить один файл"
+_JOB_TITLE_RFP_TAGS = "RFP: теги и позиции"
 _JOB_TITLE_UL_ONE = "УЛ: проверить один файл"
 _JOB_TITLES_DS_COCKPIT = frozenset(
     {
@@ -316,6 +321,7 @@ class CenterWindow(QWidget):
             on_ds_registry=self._run_ds_registry,
             on_check_one_rfp=self._run_rfp_one_file,
             on_check_one_ds=self._run_ds_one_file,
+            on_rfp_tag_census=self._run_rfp_tag_census,
         )
         self._rfp_pdf_panel = RfpPdfPanel(
             on_run=self._run_rfp_pdf,
@@ -1058,6 +1064,15 @@ class CenterWindow(QWidget):
             mix_mode=read_collect_mix_mode(load_config()),
         )
 
+    def _run_rfp_tag_census(self) -> None:
+        paths = self._ds_job_paths()
+        self._start_job(
+            _JOB_TITLE_RFP_TAGS,
+            run_rfp_tag_census_job,
+            paths["rfp_root"],
+            job_tab="rfp_parts",
+        )
+
     def _run_ds_coverage(self) -> None:
         paths = self._ds_job_paths()
         self._start_job(
@@ -1234,6 +1249,13 @@ class CenterWindow(QWidget):
             self._rfp_parts_panel.monitor.finish_job(success, message, rp)
             if rp:
                 self._rfp_parts_panel.show_one_file_reports(Path(rp))
+            return
+        if self._last_job_title == _JOB_TITLE_RFP_TAGS:
+            self._rfp_parts_panel.monitor.finish_job(success, message, None)
+            if success:
+                census = get_last_rfp_tag_census()
+                if census is not None:
+                    self._rfp_parts_panel.show_tag_census(census)
             return
         if self._last_job_title in _JOB_TITLES_DS_COCKPIT:
             self._rfp_parts_panel.monitor.finish_job(success, message, rp)

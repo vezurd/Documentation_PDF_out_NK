@@ -145,7 +145,9 @@ Live-фазы в stdout Job monitor — префикс **`[parts timing]`** (`ru
 
 **Один файл.** Кнопка **«Проверить один файл RFP»** вызывает тот же `run_rfp_parts_analyze` (`only_files` — одна книга). Кнопка **«Проверить один файл ДС»** — тот же аудит, что сбор только из ДС (`only_paths`, `write_baseline=False`). УЛ — кнопка **«Проверить один файл УЛ»** на вкладке **ДС · Упаковочные листы** (`inspect_one_tsd_file`, тот же читатель листов). Отчёты: `RFP сводный файл/_проверка_одного_файла/{RFP|ДС|УЛ}/YYYY.MM.DD_HH.MM/`. Эта папка не штамп полного прогона: `rfp_parts_net.xlsx` Запуска, `Свод ДС для запуска.xlsx` и кэш УЛ остаются от общего сбора. Модуль: [one_file_check.py](RFQ/rfp_parts/one_file_check.py).
 
-На вкладке больше нет трёх кнопок «Собрать свод только из ДС» / «… из ДС и наложить RFP» / «Собрать свод частей RFP»: один свёрнутый блок (Сбор + Посадка RFP) и одна кнопка `Запуск (ДС+RFP · без смешения)`. «Посадка RFP» — mix, не выбор файла. Остаются «Проверить реестр», проверки одного файла, «Только имена и покрытие». Спека mix — [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc).
+На вкладке больше нет трёх кнопок «Собрать свод только из ДС» / «… из ДС и наложить RFP» / «Собрать свод частей RFP»: один свёрнутый блок (Сбор + Посадка RFP) и одна кнопка `Запуск (ДС+RFP · без смешения)`. «Посадка RFP» — mix, не выбор файла. Остаются «Проверить реестр», проверки одного файла, «Только имена и покрытие», **«Теги и позиции RFP»**. Спека mix — [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc).
+
+**Теги и позиции.** Кнопка читает только корень `RFP_Зиновьев` (без подпапок) и заполняет вкладку индикаторов «Теги RFP»: имя файла, число тегов оборудования (`get_tag`), число позиций (строка с кодом или наименованием). Жёлтая строка — позиции есть, тегов нет: похоже на ДС, у которого переставили столбцы. «Копировать в письмо» кладёт TSV и HTML-таблицу в буфер. Модуль: [rfp_tag_census.py](RFQ/rfp_parts/rfp_tag_census.py). Свод и штамп эта кнопка не пишет.
 
 Источник статуса — `rfp_parts_file_status.json`; если JSON ещё нет — сборка из `rfp_parts_sources.json` + `rfp_parts_diagnostics.xlsx`.
 
@@ -206,6 +208,7 @@ python tmp/test_rfp_supply_status_smoke.py
 python tmp/test_rfp_tag_count_mismatch_smoke.py
 python tmp/test_rfp_parts_timing_smoke.py
 python tmp/test_one_file_check_smoke.py
+python tmp/test_rfp_tag_census_smoke.py
 python tmp/test_rfp_native_settings_smoke.py
 python tmp/test_rfp_packing_compare_smoke.py
 python -X utf8 -m RFQ.rfp_parts --help

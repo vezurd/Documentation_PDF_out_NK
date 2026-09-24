@@ -7,10 +7,11 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QMimeData, Qt, QUrl
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -64,6 +65,7 @@ from RFQ.rfp_parts.file_status import (
     load_file_status_payload,
     resolve_duplicate_tags_xlsx,
 )
+from RFQ.rfp_parts.rfp_tag_census import RfpTagCensus, get_last_rfp_tag_census
 from RFQ.tags_rfp_compare.rfp_tags_utils import load_config
 from ds_compare_center.rfp_mix_blocks import RfpCollectJobBlock
 from ds_compare_center.rfp_mix_settings import (
@@ -130,6 +132,7 @@ _GROUP_HEADERS = (
 )
 _DS_FILE_HEADERS = ("Контур", "Файл", "ID / ключ", "Статус")
 _COVERAGE_HEADERS = ("Группа", "Файлы ДС", "RFP", "УЛ", "Статус")
+_TAG_CENSUS_HEADERS = ("Имя файла", "Кол-во тегов", "Кол-во позиций", "Примечание")
 _ACTION_COMMENT_STYLE = "color: #555; font-size: 11px;"
 _TAB_COLOR_EMPTY = QColor("#666666")
 _TAB_COLOR_ERROR = QColor("#b42318")
@@ -202,6 +205,7 @@ class RfpPartsPanel(QWidget):
         on_ds_registry: Callable[[], None] | None = None,
         on_check_one_rfp: Callable[[str], None] | None = None,
         on_check_one_ds: Callable[[str], None] | None = None,
+        on_rfp_tag_census: Callable[[], None] | None = None,
     ) -> None:
         """Create the panel.
 
@@ -214,6 +218,7 @@ class RfpPartsPanel(QWidget):
             on_ds_registry: Start ``run_ds_registry_check_job``.
             on_check_one_rfp: Start the parts collection on one workbook.
             on_check_one_ds: Start the DS baseline audit on one workbook.
+            on_rfp_tag_census: Scan the RFP root for tag and position counts.
         """
         super().__init__(parent)
         self._on_run = on_run
@@ -223,6 +228,7 @@ class RfpPartsPanel(QWidget):
         self._on_ds_registry = on_ds_registry
         self._on_check_one_rfp = on_check_one_rfp
         self._on_check_one_ds = on_check_one_ds
+        self._on_rfp_tag_census = on_rfp_tag_census
         self._last_reports_dir: Path | None = find_latest_rfp_parts_reports_dir()
         self._migrated_registry_path: Path | None = None
 
@@ -387,6 +393,16 @@ class RfpPartsPanel(QWidget):
         )
         btn_cov.clicked.connect(self._click_ds_coverage)
         v.addWidget(btn_cov, alignment=Qt.AlignmentFlag.AlignLeft)
+        self._add_action_with_comment(
+            box,
+            v,
+            "Теги и позиции RFP",
+            "Корень RFP_Зиновьев, без подпапок. Таблица: имя файла, "
+            "число тегов оборудования, число позиций. Позиции есть, тегов нет — "
+            "похоже на ДС с переставленными столбцами. "
+            "«Копировать в письмо» кладёт таблицу в буфер.",
+            self._click_rfp_tag_census,
+        )
         return box
 
     def _build_registry_next_group(self, parent: QWidget) -> QGroupBox:
@@ -506,6 +522,9 @@ class RfpPartsPanel(QWidget):
         self._tab_index_coverage = tabs.addTab(self._table_coverage, "Покрытие")
         self._tab_index_parts = tabs.addTab(
             self._build_file_status_page(tabs), "Части RFP"
+        )
+        self._tab_index_tags = tabs.addTab(
+            self._build_tag_census_page(tabs), "Теги RFP"
         )
         self._cockpit_tabs = tabs
         v.addWidget(tabs, stretch=1)
@@ -753,6 +772,64 @@ class RfpPartsPanel(QWidget):
             return preferred
         latest = find_latest_rfp_parts_reports_dir()
         return latest or preferred
+
+    def _build_tag_census_page(self, parent: QWidget) -> QWidget:
+        page = QWidget(parent)
+        page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        v = QVBoxLayout(page)
+        v.setContentsMargins(4, 4, 4, 4)
+        v.setSpacing(3)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        self._tag_census_summary = QLabel("Сканирование ещё не запускалось.", page)
+        self._tag_census_summary.setWordWrap(True)
+        row.addWidget(self._tag_census_summary, stretch=1)
+        self._btn_copy_tag_census = QPushButton("Копировать в письмо", page)
+        self._btn_copy_tag_census.setMinimumWidth(0)
+        self._btn_copy_tag_census.setEnabled(False)
+        self._btn_copy_tag_census.clicked.connect(self._copy_tag_census)
+        row.addWidget(self._btn_copy_tag_census)
+        v.addLayout(row)
+        self._tag_census_table = self._make_table(page, _TAG_CENSUS_HEADERS)
+        v.addWidget(self._tag_census_table, stretch=1)
+        return page
+
+    def show_tag_census(self, census: RfpTagCensus) -> None:
+        """Fill the «Теги RFP» table and keep it ready to copy."""
+        self._tag_census = census
+        table = self._tag_census_table
+        table.setRowCount(len(census.rows))
+        warn_fg, warn_bg = _TONE_COLORS["warn"]
+        for index, row in enumerate(census.rows):
+            values = (
+                row.file_name,
+                str(row.tag_count),
+                str(row.position_count),
+                row.note,
+            )
+            for col, text in enumerate(values):
+                item = QTableWidgetItem(text)
+                if row.suspect:
+                    item.setForeground(QBrush(warn_fg))
+                    item.setBackground(QBrush(warn_bg))
+                table.setItem(index, col, item)
+        self._tag_census_summary.setText(census.summary())
+        self._btn_copy_tag_census.setEnabled(bool(census.rows))
+        self._cockpit_tabs.setCurrentIndex(self._tab_index_tags)
+
+    def _copy_tag_census(self) -> None:
+        census = getattr(self, "_tag_census", None) or get_last_rfp_tag_census()
+        if census is None or not census.rows:
+            return
+        mime = QMimeData()
+        mime.setText(census.copy_tsv())
+        mime.setHtml(census.copy_html())
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setMimeData(mime)
+        self._tag_census_summary.setText(
+            census.summary() + ". Таблица скопирована."
+        )
 
     def _refresh_file_status(self) -> None:
         """Fill the left-pane file table from the latest stamp folder."""
@@ -1024,6 +1101,10 @@ class RfpPartsPanel(QWidget):
         self._persist_ds_paths()
         if self._on_ds_coverage is not None:
             self._on_ds_coverage()
+
+    def _click_rfp_tag_census(self) -> None:
+        if self._on_rfp_tag_census is not None:
+            self._on_rfp_tag_census()
 
     def _click_ds_registry(self) -> None:
         self._persist_ds_paths()
