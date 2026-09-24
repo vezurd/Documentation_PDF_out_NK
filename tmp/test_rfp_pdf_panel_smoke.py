@@ -51,6 +51,8 @@ class RfpPdfPanelSmokeTest(unittest.TestCase):
         self.assertIn("Выбрать PDF", texts)
         self.assertIn("Открыть xlsx", texts)
         self.assertIn("Открыть отчёт", texts)
+        self.assertIn("Открыть папку", texts)
+        self.assertFalse(panel._btn_open_dir.isEnabled())
         self.assertFalse(panel._btn_open_xlsx.isEnabled())
 
         panel.show_result(_fake_result())
@@ -62,6 +64,7 @@ class RfpPdfPanelSmokeTest(unittest.TestCase):
         self.assertIn("0", banner)
         self.assertTrue(panel._btn_open_xlsx.isEnabled())
         self.assertTrue(panel._btn_open_report.isEnabled())
+        self.assertTrue(panel._btn_open_dir.isEnabled())
         panel.close()
         panel.deleteLater()
         self.app.processEvents()

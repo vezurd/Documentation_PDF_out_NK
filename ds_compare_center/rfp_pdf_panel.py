@@ -64,6 +64,7 @@ class RfpPdfPanel(QWidget):
         self._last_previewed_path = ""
         self._xlsx_path: Path | None = None
         self._report_path: Path | None = None
+        self._out_dir: Path | None = None
         splitter, self.monitor = build_side_by_side(
             self, build_left=self._build_left, show_stop=False
         )
@@ -139,6 +140,11 @@ class RfpPdfPanel(QWidget):
         self._btn_open_report.setEnabled(False)
         self._btn_open_report.clicked.connect(self._open_report)
         open_row.addWidget(self._btn_open_report)
+        self._btn_open_dir = QPushButton("Открыть папку", box)
+        self._btn_open_dir.setMinimumWidth(0)
+        self._btn_open_dir.setEnabled(False)
+        self._btn_open_dir.clicked.connect(self._open_dir)
+        open_row.addWidget(self._btn_open_dir)
         open_row.addStretch(1)
         v.addLayout(open_row)
 
@@ -224,6 +230,7 @@ class RfpPdfPanel(QWidget):
         """
         self._xlsx_path = result.xlsx_path
         self._report_path = result.report_path
+        self._out_dir = result.out_dir
         ok = result.contract_errors == 0 and result.outside_words == 0
         self._banner.setText(
             f"Строк: {result.row_count}; ошибок контракта: {result.contract_errors}; "
@@ -248,12 +255,23 @@ class RfpPdfPanel(QWidget):
             table.setRowHeight(row_idx, _ROW_HEIGHT)
         self._btn_open_xlsx.setEnabled(True)
         self._btn_open_report.setEnabled(True)
+        self._btn_open_dir.setEnabled(True)
 
     def _open_xlsx(self) -> None:
         self._open_stored_path(self._xlsx_path, "Открыть xlsx")
 
     def _open_report(self) -> None:
         self._open_stored_path(self._report_path, "Открыть отчёт")
+
+    def _open_dir(self) -> None:
+        path = self._out_dir
+        if path is None or not Path(path).is_dir():
+            QMessageBox.information(self, "Открыть папку", "Папка ещё не создана.")
+            return
+        try:
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        except Exception as exc:
+            QMessageBox.warning(self, "Открыть папку", f"Не удалось открыть:\n{exc}")
 
     def _open_stored_path(self, path: Path | None, title: str) -> None:
         if path is None or not Path(path).is_file():

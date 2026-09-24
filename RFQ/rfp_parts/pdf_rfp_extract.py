@@ -69,6 +69,19 @@ _DS_AGREEMENT_RE = re.compile(
 _DS_BARE_RE = re.compile(r"№\s*(\d+)")
 _APPENDIX_PREFIX_RE = re.compile(r"приложен", re.IGNORECASE)
 _FURNITURE_WORDS = frozenset({"страница", "из"})
+_STAMP_NEAR_RE = re.compile(r"Диадок|Передан|GMT\+|Страница|[0-9a-fA-F]{8}-")
+_STAMP_WORD_RE = re.compile(
+    r"^(?:Передан|через|Диадок|Страница|из|"
+    r"GMT\+\d{2}:\d{2}|\d{2}:\d{2}|\d{2}\.\d{2}\.\d{4}|\d{1,4}|"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$",
+    re.IGNORECASE,
+)
+_STAMP_CELL_RE = re.compile(
+    r"Передан\s*через\s*Диадок|Диадок|GMT\+\d{2}:\d{2}|"
+    r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|"
+    r"Страница\s*\d+\s*из\s*\d+",
+    re.IGNORECASE,
+)
 _HEADER_NPP = "№ п/п"
 _GROUP_RD = "Закупка по РД"
 _GROUP_LOT = 'Закупка по "Лоту"'
@@ -209,6 +222,45 @@ def pdf_rfp_stamp_dir(pdf_path: Path, *, when: datetime | None = None) -> Path:
         suffix += 1
 
 
+def _rect_covers_table_word(rect: fitz.Rect, words: list[tuple]) -> bool:
+    """True when a stamp box also covers a table word (qty, unit, date)."""
+    for word in words:
+        token = str(word[4])
+        if _STAMP_WORD_RE.match(token):
+            continue
+        if rect.intersects(fitz.Rect(word[:4])):
+            return True
+    return False
+
+
+def strip_diadoc_from_cell(value: Any) -> str:
+    """Drop Diadoc fragments that share a cell with table text.
+
+    The UUID line sits on the same baseline as the lot quantity, so a
+    redaction rectangle would erase the number. Those glyphs stay in the
+    PDF and are removed from the cell string instead.
+
+    Args:
+        value: Raw cell text.
+
+    Returns:
+        Cell text without the transfer line, UUID, or stamp page counter.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    if not _STAMP_CELL_RE.search(text) and not re.search(
+        r"[0-9a-fA-F]{4,}-", text
+    ):
+        return text
+    cleaned = _STAMP_CELL_RE.sub(" ", text)
+    cleaned = re.sub(r"Передан|через|Диадок", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[0-9a-fA-F]{4,}-[0-9a-fA-F,-]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\d{1,2}\.\d{2}\.\d{4}", " ", cleaned)
+    cleaned = re.sub(r"\b\d{1,2}:\d{2}\b", " ", cleaned)
+    return cleaned
+
+
 def clean_code_cell(value: Any) -> str:
     """Glue wrapped identity text without joining semicolon/comma/blank-line lists.
 
@@ -227,7 +279,7 @@ def clean_code_cell(value: Any) -> str:
     """
     if value is None:
         return ""
-    text = str(value).replace("\xa0", " ").replace("\r", "")
+    text = strip_diadoc_from_cell(value).replace("\xa0", " ").replace("\r", "")
     if not text.strip():
         return ""
     pieces: list[str] = []
@@ -252,7 +304,7 @@ def clean_text_cell(value: Any) -> str:
     """
     if value is None:
         return ""
-    text = str(value).replace("\xa0", " ").replace("\r", " ")
+    text = strip_diadoc_from_cell(value).replace("\xa0", " ").replace("\r", " ")
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -289,10 +341,11 @@ def strip_diadoc_stamps(doc: fitz.Document) -> int:
             text_rects.append(anchor)
         if anchor is None:
             continue
-        # UUID and «Страница N из M» sit on the next lines of the same stamp.
-        # The document header uses the same words near the top of the page.
+        # Only the stamp cluster at the right. A full-width table row can
+        # share the same y and must not be painted over: a white box becomes
+        # an extra column for find_tables.
         band = fitz.Rect(
-            anchor.x0 - 20,
+            anchor.x0 - 30,
             anchor.y0 - 8,
             page.rect.x1,
             anchor.y1 + 36,
@@ -300,16 +353,30 @@ def strip_diadoc_stamps(doc: fitz.Document) -> int:
         rects = list(text_rects)
         for block in data.get("blocks", []):
             box = fitz.Rect(block["bbox"])
-            if box.y0 < page.rect.height * 0.5:
+            if box.x0 < anchor.x0 - 30 or not box.intersects(band):
                 continue
-            if not box.intersects(band):
-                continue
-            if block.get("type") == 0 and box in rects:
-                continue
-            if block.get("type") in (0, 1):
+            if block.get("type") == 1:
                 rects.append(box)
+                continue
+            if block.get("type") != 0:
+                continue
+            text = "".join(
+                span.get("text", "")
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            )
+            if _STAMP_NEAR_RE.search(text) and box not in rects:
+                rects.append(box)
+        words = page.get_text("words") or []
+        added = False
         for rect in rects:
-            page.add_redact_annot(rect, fill=(1, 1, 1))
+            if _rect_covers_table_word(rect, words):
+                continue
+            page.add_redact_annot(rect)
+            added = True
+        if not added:
+            pages_hit += 1
+            continue
         page.apply_redactions(
             images=fitz.PDF_REDACT_IMAGE_REMOVE,
             graphics=fitz.PDF_REDACT_LINE_ART_NONE,
