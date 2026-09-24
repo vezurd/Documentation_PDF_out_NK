@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -50,13 +51,13 @@ class RfpPdfPanel(QWidget):
         self,
         parent: QWidget | None = None,
         *,
-        on_run: Callable[[str, str], None] | None = None,
+        on_run: Callable[[str, str, bool], None] | None = None,
     ) -> None:
         """Create the panel.
 
         Args:
             parent: Qt parent.
-            on_run: Start the extract job with ``(pdf_path, ds_label)``.
+            on_run: Start the extract job with ``(pdf_path, ds_label, strip_stamp)``.
         """
         super().__init__(parent)
         self._on_run = on_run
@@ -109,6 +110,18 @@ class RfpPdfPanel(QWidget):
         self._ds_edit.setMinimumWidth(0)
         ds_row.addWidget(self._ds_edit, stretch=1)
         v.addLayout(ds_row)
+
+        self._chk_strip = QCheckBox(
+            "Удалить печать Диадок перед распознаванием",
+            box,
+        )
+        self._chk_strip.setChecked(True)
+        self._chk_strip.setToolTip(
+            "Снимает со всех листов надпись «Передан через Диадок», "
+            "номер страницы этой печати и значок. Исходный PDF не меняется; "
+            "очищенная копия пишется в папку результата."
+        )
+        v.addWidget(self._chk_strip)
 
         self._btn_run = QPushButton("Распознать", box)
         self._btn_run.setMinimumWidth(0)
@@ -197,7 +210,11 @@ class RfpPdfPanel(QWidget):
     def _click_run(self) -> None:
         if self._on_run is None:
             return
-        self._on_run(self._pdf_edit.text().strip(), self._ds_edit.text().strip())
+        self._on_run(
+            self._pdf_edit.text().strip(),
+            self._ds_edit.text().strip(),
+            self._chk_strip.isChecked(),
+        )
 
     def show_result(self, result: PdfRfpResult) -> None:
         """Update banner, issues table, and stored result paths.

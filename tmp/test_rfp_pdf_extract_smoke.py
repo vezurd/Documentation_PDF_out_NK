@@ -62,7 +62,7 @@ def _insert_ascii(page: fitz.Page, point: tuple[float, float], text: str, *, fon
     page.insert_text(point, text, fontsize=fontsize)
 
 
-def _build_synthetic_pdf(path: Path) -> None:
+def _build_synthetic_pdf(path: Path, *, diadoc: bool = False) -> None:
     doc = fitz.open()
     title = doc.new_page(width=1191, height=842)
     _insert_cyr(
@@ -141,6 +141,21 @@ def _build_synthetic_pdf(path: Path) -> None:
     _put(11, 2, "шт")
 
     _insert_ascii(page, (36.0, ys[-1] + 48.0), "ORPHAN", fontsize=12)
+    if diadoc:
+        _insert_cyr(
+            page,
+            (700.0, 790.0),
+            "Передан через Диадок 28.08.2025 17:34 GMT+03:00",
+            fontsize=8,
+        )
+        _insert_ascii(
+            page,
+            (700.0, 802.0),
+            "395e88f1-d12c-465a-a159-43ea777f1945",
+            fontsize=7,
+        )
+        _insert_cyr(page, (700.0, 814.0), "Страница 2 из 9", fontsize=8)
+        _insert_cyr(page, (980.0, 24.0), "Страница 1 из 8", fontsize=8)
     doc.save(path)
     doc.close()
 
@@ -220,6 +235,37 @@ class RfpPdfExtractSmokeTest(unittest.TestCase):
             self.assertIn("TAG-A", tags)
             self.assertIn("TAG-B", tags)
             self.assertNotIn("TAG-ATAG-B", tags)
+
+    def test_strip_diadoc_keeps_header_page_number(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pdf_path = tmp_path / "stamp.pdf"
+            out_dir = tmp_path / "out"
+            _build_synthetic_pdf(pdf_path, diadoc=True)
+            original = fitz.open(pdf_path)
+            try:
+                self.assertIn("Диадок", original[1].get_text())
+            finally:
+                original.close()
+
+            result = extract_rfp_pdf(pdf_path, out_dir=out_dir, strip_stamp=True)
+            self.assertIsNotNone(result.cleaned_pdf_path)
+            self.assertTrue(result.cleaned_pdf_path.is_file())
+            self.assertEqual(result.contract_errors, 0)
+            cleaned = fitz.open(result.cleaned_pdf_path)
+            try:
+                text = cleaned[1].get_text()
+            finally:
+                cleaned.close()
+            self.assertNotIn("Диадок", text)
+            self.assertNotIn("395e88f1", text)
+            self.assertNotIn("из\xa09", text)
+            self.assertIn("из\xa08", text)
+            source = fitz.open(pdf_path)
+            try:
+                self.assertIn("Диадок", source[1].get_text())
+            finally:
+                source.close()
 
 
 if __name__ == "__main__":

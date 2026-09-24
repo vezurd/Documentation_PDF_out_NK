@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 
 from RFQ.rfp_parts.pdf_rfp_extract import PdfRfpIssue, PdfRfpResult
 from ds_compare_center.center_window import _TAB_BY_NAME, _TAB_INDEX_RFP_PDF
@@ -44,6 +44,9 @@ class RfpPdfPanelSmokeTest(unittest.TestCase):
     def test_recognize_button_and_show_result(self) -> None:
         panel = RfpPdfPanel(on_run=lambda *a: None)
         texts = [btn.text() for btn in panel.findChildren(QPushButton)]
+        boxes = [box.text() for box in panel.findChildren(QCheckBox)]
+        self.assertTrue(any("Диадок" in text for text in boxes))
+        self.assertTrue(panel._chk_strip.isChecked())
         self.assertIn("Распознать", texts)
         self.assertIn("Выбрать PDF", texts)
         self.assertIn("Открыть xlsx", texts)

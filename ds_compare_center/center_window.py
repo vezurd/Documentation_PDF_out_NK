@@ -1112,7 +1112,9 @@ class CenterWindow(QWidget):
             job_tab="rfp_parts",
         )
 
-    def _run_rfp_pdf(self, pdf_path: str, ds_label: str) -> None:
+    def _run_rfp_pdf(
+        self, pdf_path: str, ds_label: str, strip_stamp: bool = False
+    ) -> None:
         if not pdf_path or not os.path.isfile(pdf_path):
             QMessageBox.warning(
                 self,
@@ -1120,7 +1122,13 @@ class CenterWindow(QWidget):
                 "Укажите существующий PDF-файл.",
             )
             return
-        self._start_job(_JOB_TITLE_RFP_PDF, run_pdf_rfp_job, pdf_path, ds_label)
+        self._start_job(
+            _JOB_TITLE_RFP_PDF,
+            run_pdf_rfp_job,
+            pdf_path,
+            ds_label,
+            strip_stamp,
+        )
 
     def _run_rfp_ds_id(self) -> None:
         self._start_job(_JOB_TITLE_RFP_DS_ID, run_ds_id_coverage_job)

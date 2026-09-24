@@ -118,6 +118,7 @@ class PdfRfpResult:
     contract_errors: int
     outside_words: int
     issues: tuple[PdfRfpIssue, ...]
+    cleaned_pdf_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -255,11 +256,74 @@ def clean_text_cell(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def strip_diadoc_stamps(doc: fitz.Document) -> int:
+    """Remove the Diadoc transfer line and its icon from every page.
+
+    The stamp is real text plus a small image in the bottom band, including
+    a page counter whose number changes per sheet. The document's own
+    «Страница N из M» in the header is a different block and is left in place.
+    Vector grid lines are kept.
+
+    Args:
+        doc: Open PDF, mutated in place.
+
+    Returns:
+        Number of pages where a stamp was redacted.
+    """
+    pages_hit = 0
+    for page in doc:
+        anchor: fitz.Rect | None = None
+        text_rects: list[fitz.Rect] = []
+        data = page.get_text("dict") or {}
+        for block in data.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            text = "".join(
+                span.get("text", "")
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            )
+            if "Диадок" not in text:
+                continue
+            anchor = fitz.Rect(block["bbox"])
+            text_rects.append(anchor)
+        if anchor is None:
+            continue
+        # UUID and «Страница N из M» sit on the next lines of the same stamp.
+        # The document header uses the same words near the top of the page.
+        band = fitz.Rect(
+            anchor.x0 - 20,
+            anchor.y0 - 8,
+            page.rect.x1,
+            anchor.y1 + 36,
+        )
+        rects = list(text_rects)
+        for block in data.get("blocks", []):
+            box = fitz.Rect(block["bbox"])
+            if box.y0 < page.rect.height * 0.5:
+                continue
+            if not box.intersects(band):
+                continue
+            if block.get("type") == 0 and box in rects:
+                continue
+            if block.get("type") in (0, 1):
+                rects.append(box)
+        for rect in rects:
+            page.add_redact_annot(rect, fill=(1, 1, 1))
+        page.apply_redactions(
+            images=fitz.PDF_REDACT_IMAGE_REMOVE,
+            graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+        )
+        pages_hit += 1
+    return pages_hit
+
+
 def extract_rfp_pdf(
     pdf_path: Path,
     *,
     out_dir: Path | None = None,
     ds_label: str | None = None,
+    strip_stamp: bool = False,
 ) -> PdfRfpResult:
     """Extract the materials table to xlsx plus ``pdf_rfp_report.txt``.
 
@@ -271,6 +335,8 @@ def extract_rfp_pdf(
         pdf_path: Source RFP PDF.
         out_dir: Stamp folder. Default is a dated folder next to the PDF.
         ds_label: Override for the DS filename prefix.
+        strip_stamp: When True, redact the Diadoc overlay before table extract
+            and write ``<stem>_без_печати.pdf`` into the result folder.
 
     Returns:
         Paths, row count, contract/outside counters, and issues.
@@ -284,8 +350,16 @@ def extract_rfp_pdf(
     started = time.perf_counter()
     _log_phase("старт", started, detail=pdf_path.name)
     doc = fitz.open(pdf_path)
+    cleaned_pdf: Path | None = None
     try:
         _log_phase("pdf открыт", started, detail=f"страниц {doc.page_count}")
+        stripped_pages = strip_diadoc_stamps(doc) if strip_stamp else 0
+        if strip_stamp:
+            _log_phase(
+                "печать Диадок",
+                started,
+                detail=f"снята на листах {stripped_pages}",
+            )
         page0_text = doc[0].get_text() if doc.page_count else ""
         if ds_label is None:
             raw_label = parse_ds_label_from_title_text(page0_text)
@@ -359,10 +433,15 @@ def extract_rfp_pdf(
 
         outside = _scan_outside_words(doc, page_tables)
         _log_phase("слова вне ячеек", started, detail=str(len(outside)))
+        stamp = Path(out_dir) if out_dir is not None else pdf_rfp_stamp_dir(pdf_path)
+        if stripped_pages:
+            stamp.mkdir(parents=True, exist_ok=True)
+            cleaned_pdf = stamp / f"{pdf_path.stem}_без_печати.pdf"
+            doc.save(cleaned_pdf, garbage=3, deflate=True)
+            _log_phase("pdf без печати", started, detail=cleaned_pdf.name)
     finally:
         doc.close()
 
-    stamp = Path(out_dir) if out_dir is not None else pdf_rfp_stamp_dir(pdf_path)
     stamp.mkdir(parents=True, exist_ok=True)
     _log_phase("папка результата", started, detail=str(stamp))
     xlsx_name = _xlsx_filename(chosen_label, pdf_path.stem)
@@ -395,6 +474,7 @@ def extract_rfp_pdf(
         outside_words=len(outside),
         issues=issues,
         outside=outside,
+        cleaned_pdf_path=cleaned_pdf,
     )
     _log_phase(
         "готово",
@@ -413,6 +493,7 @@ def extract_rfp_pdf(
         contract_errors=contract_errors,
         outside_words=len(outside),
         issues=tuple(issues),
+        cleaned_pdf_path=cleaned_pdf,
     )
 
 
@@ -947,6 +1028,7 @@ def _write_report(
     outside_words: int,
     issues: list[PdfRfpIssue],
     outside: list[_OutsideWord],
+    cleaned_pdf_path: Path | None = None,
 ) -> None:
     lines = [
         f"Метка ДС: {ds_label or '(нет)'}",
@@ -956,6 +1038,8 @@ def _write_report(
         "",
         "Замечания:",
     ]
+    if cleaned_pdf_path is not None:
+        lines.insert(4, f"PDF без печати: {cleaned_pdf_path.name}")
     if issues:
         for item in issues:
             loc = []
@@ -999,7 +1083,11 @@ class PdfRfpJobResult:
     result_path: str | None = None
 
 
-def run_pdf_rfp_job(pdf_path: str | Path, ds_label: str = "") -> PdfRfpJobResult:
+def run_pdf_rfp_job(
+    pdf_path: str | Path,
+    ds_label: str = "",
+    strip_stamp: bool = False,
+) -> PdfRfpJobResult:
     """Extract the PDF, remember the result for the GUI tab.
 
     ``ds_label`` is always forwarded to :func:`extract_rfp_pdf`, including an
@@ -1009,6 +1097,7 @@ def run_pdf_rfp_job(pdf_path: str | Path, ds_label: str = "") -> PdfRfpJobResult
     Args:
         pdf_path: Source RFP PDF.
         ds_label: Explicit DS prefix override.
+        strip_stamp: Redact the Diadoc overlay before recognition.
 
     Returns:
         Job result. ``result_path`` is the written xlsx.
@@ -1017,7 +1106,9 @@ def run_pdf_rfp_job(pdf_path: str | Path, ds_label: str = "") -> PdfRfpJobResult
         RuntimeError: Propagated from :func:`extract_rfp_pdf` (no half xlsx).
     """
     global _last_pdf_rfp_result
-    result = extract_rfp_pdf(Path(pdf_path), ds_label=ds_label)
+    result = extract_rfp_pdf(
+        Path(pdf_path), ds_label=ds_label, strip_stamp=strip_stamp
+    )
     _last_pdf_rfp_result = result
     print(
         f"ДС: {result.ds_label or '(нет)'}\n"
@@ -1025,7 +1116,8 @@ def run_pdf_rfp_job(pdf_path: str | Path, ds_label: str = "") -> PdfRfpJobResult
         f"Ошибок контракта: {result.contract_errors}\n"
         f"Слов вне ячеек: {result.outside_words}\n"
         f"xlsx: {result.xlsx_path}\n"
-        f"отчёт: {result.report_path}",
+        f"отчёт: {result.report_path}\n"
+        f"pdf без печати: {result.cleaned_pdf_path or '(нет)'}",
         flush=True,
     )
     summary = (
@@ -1046,6 +1138,7 @@ __all__ = (
     "clean_code_cell",
     "clean_text_cell",
     "extract_rfp_pdf",
+    "strip_diadoc_stamps",
     "get_last_pdf_rfp_result",
     "parse_ds_label_from_title_text",
     "pdf_rfp_stamp_dir",
