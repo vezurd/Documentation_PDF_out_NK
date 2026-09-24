@@ -111,6 +111,7 @@ _GUI_SPLITTER_KEYS = (
     "packing",
     "rfp_run",
     "rfp_parts",
+    "rfp_pdf",
     "rfp_ds_id",
     "rfp_ds_mp",
     "misc_run",

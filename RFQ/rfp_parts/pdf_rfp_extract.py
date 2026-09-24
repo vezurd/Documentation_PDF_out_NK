@@ -1,0 +1,910 @@
+"""Extract an RFP materials table from PDF into an xlsx workbook.
+
+Uses PyMuPDF ``page.find_tables()`` only (no pdfplumber / pdf_parsing_v2).
+Output lives under ``RFP сводный файл/_pdf_rfp/``, never in ``RFP_Зиновьев``.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable
+
+import fitz
+from openpyxl import Workbook, load_workbook
+
+from RFQ.rfp_parts.analyze_rfp_parts import (
+    DEFAULT_REPORTS_BASE_DIR,
+    EXPECTED_SHEET_NAME,
+    REQUIRED_FIELDS,
+    _is_total_row,
+    _match_header,
+    _parse_decimal,
+    _tags_text_contains_rfq,
+    make_reports_out_dir,
+)
+from RFQ.rfp_parts.file_status import format_field_list
+
+PDF_RFP_SUBDIR = "_pdf_rfp"
+REPORT_NAME = "pdf_rfp_report.txt"
+OUTSIDE_LIST_CAP = 50
+MATERIALS_HEADER_MARKERS = ("Наименование МТР", "Закупка по")
+IDENTITY_FIELDS = (
+    "DS_TITLE",
+    "DS_SPECIFICATION",
+    "TAGS",
+    "DS_CODE_1C",
+    "CODE",
+    "UNITS",
+    "VALUES",
+)
+# Comma between digits is a decimal/thousands mark (``1,000``), not a tag list.
+_SPLIT_KEEP_RE = re.compile(r"(;|\n\s*\n|(?<!\d),(?!\d))")
+# PyMuPDF + common Windows fonts remap ASCII '-' / ';' in extracted text.
+_PDF_CHAR_MAP = str.maketrans(
+    {
+        "\u00ad": "-",  # soft hyphen
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2212": "-",
+        "\u037e": ";",  # Greek question mark (Arial semicolon)
+        "\xa0": " ",
+    }
+)
+_DS_SLASH_RE = re.compile(
+    r"№\s*(\d+)\s*/\s*(\d+)([А-Яа-яЁё])?",
+    re.IGNORECASE,
+)
+_DS_AGREEMENT_RE = re.compile(
+    r"дополнительн\w*\s+соглашен\w*\s+№\s*(\d+)",
+    re.IGNORECASE,
+)
+_DS_BARE_RE = re.compile(r"№\s*(\d+)")
+_APPENDIX_PREFIX_RE = re.compile(r"приложен", re.IGNORECASE)
+_FURNITURE_WORDS = frozenset({"страница", "из"})
+_HEADER_NPP = "№ п/п"
+_GROUP_RD = "Закупка по РД"
+_GROUP_LOT = 'Закупка по "Лоту"'
+
+
+@dataclass(frozen=True)
+class PdfRfpIssue:
+    """One extract or post-check remark."""
+
+    level: str  # "ERROR" or "WARN"
+    message: str
+    page: int | None = None
+    row_number: str = ""
+
+
+@dataclass(frozen=True)
+class PdfRfpResult:
+    """Paths and counters after a successful extract (xlsx is always written)."""
+
+    xlsx_path: Path
+    report_path: Path
+    out_dir: Path
+    ds_label: str
+    row_count: int
+    contract_errors: int
+    outside_words: int
+    issues: tuple[PdfRfpIssue, ...]
+
+
+@dataclass(frozen=True)
+class _OutsideWord:
+    page: int
+    word: str
+    x: float
+    y: float
+
+
+def parse_ds_label_from_title_text(text: str) -> str:
+    """From title-page text return ``ДС98_35Б`` or ``""``.
+
+    Match a phrase like::
+
+        Приложение №2 к Дополнительному соглашению №98/35Б от 21.07.2026
+
+    Number before the slash is actual (98). Number after the slash is
+    historical (35). Optional Cyrillic letter after the historical number
+    is the revision (Б). Return ``ДС{actual}_{historical}{letter}`` with an
+    underscore, never a slash. If there is no slash, ``№98`` alone →
+    ``ДС98``. No match → empty string.
+
+    Args:
+        text: Raw text of the title page (or any haystack).
+
+    Returns:
+        Sanitized DS label, or an empty string.
+    """
+    if not text:
+        return ""
+    slash = _DS_SLASH_RE.search(text)
+    if slash:
+        actual, historical, letter = slash.group(1), slash.group(2), slash.group(3) or ""
+        return f"ДС{actual}_{historical}{letter.upper()}"
+    agreement = _DS_AGREEMENT_RE.search(text)
+    if agreement:
+        return f"ДС{agreement.group(1)}"
+    for match in _DS_BARE_RE.finditer(text):
+        prefix = text[max(0, match.start() - 24) : match.start()]
+        if _APPENDIX_PREFIX_RE.search(prefix):
+            continue
+        return f"ДС{match.group(1)}"
+    return ""
+
+
+def preview_ds_label(pdf_path: Path) -> str:
+    """Read page 0 text only and return :func:`parse_ds_label_from_title_text`.
+
+    Args:
+        pdf_path: RFP PDF path.
+
+    Returns:
+        Detected DS label, or an empty string.
+    """
+    doc = fitz.open(Path(pdf_path))
+    try:
+        if doc.page_count < 1:
+            return ""
+        return parse_ds_label_from_title_text(doc[0].get_text() or "")
+    finally:
+        doc.close()
+
+
+def pdf_rfp_stamp_dir(base: Path | None = None) -> Path:
+    """Return ``<RFP сводный файл>/_pdf_rfp/YYYY.MM.DD_HH.MM``.
+
+    Reuses the rfp-parts reports base (``DEFAULT_REPORTS_BASE_DIR`` /
+    ``rfp_parts_reports_base_dir``). If that minute folder exists, append
+    ``_2``, ``_3``, … The directory is not created here. Do not write into
+    ``RFP_Зиновьев``.
+
+    Args:
+        base: ``RFP сводный файл`` root. Default is
+            ``DEFAULT_REPORTS_BASE_DIR``.
+
+    Returns:
+        Unique stamp path under ``<base>/_pdf_rfp``.
+    """
+    parent = Path(base) if base is not None else DEFAULT_REPORTS_BASE_DIR
+    return make_reports_out_dir(base=parent / PDF_RFP_SUBDIR)
+
+
+def clean_code_cell(value: Any) -> str:
+    """Glue wrapped identity text without joining semicolon/comma/blank-line lists.
+
+    Replaces NBSP with space and drops ``\\r``. Splits on ``;``, a comma that
+    is not between digits, and a blank line (``\\n\\s*\\n``), keeping the
+    separator. ``1,000`` stays one token. Inside each non-separator piece,
+    deletes all whitespace (so ``8950-\\nSOT4`` becomes ``8950-SOT4`` and
+    ``1,\\n000`` becomes ``1,000``). Rejoins: semicolon and blank-line
+    separators become ``; ``, comma separators become ``, ``.
+
+    Args:
+        value: Raw cell value from ``find_tables`` extract.
+
+    Returns:
+        Cleaned identity string.
+    """
+    if value is None:
+        return ""
+    text = str(value).replace("\xa0", " ").replace("\r", "")
+    if not text.strip():
+        return ""
+    pieces: list[str] = []
+    for part in _SPLIT_KEEP_RE.split(text):
+        if part == ";" or (part.startswith("\n") and part.endswith("\n")):
+            pieces.append("; ")
+        elif part == ",":
+            pieces.append(", ")
+        else:
+            pieces.append("".join(ch for ch in part if not ch.isspace()))
+    return "".join(pieces).strip()
+
+
+def clean_text_cell(value: Any) -> str:
+    """Collapse prose-cell whitespace; do not invent missing tails.
+
+    Args:
+        value: Raw cell value from ``find_tables`` extract.
+
+    Returns:
+        NBSP-normalized text with all whitespace folded to a single space.
+    """
+    if value is None:
+        return ""
+    text = str(value).replace("\xa0", " ").replace("\r", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def extract_rfp_pdf(
+    pdf_path: Path,
+    *,
+    out_dir: Path | None = None,
+    ds_label: str | None = None,
+) -> PdfRfpResult:
+    """Extract the materials table to xlsx plus ``pdf_rfp_report.txt``.
+
+    ``ds_label=None`` detects the label from page 0. A passed string
+    (including ``""``) overrides detection. An empty label after sanitize
+    warns and names the xlsx from the PDF stem only.
+
+    Args:
+        pdf_path: Source RFP PDF.
+        out_dir: Stamp folder. Default is :func:`pdf_rfp_stamp_dir`.
+        ds_label: Override for the DS filename prefix.
+
+    Returns:
+        Paths, row count, contract/outside counters, and issues.
+
+    Raises:
+        RuntimeError: No materials table, or the header cannot be mapped.
+            No half xlsx is written in that case.
+    """
+    pdf_path = Path(pdf_path)
+    issues: list[PdfRfpIssue] = []
+    doc = fitz.open(pdf_path)
+    try:
+        page0_text = doc[0].get_text() if doc.page_count else ""
+        if ds_label is None:
+            raw_label = parse_ds_label_from_title_text(page0_text)
+        else:
+            raw_label = ds_label
+        chosen_label = _sanitize_ds_label(raw_label)
+        if not chosen_label:
+            issues.append(
+                PdfRfpIssue(
+                    "WARN",
+                    "не удалось определить метку ДС по титульному листу",
+                )
+            )
+
+        page_tables = _collect_materials_page_tables(doc)
+        if not page_tables:
+            raise RuntimeError(
+                "в PDF не найдена таблица материалов "
+                "(нет ячейки «Наименование МТР» или «Закупка по»)"
+            )
+
+        col_count = page_tables[0][2]
+        all_rows: list[list[str]] = []
+        for _page_index, table, ncols in page_tables:
+            extracted = _table_extract(table)
+            for raw_row in extracted:
+                all_rows.append(_pad_row(raw_row, ncols if ncols else col_count))
+
+        header_row, left_cols, right_cols = _find_materials_header(all_rows)
+        if header_row is None or right_cols is None or left_cols is None:
+            raise RuntimeError(
+                "не удалось разобрать шапку таблицы материалов "
+                f"(нужны столбцы: {format_field_list(REQUIRED_FIELDS)})"
+            )
+
+        identity_idx = _identity_column_indexes(left_cols, right_cols)
+        data_rows = [
+            row
+            for row in all_rows
+            if not _is_dropped_header_or_total(row)
+        ]
+        cleaned_rows = [
+            _clean_data_row(row, identity_idx) for row in data_rows
+        ]
+        code_idx = right_cols.get("CODE", left_cols.get("CODE"))
+        if code_idx is not None:
+            for excel_offset, row in enumerate(cleaned_rows, start=3):
+                code = row[code_idx] if code_idx < len(row) else ""
+                if _code_looks_truncated_agcc(code):
+                    issues.append(
+                        PdfRfpIssue(
+                            "WARN",
+                            (
+                                f"код «{code}» похож на номер документа AGCC "
+                                "и обрезан (не заканчивается цифрой)"
+                            ),
+                            row_number=str(excel_offset),
+                        )
+                    )
+
+        outside = _scan_outside_words(doc, page_tables)
+    finally:
+        doc.close()
+
+    stamp = Path(out_dir) if out_dir is not None else pdf_rfp_stamp_dir()
+    stamp.mkdir(parents=True, exist_ok=True)
+    xlsx_name = _xlsx_filename(chosen_label, pdf_path.stem)
+    xlsx_path = stamp / xlsx_name
+    _write_materials_xlsx(
+        xlsx_path,
+        header_row=header_row,
+        data_rows=cleaned_rows,
+        left_cols=left_cols,
+        right_cols=right_cols,
+        col_count=max(col_count, len(header_row)),
+    )
+
+    issues.extend(_contract_check(xlsx_path))
+    if outside:
+        issues.append(
+            PdfRfpIssue(
+                "WARN",
+                f"на страницах материалов есть слова вне ячеек таблицы: {len(outside)}",
+            )
+        )
+
+    contract_errors = sum(1 for item in issues if item.level == "ERROR")
+    report_path = stamp / REPORT_NAME
+    _write_report(
+        report_path,
+        ds_label=chosen_label,
+        row_count=len(cleaned_rows),
+        contract_errors=contract_errors,
+        outside_words=len(outside),
+        issues=issues,
+        outside=outside,
+    )
+    return PdfRfpResult(
+        xlsx_path=xlsx_path,
+        report_path=report_path,
+        out_dir=stamp,
+        ds_label=chosen_label,
+        row_count=len(cleaned_rows),
+        contract_errors=contract_errors,
+        outside_words=len(outside),
+        issues=tuple(issues),
+    )
+
+
+def _sanitize_ds_label(raw: str) -> str:
+    """Keep ДС / digits / underscore / Cyrillic; replace slash with underscore."""
+    text = (raw or "").replace("/", "_")
+    kept = "".join(
+        ch
+        for ch in text
+        if ch.isdigit() or ch == "_" or _is_cyrillic_letter(ch)
+    )
+    return kept.upper()
+
+
+def _is_cyrillic_letter(ch: str) -> bool:
+    return "\u0400" <= ch <= "\u04FF"
+
+
+def _xlsx_filename(ds_label: str, pdf_stem: str) -> str:
+    if ds_label:
+        return f"{ds_label}. {pdf_stem}.xlsx"
+    return f"{pdf_stem}.xlsx"
+
+
+def _table_extract(table: Any) -> list[list[Any]]:
+    extracted = table.extract() or []
+    return [list(row) for row in extracted]
+
+
+def _table_col_count(table: Any, extracted: list[list[Any]]) -> int:
+    n = getattr(table, "col_count", None)
+    if isinstance(n, int) and n > 0:
+        return n
+    return max((len(row) for row in extracted), default=0)
+
+
+def _table_area(table: Any) -> float:
+    bbox = getattr(table, "bbox", None)
+    if bbox is None:
+        return 0.0
+    x0, y0, x1, y1 = bbox
+    return max(0.0, float(x1 - x0) * float(y1 - y0))
+
+
+def _normalize_pdf_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).translate(_PDF_CHAR_MAP)
+
+
+def _pad_row(row: Iterable[Any], col_count: int) -> list[str]:
+    values = [_normalize_pdf_text(cell) for cell in row]
+    if len(values) < col_count:
+        values.extend([""] * (col_count - len(values)))
+    return values[:col_count] if col_count else values
+
+
+def _row_has_materials_marker(row: Iterable[Any]) -> bool:
+    for cell in row:
+        text = _normalize_pdf_text(cell)
+        if any(marker in text for marker in MATERIALS_HEADER_MARKERS):
+            return True
+    return False
+
+
+def _is_materials_table(table: Any) -> bool:
+    for row in _table_extract(table):
+        if _row_has_materials_marker(row):
+            return True
+    return False
+
+
+def _first_body_cell_is_digit(table: Any) -> bool:
+    for row in _table_extract(table):
+        padded = _pad_row(row, len(row))
+        if _is_dropped_header_or_total(padded):
+            continue
+        first = padded[0].strip() if padded else ""
+        return bool(first) and first[0].isdigit()
+    return False
+
+
+def _page_tables(page: fitz.Page) -> list[Any]:
+    finder = page.find_tables()
+    tables = getattr(finder, "tables", None)
+    if not tables:
+        return []
+    return list(tables)
+
+
+def _collect_materials_page_tables(
+    doc: fitz.Document,
+) -> list[tuple[int, Any, int]]:
+    """Return ``(page_index, table, col_count)`` for the materials run."""
+    found: list[tuple[int, Any, int]] = []
+    started = False
+    expected_cols: int | None = None
+    for page_index in range(doc.page_count):
+        page = doc[page_index]
+        tables = _page_tables(page)
+        if not tables:
+            if started:
+                break
+            continue
+        largest = max(tables, key=_table_area)
+        extracted = _table_extract(largest)
+        ncols = _table_col_count(largest, extracted)
+        if not started:
+            if _is_materials_table(largest):
+                started = True
+                expected_cols = ncols
+                found.append((page_index, largest, ncols))
+            continue
+        if ncols == expected_cols and _first_body_cell_is_digit(largest):
+            found.append((page_index, largest, ncols))
+        else:
+            break
+    return found
+
+
+def _is_dropped_header_or_total(row: list[str]) -> bool:
+    if _is_total_row(row):
+        return True
+    for cell in row:
+        folded = re.sub(r"\s+", " ", cell or "").strip()
+        if not folded:
+            continue
+        if folded == _HEADER_NPP or _HEADER_NPP in folded:
+            return True
+        if _GROUP_RD in folded or "Закупка по" in folded:
+            return True
+    columns = _match_header(row, prefer_lot_qty=True)
+    return all(field in columns for field in REQUIRED_FIELDS)
+
+
+def _find_materials_header(
+    rows: list[list[str]],
+) -> tuple[list[str] | None, dict[str, int] | None, dict[str, int] | None]:
+    for row in rows:
+        right_cols = _match_header(row, prefer_lot_qty=True)
+        if not all(field in right_cols for field in REQUIRED_FIELDS):
+            continue
+        left_cols = _match_header(row, prefer_lot_qty=False)
+        return row, left_cols, right_cols
+    return None, None, None
+
+
+def _identity_column_indexes(
+    left_cols: dict[str, int],
+    right_cols: dict[str, int],
+) -> set[int]:
+    indexes: set[int] = set()
+    for field in IDENTITY_FIELDS:
+        if field in left_cols:
+            indexes.add(left_cols[field])
+        if field in right_cols:
+            indexes.add(right_cols[field])
+    return indexes
+
+
+def _clean_data_row(row: list[str], identity_idx: set[int]) -> list[str]:
+    cleaned: list[str] = []
+    for idx, cell in enumerate(row):
+        if idx in identity_idx:
+            cleaned.append(clean_code_cell(cell))
+        else:
+            cleaned.append(clean_text_cell(cell))
+    return cleaned
+
+
+def _code_looks_truncated_agcc(code: str) -> bool:
+    if "AGCC." not in code.upper():
+        return False
+    stripped = code.rstrip()
+    return not (stripped and stripped[-1].isdigit())
+
+
+def _as_rect(cell: Any) -> tuple[float, float, float, float] | None:
+    if cell is None:
+        return None
+    if hasattr(cell, "x0"):
+        return (float(cell.x0), float(cell.y0), float(cell.x1), float(cell.y1))
+    if isinstance(cell, (tuple, list)) and len(cell) >= 4:
+        try:
+            x0, y0, x1, y1 = (float(cell[0]), float(cell[1]), float(cell[2]), float(cell[3]))
+        except (TypeError, ValueError):
+            return None
+        if x1 > x0 and y1 > y0:
+            return (x0, y0, x1, y1)
+    return None
+
+
+def _table_cell_rects(table: Any) -> list[tuple[float, float, float, float]]:
+    rects: list[tuple[float, float, float, float]] = []
+    cells = getattr(table, "cells", None) or []
+    for cell in cells:
+        rect = _as_rect(cell)
+        if rect is not None:
+            rects.append(rect)
+    if rects:
+        return rects
+    rows = getattr(table, "rows", None) or []
+    for row in rows:
+        for cell in getattr(row, "cells", None) or []:
+            rect = _as_rect(cell)
+            if rect is not None:
+                rects.append(rect)
+    return rects
+
+
+def _point_in_rect(
+    x: float,
+    y: float,
+    rect: tuple[float, float, float, float],
+) -> bool:
+    x0, y0, x1, y1 = rect
+    return x0 <= x <= x1 and y0 <= y <= y1
+
+
+def _is_furniture_word(word: str) -> bool:
+    token = (word or "").strip()
+    if not token:
+        return True
+    if token.casefold() in _FURNITURE_WORDS:
+        return True
+    return bool(re.fullmatch(r"\d+", token))
+
+
+def _scan_outside_words(
+    doc: fitz.Document,
+    page_tables: list[tuple[int, Any, int]],
+) -> list[_OutsideWord]:
+    found: list[_OutsideWord] = []
+    for page_index, table, _ncols in page_tables:
+        page = doc[page_index]
+        rects = _table_cell_rects(table)
+        words = page.get_text("words") or []
+        for item in words:
+            if len(item) < 5:
+                continue
+            x0, y0, x1, y1, token = item[0], item[1], item[2], item[3], str(item[4])
+            if _is_furniture_word(token):
+                continue
+            cx = (float(x0) + float(x1)) / 2.0
+            cy = (float(y0) + float(y1)) / 2.0
+            if any(_point_in_rect(cx, cy, rect) for rect in rects):
+                continue
+            found.append(
+                _OutsideWord(
+                    page=page_index + 1,
+                    word=token,
+                    x=cx,
+                    y=cy,
+                )
+            )
+    return found
+
+
+def _write_materials_xlsx(
+    path: Path,
+    *,
+    header_row: list[str],
+    data_rows: list[list[str]],
+    left_cols: dict[str, int],
+    right_cols: dict[str, int],
+    col_count: int,
+) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = EXPECTED_SHEET_NAME
+    width = max(col_count, len(header_row))
+    labels = _pad_row(header_row, width)
+    group = [""] * width
+    left_values = left_cols.get("VALUES")
+    right_values = right_cols.get("VALUES")
+    if left_values is not None and right_values is not None and left_values != right_values:
+        group[left_values] = _GROUP_RD
+        group[right_values] = _GROUP_LOT
+    elif right_values is not None:
+        group[right_values] = _GROUP_LOT
+    elif left_values is not None:
+        group[left_values] = _GROUP_LOT
+    ws.append(group)
+    ws.append([clean_text_cell(cell) for cell in labels])
+    for row in data_rows:
+        ws.append(_pad_row(row, width))
+    wb.save(path)
+    wb.close()
+
+
+def _contract_check(xlsx_path: Path) -> list[PdfRfpIssue]:
+    issues: list[PdfRfpIssue] = []
+    wb = load_workbook(xlsx_path, read_only=True, data_only=True)
+    try:
+        if EXPECTED_SHEET_NAME not in wb.sheetnames:
+            issues.append(
+                PdfRfpIssue(
+                    "ERROR",
+                    f"в книге нет листа «{EXPECTED_SHEET_NAME}»",
+                )
+            )
+            return issues
+        ws = wb[EXPECTED_SHEET_NAME]
+        rows = [list(row) for row in ws.iter_rows(values_only=True)]
+    finally:
+        wb.close()
+
+    header_row: list[Any] | None = None
+    header_idx = -1
+    columns: dict[str, int] = {}
+    for idx, row in enumerate(rows[:100]):
+        columns = _match_header(row, prefer_lot_qty=True)
+        if all(field in columns for field in REQUIRED_FIELDS):
+            header_row = row
+            header_idx = idx
+            break
+    if header_row is None:
+        missing = list(REQUIRED_FIELDS)
+        issues.append(
+            PdfRfpIssue(
+                "ERROR",
+                f"не найдены обязательные столбцы: {format_field_list(missing)}",
+            )
+        )
+        return issues
+    missing_fields = [field for field in REQUIRED_FIELDS if field not in columns]
+    if missing_fields:
+        issues.append(
+            PdfRfpIssue(
+                "ERROR",
+                f"не найдены обязательные столбцы: {format_field_list(missing_fields)}",
+            )
+        )
+        return issues
+
+    title_i = columns["DS_TITLE"]
+    code_i = columns["CODE"]
+    name_i = columns["NAME"]
+    qty_i = columns["VALUES"]
+    unit_i = columns["UNITS"]
+    tag_i = columns.get("TAGS")
+
+    def _cell(row: list[Any], index: int) -> str:
+        if index >= len(row) or row[index] is None:
+            return ""
+        return str(row[index])
+
+    for offset, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
+        if not any(str(cell).strip() for cell in row if cell is not None):
+            continue
+        if _is_total_row(["" if cell is None else str(cell) for cell in row]):
+            continue
+        excel_row = str(offset)
+        title = _cell(row, title_i)
+        code = _cell(row, code_i)
+        name = _cell(row, name_i)
+        qty = _cell(row, qty_i)
+        unit = _cell(row, unit_i)
+        tags = _cell(row, tag_i) if tag_i is not None else ""
+        if not title.strip():
+            issues.append(PdfRfpIssue("ERROR", "пустой титул", row_number=excel_row))
+        if not code.strip():
+            issues.append(PdfRfpIssue("ERROR", "пустой код", row_number=excel_row))
+        if not name.strip():
+            issues.append(
+                PdfRfpIssue("ERROR", "пустое наименование", row_number=excel_row)
+            )
+        if not qty.strip():
+            issues.append(
+                PdfRfpIssue("ERROR", "пустое количество лота", row_number=excel_row)
+            )
+        elif _parse_decimal(qty) is None:
+            issues.append(
+                PdfRfpIssue(
+                    "ERROR",
+                    f"количество лота не является числом: {qty}",
+                    row_number=excel_row,
+                )
+            )
+        if not unit.strip():
+            issues.append(
+                PdfRfpIssue("ERROR", "пустая единица лота", row_number=excel_row)
+            )
+        if _has_space_or_newline(title):
+            issues.append(
+                PdfRfpIssue(
+                    "ERROR",
+                    "в титуле остались пробел или перевод строки",
+                    row_number=excel_row,
+                )
+            )
+        if _has_space_or_newline(code):
+            issues.append(
+                PdfRfpIssue(
+                    "ERROR",
+                    "в коде остались пробел или перевод строки",
+                    row_number=excel_row,
+                )
+            )
+        if _tag_tokens_have_space_or_newline(tags):
+            issues.append(
+                PdfRfpIssue(
+                    "ERROR",
+                    "в теге остались пробел или перевод строки",
+                    row_number=excel_row,
+                )
+            )
+        if _tags_text_contains_rfq(tags):
+            issues.append(
+                PdfRfpIssue(
+                    "ERROR",
+                    "в поле Tag недопустима подстрока RFQ",
+                    row_number=excel_row,
+                )
+            )
+    return issues
+
+
+def _has_space_or_newline(text: str) -> bool:
+    return any(ch.isspace() for ch in text)
+
+
+def _tag_tokens_have_space_or_newline(tags: str) -> bool:
+    """True when a single tag token still contains space/newline.
+
+    ``; `` / ``, `` joiners from :func:`clean_code_cell` are not a leftover
+    wrap; they split tokens first.
+    """
+    if not tags:
+        return False
+    for token in re.split(r"[;,]", tags):
+        piece = token.strip()
+        if piece and _has_space_or_newline(piece):
+            return True
+    return False
+
+
+def _write_report(
+    path: Path,
+    *,
+    ds_label: str,
+    row_count: int,
+    contract_errors: int,
+    outside_words: int,
+    issues: list[PdfRfpIssue],
+    outside: list[_OutsideWord],
+) -> None:
+    lines = [
+        f"Метка ДС: {ds_label or '(нет)'}",
+        f"Строк данных: {row_count}",
+        f"Ошибок контракта: {contract_errors}",
+        f"Слов вне ячеек: {outside_words}",
+        "",
+        "Замечания:",
+    ]
+    if issues:
+        for item in issues:
+            loc = []
+            if item.page is not None:
+                loc.append(f"стр.{item.page}")
+            if item.row_number:
+                loc.append(f"строка {item.row_number}")
+            prefix = f" ({', '.join(loc)})" if loc else ""
+            lines.append(f"[{item.level}] {item.message}{prefix}")
+    else:
+        lines.append("(нет)")
+    lines.append("")
+    shown = outside[:OUTSIDE_LIST_CAP]
+    lines.append(
+        f"Слова вне ячеек (показано {len(shown)} из {len(outside)}):"
+    )
+    for item in shown:
+        lines.append(
+            f"стр.{item.page} {item.word} x={item.x:.1f} y={item.y:.1f}"
+        )
+    omitted = len(outside) - len(shown)
+    if omitted:
+        lines.append(f"ещё {omitted} строк опущено")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+_last_pdf_rfp_result: PdfRfpResult | None = None
+
+
+def get_last_pdf_rfp_result() -> PdfRfpResult | None:
+    """Return the last result from ``run_pdf_rfp_job``, if any."""
+    return _last_pdf_rfp_result
+
+
+@dataclass(frozen=True, slots=True)
+class PdfRfpJobResult:
+    """Duck-typed ``FunctionJobRunner`` result (no GUI import)."""
+
+    success: bool
+    message: str
+    result_path: str | None = None
+
+
+def run_pdf_rfp_job(pdf_path: str | Path, ds_label: str = "") -> PdfRfpJobResult:
+    """Extract the PDF, remember the result for the GUI tab.
+
+    ``ds_label`` is always forwarded to :func:`extract_rfp_pdf`, including an
+    empty string (explicit override of title-page detection). Stamp folder is
+    chosen by the extractor (``out_dir=None``).
+
+    Args:
+        pdf_path: Source RFP PDF.
+        ds_label: Explicit DS prefix override.
+
+    Returns:
+        Job result. ``result_path`` is the written xlsx.
+
+    Raises:
+        RuntimeError: Propagated from :func:`extract_rfp_pdf` (no half xlsx).
+    """
+    global _last_pdf_rfp_result
+    result = extract_rfp_pdf(Path(pdf_path), ds_label=ds_label)
+    _last_pdf_rfp_result = result
+    print(
+        f"ДС: {result.ds_label or '(нет)'}\n"
+        f"Строк: {result.row_count}\n"
+        f"Ошибок контракта: {result.contract_errors}\n"
+        f"Слов вне ячеек: {result.outside_words}\n"
+        f"xlsx: {result.xlsx_path}\n"
+        f"отчёт: {result.report_path}",
+        flush=True,
+    )
+    summary = (
+        f"Строк {result.row_count}, ошибок контракта {result.contract_errors}, "
+        f"слов вне ячеек {result.outside_words}"
+    )
+    return PdfRfpJobResult(
+        success=True,
+        message=summary,
+        result_path=str(result.xlsx_path),
+    )
+
+
+__all__ = (
+    "PdfRfpIssue",
+    "PdfRfpJobResult",
+    "PdfRfpResult",
+    "clean_code_cell",
+    "clean_text_cell",
+    "extract_rfp_pdf",
+    "get_last_pdf_rfp_result",
+    "parse_ds_label_from_title_text",
+    "pdf_rfp_stamp_dir",
+    "preview_ds_label",
+    "run_pdf_rfp_job",
+)

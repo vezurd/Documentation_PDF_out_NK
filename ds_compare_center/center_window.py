@@ -53,6 +53,7 @@ from RFQ.rfp_parts.one_file_check import (
     run_rfp_one_file_job,
     run_ul_one_file_job,
 )
+from RFQ.rfp_parts.pdf_rfp_extract import get_last_pdf_rfp_result, run_pdf_rfp_job
 from RFQ.tags_rfp_compare.ds_manager_roster import (
     get_last_ds_roster_compare,
     resolve_ds_manager_matrix_path,
@@ -75,6 +76,7 @@ from ds_compare_center.rfp_ds_id_panel import RfpDsIdPanel
 from ds_compare_center.rfp_ds_mp_panel import RfpDsMpPanel
 from ds_compare_center.rfp_mix_settings import read_collect_mix_mode
 from ds_compare_center.rfp_parts_panel import RfpPartsPanel, rfp_parts_reports_dir
+from ds_compare_center.rfp_pdf_panel import RfpPdfPanel
 from ds_compare_center.rfp_progress_parser import RfpProgressParser
 from ds_compare_center.rfp_run_panel import RfpRunPanel
 from ds_compare_center.rfp_settings_panel import RfpSettingsPanel
@@ -115,12 +117,13 @@ _TAB_INDEX_SEP_RFP = 7
 _TAB_INDEX_RFP_RUN = 8
 _TAB_INDEX_RFP_SETTINGS = 9
 _TAB_INDEX_RFP_PARTS = 10
-_TAB_INDEX_RFP_DS_ID = 11
-_TAB_INDEX_RFP_DS_MP = 12
-_TAB_INDEX_SEP_MISC = 13
-_TAB_INDEX_MISC_RUN = 14
-_TAB_INDEX_BBB_SETTINGS = 15
-_TAB_INDEX_VPN = 16
+_TAB_INDEX_RFP_PDF = 11
+_TAB_INDEX_RFP_DS_ID = 12
+_TAB_INDEX_RFP_DS_MP = 13
+_TAB_INDEX_SEP_MISC = 14
+_TAB_INDEX_MISC_RUN = 15
+_TAB_INDEX_BBB_SETTINGS = 16
+_TAB_INDEX_VPN = 17
 _WINDOW_TITLE = "Центр ДС, RFP и MTO"
 _EXCEL_FILTER = "Excel files (*.xlsx *.xlsm *.xls);;All files (*.*)"
 # Vertical gaps (~15–20% tighter than original) so block 3 actions fit without scroll on open.
@@ -162,6 +165,7 @@ _JOB_TITLES_PACKING = frozenset(
         _JOB_TITLE_UL_ONE,
     }
 )
+_JOB_TITLE_RFP_PDF = "RFP: распознать PDF"
 _JOB_TITLE_RFP_DS_ID = "Соответствие ДС: RFP ↔ УЛ"
 _JOB_TITLE_RFP_DS_MP = "Соответствие ДС: RFP ↔ фамилии МП"
 
@@ -195,6 +199,8 @@ _TAB_BY_NAME = {
     "rfp_settings": _TAB_INDEX_RFP_SETTINGS,
     "rfp_parts": _TAB_INDEX_RFP_PARTS,
     "parts": _TAB_INDEX_RFP_PARTS,
+    "rfp_pdf": _TAB_INDEX_RFP_PDF,
+    "pdf": _TAB_INDEX_RFP_PDF,
     "rfp_ds_id": _TAB_INDEX_RFP_DS_ID,
     "ds_id": _TAB_INDEX_RFP_DS_ID,
     "rfp_ul": _TAB_INDEX_RFP_DS_ID,
@@ -276,6 +282,9 @@ class CenterWindow(QWidget):
             on_check_one_rfp=self._run_rfp_one_file,
             on_check_one_ds=self._run_ds_one_file,
         )
+        self._rfp_pdf_panel = RfpPdfPanel(
+            on_run=self._run_rfp_pdf,
+        )
         self._rfp_ds_id_panel = RfpDsIdPanel(
             on_run=self._run_rfp_ds_id,
         )
@@ -309,6 +318,7 @@ class CenterWindow(QWidget):
         self._tabs.addTab(self._rfp_run_panel, "RFP · Запуск")
         self._tabs.addTab(self._rfp_settings_panel, "RFP · Настройки")
         self._tabs.addTab(self._rfp_parts_panel, "RFP · Сбор частей")
+        self._tabs.addTab(self._rfp_pdf_panel, "RFP · PDF")
         self._tabs.addTab(self._rfp_ds_id_panel, "RFP · ДС ↔ УЛ")
         self._tabs.addTab(self._rfp_ds_mp_panel, "RFP · ДС ↔ МП")
         sep_misc = self._tabs.addTab(QWidget(self), "│ Прочее")
@@ -345,6 +355,9 @@ class CenterWindow(QWidget):
         rfp_parts = getattr(self._rfp_parts_panel, "splitter", None)
         if isinstance(rfp_parts, QSplitter):
             out["rfp_parts"] = rfp_parts
+        rfp_pdf = getattr(self._rfp_pdf_panel, "splitter", None)
+        if isinstance(rfp_pdf, QSplitter):
+            out["rfp_pdf"] = rfp_pdf
         rfp_ds_id = getattr(self._rfp_ds_id_panel, "splitter", None)
         if isinstance(rfp_ds_id, QSplitter):
             out["rfp_ds_id"] = rfp_ds_id
@@ -807,6 +820,10 @@ class CenterWindow(QWidget):
             self._function_job_tab = "rfp_parts"
             self._rfp_parts_panel.monitor.start_job(title)
             self._tabs.setCurrentIndex(_TAB_INDEX_RFP_PARTS)
+        elif title == _JOB_TITLE_RFP_PDF:
+            self._function_job_tab = "rfp_pdf"
+            self._rfp_pdf_panel.monitor.start_job(title)
+            self._tabs.setCurrentIndex(_TAB_INDEX_RFP_PDF)
         elif title == _JOB_TITLE_RFP_DS_ID:
             self._function_job_tab = "ds_id"
             self._rfp_ds_id_panel.monitor.start_job(title)
@@ -1058,6 +1075,16 @@ class CenterWindow(QWidget):
             job_tab="rfp_parts",
         )
 
+    def _run_rfp_pdf(self, pdf_path: str, ds_label: str) -> None:
+        if not pdf_path or not os.path.isfile(pdf_path):
+            QMessageBox.warning(
+                self,
+                "RFP · PDF",
+                "Укажите существующий PDF-файл.",
+            )
+            return
+        self._start_job(_JOB_TITLE_RFP_PDF, run_pdf_rfp_job, pdf_path, ds_label)
+
     def _run_rfp_ds_id(self) -> None:
         self._start_job(_JOB_TITLE_RFP_DS_ID, run_ds_id_coverage_job)
 
@@ -1128,6 +1155,8 @@ class CenterWindow(QWidget):
             return self._misc_run_panel.monitor
         if self._function_job_tab == "rfp_parts":
             return self._rfp_parts_panel.monitor
+        if self._function_job_tab == "rfp_pdf":
+            return self._rfp_pdf_panel.monitor
         if self._function_job_tab == "ds_id":
             return self._rfp_ds_id_panel.monitor
         if self._function_job_tab == "ds_mp":
@@ -1164,6 +1193,13 @@ class CenterWindow(QWidget):
         if self._last_job_title in _JOB_TITLES_DS_COCKPIT:
             self._rfp_parts_panel.monitor.finish_job(success, message, rp)
             self._rfp_parts_panel.on_ds_job_finished(success, message, rp)
+            return
+        if self._last_job_title == _JOB_TITLE_RFP_PDF:
+            self._rfp_pdf_panel.monitor.finish_job(success, message, rp)
+            if success:
+                result = get_last_pdf_rfp_result()
+                if result is not None:
+                    self._rfp_pdf_panel.show_result(result)
             return
         if self._last_job_title == _JOB_TITLE_RFP_DS_ID:
             self._rfp_ds_id_panel.monitor.finish_job(success, message, None)
