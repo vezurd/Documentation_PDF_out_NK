@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from RFQ.rfp_parts.ds_hybrid_preflight import INPUT_MODE_HYBRID, resolve_launch_mix_mode
+from RFQ.rfp_parts.ds_hybrid_preflight import (
+    INPUT_MODE_DS_ONLY,
+    INPUT_MODE_HYBRID,
+    INPUT_MODE_LEGACY_NET,
+    resolve_launch_mix_mode,
+)
 from RFQ.rfp_parts.ds_rfp_tag_placement import MIX_MIXED, MIX_SEPARATE
 
 KEY_COLLECT_MIX_MODE = "collect_mix_mode"
@@ -72,6 +77,11 @@ _MIX_TITLE = {mode: label for mode, label, _hint in MIX_CHOICES}
 _MIX_BUTTON_SHORT = {
     MIX_SEPARATE: "без смешения",
     MIX_MIXED: "со смешением",
+}
+_LAUNCH_SOURCE_SHORT = {
+    INPUT_MODE_LEGACY_NET: "части RFP",
+    INPUT_MODE_DS_ONLY: "только ДС",
+    INPUT_MODE_HYBRID: "ДС+RFP",
 }
 
 
@@ -215,20 +225,22 @@ def format_launch_rfp_button(
     input_mode: str,
     mix: str,
 ) -> str:
-    """Launch-tab compare button; mix suffix only when source is hybrid.
+    """Launch-tab run button: ``Запуск`` plus the selected source and mix.
+
+    Mix is appended only when the source is hybrid. ``include_packing`` does
+    not change the text: packing stays a Step4 setting, not this label.
 
     Args:
-        include_packing: When True, the label includes ``↔ УЛ``.
+        include_packing: Kept for callers. Ignored.
         input_mode: Launch file picker (``legacy_net`` / ``ds_only`` / ``hybrid``).
         mix: ``launch_mix_mode`` (ignored unless ``input_mode`` is hybrid).
 
     Returns:
-        Compare-button text.
+        For example ``Запуск (ДС+RFP · без смешения)`` or ``Запуск (части RFP)``.
     """
-    if include_packing:
-        text = "Сравнить RFP ↔ MTO ↔ РКД ↔ УЛ"
-    else:
-        text = "Сравнить RFP ↔ MTO ↔ РКД"
-    if str(input_mode or "").strip() == INPUT_MODE_HYBRID:
-        text = f"{text} ({mix_suffix_ru(mix)})"
-    return text
+    del include_packing
+    mode = str(input_mode or "").strip()
+    short = _LAUNCH_SOURCE_SHORT.get(mode, _LAUNCH_SOURCE_SHORT[INPUT_MODE_LEGACY_NET])
+    if mode != INPUT_MODE_HYBRID:
+        return f"Запуск ({short})"
+    return f"Запуск ({short} · {mix_suffix_ru(mix)})"

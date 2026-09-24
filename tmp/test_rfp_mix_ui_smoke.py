@@ -67,25 +67,25 @@ class RfpMixSettingsSmokeTest(unittest.TestCase):
             input_mode=INPUT_MODE_HYBRID,
             mix=MIX_SEPARATE,
         )
-        self.assertEqual(packing, "Сравнить RFP ↔ MTO ↔ РКД ↔ УЛ (без смешения)")
+        self.assertEqual(packing, "Запуск (ДС+RFP · без смешения)")
         mixed = format_launch_rfp_button(
             include_packing=False,
             input_mode=INPUT_MODE_HYBRID,
             mix=MIX_MIXED,
         )
-        self.assertEqual(mixed, "Сравнить RFP ↔ MTO ↔ РКД (со смешением)")
+        self.assertEqual(mixed, "Запуск (ДС+RFP · со смешением)")
         parts = format_launch_rfp_button(
             include_packing=True,
             input_mode=INPUT_MODE_LEGACY_NET,
             mix=MIX_MIXED,
         )
-        self.assertEqual(parts, "Сравнить RFP ↔ MTO ↔ РКД ↔ УЛ")
+        self.assertEqual(parts, "Запуск (части RFP)")
         ds_only = format_launch_rfp_button(
             include_packing=False,
             input_mode=INPUT_MODE_DS_ONLY,
             mix=MIX_MIXED,
         )
-        self.assertEqual(ds_only, "Сравнить RFP ↔ MTO ↔ РКД")
+        self.assertEqual(ds_only, "Запуск (только ДС)")
 
     def test_two_json_keys_read_independently_without_cross_write(self) -> None:
         config = {
