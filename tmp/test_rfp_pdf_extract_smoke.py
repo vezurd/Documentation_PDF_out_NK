@@ -167,11 +167,12 @@ class RfpPdfExtractSmokeTest(unittest.TestCase):
     def test_pdf_rfp_stamp_dir_unique_under_local_base(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            first = pdf_rfp_stamp_dir(base)
+            first = pdf_rfp_stamp_dir(base / "spec.pdf")
             first.mkdir(parents=True)
-            second = pdf_rfp_stamp_dir(base)
+            second = pdf_rfp_stamp_dir(base / "spec.pdf")
             self.assertNotEqual(first, second)
-            self.assertEqual(first.parent.name, "_pdf_rfp")
+            self.assertEqual(first.parent, base.resolve())
+            self.assertTrue(first.name.startswith("результат распознавания PDF_"))
             self.assertTrue(second.name.endswith("_2"))
 
     def test_extract_synthetic_pdf(self) -> None:

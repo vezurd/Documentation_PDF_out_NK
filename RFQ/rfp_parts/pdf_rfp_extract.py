@@ -1,7 +1,10 @@
 """Extract an RFP materials table from PDF into an xlsx workbook.
 
 Uses PyMuPDF ``page.find_tables()`` only (no pdfplumber / pdf_parsing_v2).
-Output lives under ``RFP сводный файл/_pdf_rfp/``, never in ``RFP_Зиновьев``.
+Output is a subfolder next to the source PDF:
+``результат распознавания PDF_<YYYY.MM.DD_HH.MM>``.
+The xlsx and ``pdf_rfp_report.txt`` both go there. Nothing is written into
+``RFP_Зиновьев``.
 """
 
 from __future__ import annotations
@@ -17,20 +20,18 @@ import fitz
 from openpyxl import Workbook, load_workbook
 
 from RFQ.rfp_parts.analyze_rfp_parts import (
-    DEFAULT_REPORTS_BASE_DIR,
     EXPECTED_SHEET_NAME,
     REQUIRED_FIELDS,
     _is_total_row,
     _match_header,
     _parse_decimal,
     _tags_text_contains_rfq,
-    make_reports_out_dir,
 )
 from RFQ.rfp_parts.file_status import format_field_list
 
-PDF_RFP_SUBDIR = "_pdf_rfp"
 REPORT_NAME = "pdf_rfp_report.txt"
 OUTSIDE_LIST_CAP = 50
+RESULT_DIR_PREFIX = "результат распознавания PDF_"
 MATERIALS_HEADER_MARKERS = ("Наименование МТР", "Закупка по")
 IDENTITY_FIELDS = (
     "DS_TITLE",
@@ -181,23 +182,30 @@ def preview_ds_label(pdf_path: Path) -> str:
         doc.close()
 
 
-def pdf_rfp_stamp_dir(base: Path | None = None) -> Path:
-    """Return ``<RFP сводный файл>/_pdf_rfp/YYYY.MM.DD_HH.MM``.
+def pdf_rfp_stamp_dir(pdf_path: Path, *, when: datetime | None = None) -> Path:
+    """Return a result folder next to the source PDF.
 
-    Reuses the rfp-parts reports base (``DEFAULT_REPORTS_BASE_DIR`` /
-    ``rfp_parts_reports_base_dir``). If that minute folder exists, append
-    ``_2``, ``_3``, … The directory is not created here. Do not write into
-    ``RFP_Зиновьев``.
+    Name: ``результат распознавания PDF_<YYYY.MM.DD_HH.MM>``. If that folder
+    already exists, append ``_2``, ``_3``, … The directory is not created here.
 
     Args:
-        base: ``RFP сводный файл`` root. Default is
-            ``DEFAULT_REPORTS_BASE_DIR``.
+        pdf_path: Source PDF. The folder is created in its parent directory.
+        when: Timestamp for the folder name. Default is now.
 
     Returns:
-        Unique stamp path under ``<base>/_pdf_rfp``.
+        Unique stamp path beside the PDF.
     """
-    parent = Path(base) if base is not None else DEFAULT_REPORTS_BASE_DIR
-    return make_reports_out_dir(base=parent / PDF_RFP_SUBDIR)
+    parent = Path(pdf_path).resolve().parent
+    stamp = (when or datetime.now()).strftime("%Y.%m.%d_%H.%M")
+    candidate = parent / f"{RESULT_DIR_PREFIX}{stamp}"
+    if not candidate.exists():
+        return candidate
+    suffix = 2
+    while True:
+        candidate = parent / f"{RESULT_DIR_PREFIX}{stamp}_{suffix}"
+        if not candidate.exists():
+            return candidate
+        suffix += 1
 
 
 def clean_code_cell(value: Any) -> str:
@@ -261,7 +269,7 @@ def extract_rfp_pdf(
 
     Args:
         pdf_path: Source RFP PDF.
-        out_dir: Stamp folder. Default is :func:`pdf_rfp_stamp_dir`.
+        out_dir: Stamp folder. Default is a dated folder next to the PDF.
         ds_label: Override for the DS filename prefix.
 
     Returns:
@@ -354,8 +362,9 @@ def extract_rfp_pdf(
     finally:
         doc.close()
 
-    stamp = Path(out_dir) if out_dir is not None else pdf_rfp_stamp_dir()
+    stamp = Path(out_dir) if out_dir is not None else pdf_rfp_stamp_dir(pdf_path)
     stamp.mkdir(parents=True, exist_ok=True)
+    _log_phase("папка результата", started, detail=str(stamp))
     xlsx_name = _xlsx_filename(chosen_label, pdf_path.stem)
     xlsx_path = stamp / xlsx_name
     _write_materials_xlsx(
@@ -995,7 +1004,7 @@ def run_pdf_rfp_job(pdf_path: str | Path, ds_label: str = "") -> PdfRfpJobResult
 
     ``ds_label`` is always forwarded to :func:`extract_rfp_pdf`, including an
     empty string (explicit override of title-page detection). Stamp folder is
-    chosen by the extractor (``out_dir=None``).
+    Stamp folder is a dated directory next to the PDF (``out_dir=None``).
 
     Args:
         pdf_path: Source RFP PDF.

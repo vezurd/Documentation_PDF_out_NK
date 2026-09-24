@@ -82,7 +82,8 @@ class RfpPdfPanel(QWidget):
         v.setSpacing(8)
 
         hint = WrappingLabel(
-            "Таблица материалов из PDF → xlsx в «RFP сводный файл/_pdf_rfp». "
+            "xlsx и отчёт пишутся в подпапку рядом с PDF: "
+            "«результат распознавания PDF_<дата_время>». "
             "В RFP_Зиновьев ничего не пишется.",
             box,
         )
