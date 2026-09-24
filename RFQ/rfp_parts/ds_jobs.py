@@ -1,8 +1,10 @@
 """FunctionJobRunner jobs for the RFP · Сбор частей DS/hybrid cockpit.
 
 «Проверить реестр» keeps one working file in ``_RFP``. A legacy workbook is
-renamed to ``Реестр_ДС_УЛ_old.xlsx`` and replaced. A file open in Excel stays
-put; a dated copy is written instead, and only five dated copies are kept.
+renamed to ``Реестр_ДС_УЛ_old.xlsx`` and replaced. Before replace, the current
+file is copied into ``_old_Реестры УЛ ДС``. A file open in Excel is not given
+a dated sibling: the job stops unless ``on_locked`` continues, in which case
+the prepared workbook is what later steps read.
 ``backup_and_replace_registry`` is never imported or called from this module.
 """
 
@@ -627,12 +629,12 @@ def _registry_next_step(
     labels = _overlay_blocking_labels(document)
     labels_text = ", ".join(labels)
     path = str(migrated_path or document.path)
-    if placement == "dated":
+    if placement == "pending":
         return (
-            f"{CANONICAL_REGISTRY_NAME} открыт в Excel, заменить его нельзя. "
-            f"Записана копия {path}. Программа берёт самый новый файл в папке _RFP "
-            f"и хранит {5} таких копий, более старые удаляет. Закройте Excel и "
-            "проверьте реестр ещё раз — тогда основной файл будет заменён."
+            f"{CANONICAL_REGISTRY_NAME} открыт в Excel, файл на диске не менялся. "
+            f"Дальше читается подготовленный реестр: {path}. "
+            "Он же попадёт в результат Step4. Закройте Excel и проверьте реестр "
+            "ещё раз, чтобы заменить основной файл."
         )
     if placement == "canonical":
         renamed = (
@@ -756,8 +758,8 @@ def _snapshot_from_registry(
         )
     else:
         summary = document.validation.summary_line()
-        if placement == "dated":
-            format_label = "new, копия с датой"
+        if placement == "pending":
+            format_label = "new, файл открыт — запись пропущена"
         elif archived_now:
             format_label = "new, старый формат переименован"
         elif migrated_registry_path is not None:
@@ -999,7 +1001,12 @@ def _links_for_install(
     )
 
 
-def _install_rows(rows: list[Any], home: Path, links: RegistryLinks | None = None):
+def _install_rows(
+    rows: list[Any],
+    home: Path,
+    links: RegistryLinks | None = None,
+    on_locked: Callable[[], bool] | None = None,
+):
     """Install rows into the working registry folder.
 
     Returns:
@@ -1010,18 +1017,21 @@ def _install_rows(rows: list[Any], home: Path, links: RegistryLinks | None = Non
     if err:
         return None, err
     try:
-        installed = install_working_registry(rows, home, links=links)
+        installed = install_working_registry(
+            rows, home, links=links, on_locked=on_locked
+        )
     except DsRegistryError as exc:
+        _emit(str(exc))
         return None, f"реестр не записан: {exc}"
     _install_rows.last = installed  # type: ignore[attr-defined]
     return installed, None
 
 
 def _emit_install(installed: Any) -> None:
-    if installed.mode == "dated":
+    if installed.mode == "pending":
         _emit(
-            f"{CANONICAL_REGISTRY_NAME} открыт в Excel. "
-            f"Копия с датой: {installed.path}"
+            f"{CANONICAL_REGISTRY_NAME} открыт в Excel, основной файл не заменён. "
+            f"Дальше идёт подготовленный реестр: {installed.path}"
         )
         return
     if installed.archived_now and installed.archived_path is not None:
@@ -1030,6 +1040,8 @@ def _emit_install(installed: Any) -> None:
             f"Рабочий реестр: {installed.path}"
         )
         return
+    if installed.archived_path is not None:
+        _emit(f"Прежняя версия: {installed.archived_path}")
     _emit(f"Рабочий реестр: {installed.path}")
 
 
@@ -1044,6 +1056,7 @@ def _open_registry_for_job(
     ds_root: Path | None = None,
     rfp_root: Path | None = None,
     on_lap: Callable[[str, float], None] | None = None,
+    on_locked: Callable[[], bool] | None = None,
 ) -> tuple[DsRegistryDocument | None, str, Path | None, str | None, int]:
     """Load new-format registry, or migrate legacy into ``output_dir``.
 
@@ -1153,7 +1166,9 @@ def _open_registry_for_job(
     if on_lap is not None:
         on_lap("ссылки ДС/RFP/УЛ", time.perf_counter() - started)
     started = time.perf_counter()
-    installed, install_err = _install_rows(new_rows, output_dir, links)
+    installed, install_err = _install_rows(
+        new_rows, output_dir, links, on_locked=on_locked
+    )
     if on_lap is not None:
         on_lap("запись реестра", time.perf_counter() - started)
     if install_err or installed is None:
@@ -1193,12 +1208,14 @@ def run_ds_registry_check_job(
     ul_root: str | Path | None = None,
     ds_root: str | Path | None = None,
     rfp_root: str | Path | None = None,
+    on_locked: Callable[[], bool] | None = None,
 ) -> DsJobResult:
     """Validate the registry and keep one working file in the ``_RFP`` folder.
 
-    A legacy file is renamed to ``Реестр_ДС_УЛ_old.xlsx`` and replaced. If Excel
-    holds the file open, a dated copy is written and older dated copies beyond
-    five are deleted. The program then reads whichever file is newest.
+    A legacy file is renamed to ``Реестр_ДС_УЛ_old.xlsx`` and replaced. The
+    current file is copied into ``_old_Реестры УЛ ДС`` first. If Excel holds
+    the file open, the job stops unless ``on_locked`` returns True. Then the
+    prepared workbook is what the next steps read, including Step4.
 
     Args:
         registry_path: Registry xlsx. Default ``gui_paths.last_ds_registry_file``.
@@ -1211,6 +1228,8 @@ def run_ds_registry_check_job(
             not scanned.
         rfp_root: Root-only RFP folder. Same orphan rule. Omitted means the
             RFP catalog is not scanned.
+        on_locked: Asked when the canonical file cannot be replaced. True
+            continues with the prepared workbook. Omitted stops the job.
 
     Returns:
         Russian summary. ``success`` is false when the file cannot be loaded.
@@ -1240,6 +1259,7 @@ def run_ds_registry_check_job(
         ds_root=Path(ds_root) if ds_root else None,
         rfp_root=Path(rfp_root) if rfp_root else None,
         on_lap=_on_lap,
+        on_locked=on_locked,
     )
     session.phase_done(
         "чтение и проверка реестра",

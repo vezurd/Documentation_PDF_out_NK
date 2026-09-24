@@ -6,10 +6,12 @@ may be named by several actual numbers. Active numbers that share one closed
 nonempty RFP file set are a legal cluster; other shared RFP numbers or files
 are an error. The working workbook lives
 in ``_RFP`` as ``Реестр_ДС_УЛ.xlsx``. «Проверить реестр» renames a legacy
-file to ``Реестр_ДС_УЛ_old.xlsx`` and replaces it. If Excel holds the file
-open, a dated copy is written; the program reads the newest of the main file
-and at most five dated copies. An old wide sheet (blocks «Связь N») is still
-read and collapsed into rows of the same number.
+file to ``Реестр_ДС_УЛ_old.xlsx`` and replaces it. Before that replace the
+current file is copied into ``_old_Реестры УЛ ДС`` with a date-time suffix.
+If Excel holds the file open, no dated copy is written beside it: the run
+stops unless the caller chooses to continue. That choice keeps the prepared
+workbook as the file later steps, including Step4, read. An old wide sheet
+(blocks «Связь N») is still read and collapsed into rows of the same number.
 """
 
 from __future__ import annotations
@@ -59,11 +61,16 @@ DEFAULT_RFP_BASE = Path(
 )
 CANONICAL_REGISTRY_NAME = "Реестр_ДС_УЛ.xlsx"
 OLD_REGISTRY_NAME = "Реестр_ДС_УЛ_old.xlsx"
+REGISTRY_ARCHIVE_DIR_NAME = "_old_Реестры УЛ ДС"
+PENDING_REGISTRY_DIR_NAME = "_pending_реестр"
+# Name sort in Explorer: later stamp is lower. Seconds keep two writes apart.
+REGISTRY_ARCHIVE_STAMP = "%Y.%m.%d_%H.%M.%S"
 DATED_REGISTRY_RE = re.compile(
     r"^Реестр_ДС_УЛ_(\d{8}_\d{6})\.xlsx$", re.IGNORECASE
 )
 MAX_DATED_REGISTRY_COPIES = 5
 DEFAULT_REGISTRY_PATH = DEFAULT_RFP_BASE / CANONICAL_REGISTRY_NAME
+DEFAULT_REGISTRY_ARCHIVE_DIR = DEFAULT_RFP_BASE / REGISTRY_ARCHIVE_DIR_NAME
 
 STATUS_ACTIVE = "Активен"
 STATUS_HISTORY = "История"
@@ -2510,34 +2517,35 @@ class RegistryInstall:
     """Where the one working registry was written."""
 
     path: Path
-    mode: Literal["canonical", "dated"]
+    mode: Literal["canonical", "pending"]
     archived_path: Path | None = None
     archived_now: bool = False
 
 
-def resolve_latest_registry(directory: str | Path | None = None) -> Path:
-    """Newest working registry in ``_RFP``: the main file or a dated copy.
+def pending_registry_path(home: str | Path) -> Path:
+    """Workbook prepared when the canonical file could not be replaced."""
 
-    ``Реестр_ДС_УЛ_old.xlsx`` is never chosen. If nothing exists yet, returns
-    the canonical path (the file may be missing).
+    return Path(home) / PENDING_REGISTRY_DIR_NAME / CANONICAL_REGISTRY_NAME
+
+
+def resolve_latest_registry(directory: str | Path | None = None) -> Path:
+    """Working registry in ``_RFP``.
+
+    A prepared workbook left because Excel held the canonical file open wins:
+    that is the file the run meant to write. Otherwise the canonical name.
+    Dated copies beside the canonical file are ignored. If nothing exists yet,
+    returns the canonical path (the file may be missing).
     """
 
     home = Path(directory) if directory else DEFAULT_RFP_BASE
     canonical = home / CANONICAL_REGISTRY_NAME
-    found: list[Path] = []
+    pending = pending_registry_path(home)
     try:
-        if canonical.is_file():
-            found.append(canonical)
-        for path in home.iterdir():
-            if path.name.startswith("~$"):
-                continue
-            if DATED_REGISTRY_RE.match(path.name) and path.is_file():
-                found.append(path)
+        if pending.is_file():
+            return pending
     except OSError:
         return canonical
-    if not found:
-        return canonical
-    return max(found, key=lambda item: item.stat().st_mtime)
+    return canonical
 
 
 def prune_dated_registries(
@@ -2595,16 +2603,51 @@ def archive_legacy_canonical(home: str | Path) -> tuple[Path | None, bool]:
     return old, True
 
 
-def _next_dated_registry_path(folder: Path) -> Path:
-    """Next free ``Реестр_ДС_УЛ_<YYYYMMDD_HHMMSS>.xlsx`` in ``folder``."""
+def _archive_stamp_path(folder: Path) -> Path:
+    """Next free ``Реестр_ДС_УЛ_<YYYY.MM.DD_HH.MM.SS>.xlsx`` in ``folder``."""
 
     stamp_dt = datetime.now()
     for _ in range(8):
-        candidate = folder / f"Реестр_ДС_УЛ_{stamp_dt.strftime('%Y%m%d_%H%M%S')}.xlsx"
+        candidate = folder / (
+            f"Реестр_ДС_УЛ_{stamp_dt.strftime(REGISTRY_ARCHIVE_STAMP)}.xlsx"
+        )
         if not candidate.exists():
             return candidate
         stamp_dt += timedelta(seconds=1)
-    return folder / f"Реестр_ДС_УЛ_{stamp_dt.strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return folder / f"Реестр_ДС_УЛ_{stamp_dt.strftime(REGISTRY_ARCHIVE_STAMP)}.xlsx"
+
+
+def archive_current_registry(canonical: Path) -> Path:
+    """Copy the current registry into ``_old_Реестры УЛ ДС`` before replace.
+
+    The stamp is ``YYYY.MM.DD_HH.MM.SS``, so a name sort in Explorer puts the
+    newest file at the bottom.
+
+    Raises:
+        DsRegistryError: The archive folder or the copy could not be written.
+    """
+
+    archive_dir = canonical.parent / REGISTRY_ARCHIVE_DIR_NAME
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        dest = _archive_stamp_path(archive_dir)
+        shutil.copy2(canonical, dest)
+    except OSError as exc:
+        raise DsRegistryError(
+            f"Не удалось сохранить текущий {canonical.name} в "
+            f"{REGISTRY_ARCHIVE_DIR_NAME} перед записью: {exc}"
+        ) from exc
+    return dest
+
+
+def _drop_pending_registry(home: Path) -> None:
+    pending = pending_registry_path(home)
+    try:
+        pending.unlink(missing_ok=True)
+        if pending.parent.is_dir() and not any(pending.parent.iterdir()):
+            pending.parent.rmdir()
+    except OSError:
+        pass
 
 
 def install_working_registry(
@@ -2612,22 +2655,27 @@ def install_working_registry(
     home: str | Path,
     *,
     links: RegistryLinks | None = None,
+    on_locked: Callable[[], bool] | None = None,
 ) -> RegistryInstall:
     """Write the one working registry into ``home`` (the ``_RFP`` folder).
 
-    The canonical name is replaced when it is free. If Excel holds it open, a
-    ``Реестр_ДС_УЛ_<дата>.xlsx`` copy is written instead and older dated copies
-    beyond five are deleted.
+    The current canonical file is copied into ``_old_Реестры УЛ ДС`` before it
+    is replaced. If Excel holds the canonical name open, nothing dated is
+    written beside it. ``on_locked`` may let the run continue: the prepared
+    workbook is kept under ``_pending_реестр`` and is what later steps read.
+    Without that choice the call raises and the prepared file is removed.
 
     Args:
         rows: New-format rows, including a migration result.
         home: Directory that contains the working registry. Not a reports stamp.
+        on_locked: Return True to continue without replacing the locked file.
 
     Returns:
         The path the program should read next.
 
     Raises:
-        DsRegistryError: Neither the canonical name nor a dated copy could be written.
+        DsRegistryError: The canonical file is locked and the run must stop,
+            or the archive copy / replace failed.
     """
 
     folder = Path(home)
@@ -2636,23 +2684,39 @@ def install_working_registry(
     written = write_registry_workbook(staging, rows, links=links)
     archived, moved_now = archive_legacy_canonical(folder)
     canonical = folder / CANONICAL_REGISTRY_NAME
+    history_copy: Path | None = None
+    if canonical.is_file():
+        try:
+            history_copy = archive_current_registry(canonical)
+        except DsRegistryError:
+            written.unlink(missing_ok=True)
+            raise
     try:
         os.replace(written, canonical)
     except PermissionError:
-        dated = _next_dated_registry_path(folder)
-        try:
-            os.replace(written, dated)
-        except OSError:
+        continue_locked = False
+        if on_locked is not None:
+            continue_locked = bool(on_locked())
+        if not continue_locked:
             written.unlink(missing_ok=True)
             raise DsRegistryError(
-                f"{CANONICAL_REGISTRY_NAME} открыт в Excel, заменить его нельзя, "
-                "и копия с датой тоже не записалась. Закройте файл и повторите проверку."
+                f"{CANONICAL_REGISTRY_NAME} открыт в Excel, записать его нельзя. "
+                "Обновлённый реестр не сохранён. Закройте файл и повторите проверку."
             )
-        prune_dated_registries(folder)
+        pending = pending_registry_path(folder)
+        try:
+            pending.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(written, pending)
+        except OSError as exc:
+            written.unlink(missing_ok=True)
+            raise DsRegistryError(
+                f"{CANONICAL_REGISTRY_NAME} открыт в Excel, и подготовленный "
+                f"реестр не удалось оставить для следующих шагов: {exc}"
+            ) from exc
         return RegistryInstall(
-            path=dated,
-            mode="dated",
-            archived_path=archived,
+            path=pending,
+            mode="pending",
+            archived_path=history_copy or archived,
             archived_now=moved_now,
         )
     except OSError:
@@ -2663,11 +2727,11 @@ def install_working_registry(
             except OSError:
                 pass
         raise
-    prune_dated_registries(folder)
+    _drop_pending_registry(folder)
     return RegistryInstall(
         path=canonical,
         mode="canonical",
-        archived_path=archived,
+        archived_path=history_copy or archived,
         archived_now=moved_now,
     )
 

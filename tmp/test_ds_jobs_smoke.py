@@ -32,16 +32,18 @@ from RFQ.rfp_parts.ds_jobs import (
 )
 from RFQ.rfp_parts.ds_registry import (
     CANONICAL_REGISTRY_NAME,
-    DATED_REGISTRY_RE,
     DEFAULT_REGISTRY_PATH,
     MODE_WHOLE,
     MIGRATION_REPORT_PREFIX,
     OLD_REGISTRY_NAME,
+    REGISTRY_ARCHIVE_DIR_NAME,
     STATUS_ACTIVE,
+    DsRegistryError,
     DsRegistryRelation,
     DsRegistryRow,
     detect_registry_format,
     install_working_registry,
+    pending_registry_path,
     resolve_latest_registry,
     write_registry_workbook,
 )
@@ -213,16 +215,10 @@ class DsJobsSmokeTest(unittest.TestCase):
             self.assertIsNotNone(cockpit)
             self.assertIn(OLD_REGISTRY_NAME, cockpit.next_step)
 
-    def test_locked_canonical_keeps_five_dated_copies(self) -> None:
+    def test_locked_canonical_stops_without_dated_copy(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
             home = Path(raw)
-            real_replace = os.replace
-
-            def fake_replace(src, dst):
-                if Path(dst).name == CANONICAL_REGISTRY_NAME:
-                    raise PermissionError(5, "locked")
-                return real_replace(src, dst)
-
+            canonical = home / CANONICAL_REGISTRY_NAME
             row = DsRegistryRow(
                 status=STATUS_ACTIVE,
                 source_id="13",
@@ -235,21 +231,35 @@ class DsJobsSmokeTest(unittest.TestCase):
                     ),
                 ),
             )
+            write_registry_workbook(canonical, [row])
+            before = canonical.read_bytes()
+            real_replace = os.replace
+
+            def fake_replace(src, dst):
+                if Path(dst).name == CANONICAL_REGISTRY_NAME and Path(dst).parent == home:
+                    raise PermissionError(5, "locked")
+                return real_replace(src, dst)
+
             with patch("RFQ.rfp_parts.ds_registry.os.replace", side_effect=fake_replace):
-                last = None
-                for _ in range(6):
-                    last = install_working_registry([row], home)
-            self.assertIsNotNone(last)
-            assert last is not None
-            self.assertEqual(last.mode, "dated")
+                with self.assertRaises(DsRegistryError) as caught:
+                    install_working_registry([row], home)
+                self.assertIn("открыт в Excel", str(caught.exception))
+                pending = install_working_registry([row], home, on_locked=lambda: True)
+            self.assertEqual(pending.mode, "pending")
+            self.assertEqual(pending.path, pending_registry_path(home))
+            self.assertTrue(pending.path.is_file())
+            self.assertEqual(canonical.read_bytes(), before)
+            self.assertEqual(resolve_latest_registry(home), pending.path)
             dated = [
                 path
                 for path in home.iterdir()
-                if DATED_REGISTRY_RE.match(path.name)
+                if path.suffix == ".xlsx" and path.name != CANONICAL_REGISTRY_NAME
             ]
-            self.assertEqual(len(dated), 5)
-            self.assertEqual(resolve_latest_registry(home), last.path)
-            self.assertFalse((home / CANONICAL_REGISTRY_NAME).exists())
+            self.assertEqual(dated, [])
+            archive = home / REGISTRY_ARCHIVE_DIR_NAME
+            copies = list(archive.glob("Реестр_ДС_УЛ_*.xlsx"))
+            self.assertEqual(len(copies), 2)
+            self.assertTrue(all("." in path.stem.split("_")[-1] for path in copies))
 
     def test_coverage_warns_if_rfp_missing(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:

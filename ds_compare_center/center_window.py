@@ -7,10 +7,11 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QProcess, QTimer, Slot
+from PySide6.QtCore import Qt, QObject, QProcess, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QComboBox,
@@ -215,6 +216,40 @@ _TAB_BY_NAME = {
     "vpn": _TAB_INDEX_VPN,
     "cursor_vpn": _TAB_INDEX_VPN,
 }
+
+
+class _RegistryLockPrompt(QObject):
+    """Ask on the GUI thread whether to continue with a locked registry."""
+
+    _ask = Signal()
+
+    def __init__(self, parent: QWidget, file_name: str) -> None:
+        super().__init__(parent)
+        self._file_name = file_name
+        self._event = threading.Event()
+        self._answer = False
+        self._ask.connect(self._show)
+
+    def __call__(self) -> bool:
+        self._event.clear()
+        self._answer = False
+        self._ask.emit()
+        self._event.wait()
+        return self._answer
+
+    def _show(self) -> None:
+        answer = QMessageBox.question(
+            self.parentWidget(),
+            "Реестр ДС",
+            f"Файл {self._file_name} открыт в Excel, записать обновление нельзя.\n\n"
+            "Продолжить без записи в этот файл?\n"
+            "Подготовленный реестр всё равно пойдёт дальше и попадёт в результат Step4. "
+            "Файл, открытый в Excel, не изменится.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        self._answer = answer == QMessageBox.StandardButton.Yes
+        self._event.set()
 
 
 class CenterWindow(QWidget):
@@ -1061,9 +1096,10 @@ class CenterWindow(QWidget):
         self._start_job(_JOB_TITLE_UL_ONE, run_ul_one_file_job, file_path)
 
     def _run_ds_registry(self) -> None:
-        from RFQ.rfp_parts.ds_registry import DEFAULT_RFP_BASE
+        from RFQ.rfp_parts.ds_registry import CANONICAL_REGISTRY_NAME, DEFAULT_RFP_BASE
 
         paths = self._ds_job_paths()
+        self._registry_lock_prompt = _RegistryLockPrompt(self, CANONICAL_REGISTRY_NAME)
         self._start_job(
             _JOB_TITLE_DS_REGISTRY,
             run_ds_registry_check_job,
@@ -1072,6 +1108,7 @@ class CenterWindow(QWidget):
             paths["ul_root"],
             paths["source_root"],
             paths["rfp_root"],
+            on_locked=self._registry_lock_prompt,
             job_tab="rfp_parts",
         )
 
