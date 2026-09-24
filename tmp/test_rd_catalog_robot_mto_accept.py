@@ -23,6 +23,7 @@ from rd_catalog.robot_mto_accept import (
     ROBOT_MTO_ACCEPT_FOREGROUND,
     build_robot_mto_accept_view,
     robot_mto_accept_paints_blue,
+    robot_mto_accept_paints_green,
     robot_mto_accept_state,
 )
 
@@ -146,6 +147,9 @@ def main() -> None:
         assert not robot_mto_accept_paints_blue(
             ACCEPT_STALE, content_equal=False
         )
+        assert robot_mto_accept_paints_green(ACCEPT_LIVE)
+        assert not robot_mto_accept_paints_green(ACCEPT_STALE)
+        assert not robot_mto_accept_paints_green(ACCEPT_MISSING_ROBOT)
         view = build_robot_mto_accept_view(stored, rd=new_rd, robot=robot)
         assert view.status == "устарело"
         live_view = build_robot_mto_accept_view(stored, rd=rd, robot=robot)

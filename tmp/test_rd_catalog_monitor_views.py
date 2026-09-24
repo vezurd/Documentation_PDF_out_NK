@@ -47,6 +47,7 @@ from rd_catalog.monitor_views import (
     MIXED_TITLES_KEY,
     REV_DIFF_FILL,
     REV_MATCH_FILL,
+    ROBOT_ORPHAN_FILL,
     ROBOT_ORIGIN_FILL,
     TDO_STATUSES,
     CatalogMonitor,
@@ -2349,8 +2350,12 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         )
         cell = painted.cells["Робот МТО · рев."]
         self.assertEqual(cell.foreground, ROBOT_MTO_ACCEPT_FOREGROUND)
+        self.assertEqual(cell.fill, ROBOT_ORIGIN_FILL)
         self.assertIn("подтверждён вручную", cell.tooltip)
         self.assertIn("правки робота", painted.haystack)
+        self.assertNotEqual(
+            painted.cells["РД · рев."].fill, ROBOT_ORIGIN_FILL
+        )
         equal = _paint_kits(
             row,
             _ok_pipeline(),
@@ -2363,6 +2368,7 @@ class GoogleFMtoPaintTests(unittest.TestCase):
             equal.cells["Робот МТО · рев."].foreground,
             ROBOT_MTO_ACCEPT_FOREGROUND,
         )
+        self.assertEqual(equal.cells["Робот МТО · рев."].fill, ROBOT_ORIGIN_FILL)
         stale_rd = replace(rd_rec, data={**rd_rec.data, "mtime_ns": 99, "disk_mtime_ns": 99})
         stale = _paint_kits(
             row,
@@ -2378,6 +2384,9 @@ class GoogleFMtoPaintTests(unittest.TestCase):
         self.assertNotEqual(
             stale.cells["Робот МТО · рев."].foreground,
             ROBOT_MTO_ACCEPT_FOREGROUND,
+        )
+        self.assertEqual(
+            stale.cells["Робот МТО · рев."].fill, ROBOT_ORPHAN_FILL
         )
 
     def test_legend_includes_robot_accept_blue(self) -> None:

@@ -139,6 +139,7 @@ from rd_catalog.robot_mto_accept import (
     accepts_by_kit,
     mto_xlsx_record,
     robot_mto_accept_paints_blue,
+    robot_mto_accept_paints_green,
     robot_mto_accept_state,
     robot_mto_accept_tooltip,
 )
@@ -1143,12 +1144,13 @@ def kits_paint_legend(
             intro=(
                 "Насыщенная зелёная заливка робота — копия РД/SQ "
                 "и та же ревизия, что «MTO · рев.» актуальной папки "
-                "(не «РД · рев.» / OD). "
+                "(не «РД · рев.» / OD), **или** ручное подтверждение "
+                "замены MTO РД с правками. "
                 "Жирный — содержимое совпало с MTO РД, даже если "
-                "ревизия другая. Красная заливка — не копия. "
-                "Синий текст — ручное подтверждение правок робота "
-                "относительно текущего MTO официальной папки "
-                "(не origin-зелёный). "
+                "ревизия другая. Красная заливка — не копия и нет "
+                "подтверждения. "
+                "Синий текст — подтверждённая замена с корректировками "
+                "(не сверка байтов и не копия по дате). "
                 "Это важнее бледной зелёной / жёлтой сверки ревизий."
             ),
             samples=(
@@ -1195,9 +1197,9 @@ def kits_paint_legend(
                 sample(
                     "Робот МТО · рев.",
                     "01-AN01",
-                    "Правки робота подтверждены вручную относительно "
-                    "текущего MTO официальной папки РД. Синий текст; "
-                    "заливка origin не меняется. Не ставить, если "
+                    "Подтверждена замена MTO РД с правками: зелёная "
+                    "заливка вместо красного orphan, синий текст. "
+                    "Не копия по дате. Не ставить синий, если "
                     "содержимое уже совпало (жирный).",
                     fill=ROBOT_ORIGIN_FILL,
                     foreground=ROBOT_MTO_ACCEPT_FOREGROUND,
@@ -4537,6 +4539,7 @@ def build_kits_monitor_row(
         accept_state,
         content_equal=mto_content_equal is True or origin.content_equal,
     )
+    accept_paints_green = robot_mto_accept_paints_green(accept_state)
     code_a = bool(
         pipeline is not None
         and pipeline_display_code_a(
@@ -4683,6 +4686,8 @@ def build_kits_monitor_row(
                 cell = replace(cell, bold=True)
             if row.robot.present and mto_content_equal is None:
                 cell = _append_tooltip(cell, _MTO_COMPARE_PENDING_TIP)
+            if accept_paints_green:
+                cell = replace(cell, fill=ROBOT_ORIGIN_FILL)
             if accept_paints_blue and robot_mto_accept is not None:
                 cell = replace(
                     cell,

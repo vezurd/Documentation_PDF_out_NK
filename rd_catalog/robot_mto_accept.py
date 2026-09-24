@@ -1,8 +1,9 @@
 """Manual accept that a robot MTO corresponds to the official RD MTO.
 
 The row lives in SQLite (``robot_mto_accept``). Live/stale uses the official
-folder MTO ``path_key`` + size + disk mtime, not workbook bytes. Origin
-green and content-equal stay independent.
+folder MTO ``path_key`` + size + disk mtime, not workbook bytes. A live
+accept paints the robot cell origin-green (not date-copy) plus blue text
+when content differs. Content-equal bold stays independent.
 """
 
 from __future__ import annotations
@@ -42,9 +43,10 @@ ACCEPT_TAB_HEADERS = (
 )
 
 ACCEPT_LIVE_TOOLTIP = (
-    "MTO робота подтверждён вручную как актуальный относительно "
-    "текущего MTO РД официальной папки. Содержимое может отличаться "
-    "(коды закупки, теги). Это не копия по дате и не сверка байтов."
+    "MTO робота подтверждён вручную как замена текущего MTO РД "
+    "официальной папки (с корректировками: коды закупки, теги). "
+    "Зелёная заливка — эта связь; синий текст — не копия по дате "
+    "и не сверка байтов."
 )
 
 
@@ -131,6 +133,17 @@ def robot_mto_accept_paints_blue(
     """Return whether Комплекты should use blue robot-revision text."""
 
     return state == ACCEPT_LIVE and content_equal is not True
+
+
+def robot_mto_accept_paints_green(state: str) -> bool:
+    """Return whether Комплекты should use origin-green fill on the robot cell.
+
+    Live accept means the operator linked this robot file to the official
+    RD MTO (replacement with edits). That is not a date-copy origin, but
+    the red orphan fill would contradict the confirmation.
+    """
+
+    return state == ACCEPT_LIVE
 
 
 def robot_mto_accept_tooltip(
