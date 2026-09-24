@@ -308,6 +308,61 @@ def clean_text_cell(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _stamp_font_keys(page: fitz.Page) -> list[str]:
+    """Resource names of the Diadoc subset font, not body Segoe text."""
+    keys: list[str] = []
+    for font in page.get_fonts() or []:
+        name = str(font[3])
+        key = str(font[4])
+        if name.startswith("EPDLTT+") and "SegoeUI" in name:
+            keys.append(key)
+    return keys
+
+
+def _cut_stamp_stream(raw: bytes, font_key: str) -> bytes | None:
+    """Drop the trailing blue stamp block that paints ``font_key``.
+
+    The block is a ``q`` … ``Q`` at the end of the page stream: blue fill,
+    the transfer lines, the icon and the circle. Table text is earlier and
+    uses another font, so it stays even where the stamp bbox overlaps it.
+    """
+    token = b"/" + font_key.encode("ascii") + b" "
+    pos = raw.rfind(token)
+    if pos < 0:
+        return None
+    color = b"0 0.33333 0.7451 rg"
+    start = raw.rfind(color, 0, pos)
+    if start < 0:
+        return None
+    qpos = raw.rfind(b"q", 0, start)
+    if qpos < 0 or start - qpos > 24:
+        qpos = start
+    return raw[:qpos]
+
+
+def _apply_stamp_stream_cut(page: fitz.Page) -> bool:
+    keys = _stamp_font_keys(page)
+    if not keys:
+        return False
+    xrefs = page.get_contents()
+    if not xrefs:
+        return False
+    raw = page.read_contents()
+    updated = raw
+    for key in keys:
+        cut = _cut_stamp_stream(updated, key)
+        if cut is not None and cut != updated:
+            updated = cut
+    if updated == raw:
+        return False
+    page.clean_contents()
+    xrefs = page.get_contents()
+    if len(xrefs) != 1:
+        return False
+    page.parent.update_stream(xrefs[0], updated)
+    return True
+
+
 def strip_diadoc_stamps(doc: fitz.Document) -> int:
     """Remove the Diadoc transfer line and its icon from every page.
 
@@ -324,6 +379,9 @@ def strip_diadoc_stamps(doc: fitz.Document) -> int:
     """
     pages_hit = 0
     for page in doc:
+        if _apply_stamp_stream_cut(page):
+            pages_hit += 1
+            continue
         anchor: fitz.Rect | None = None
         text_rects: list[fitz.Rect] = []
         data = page.get_text("dict") or {}
