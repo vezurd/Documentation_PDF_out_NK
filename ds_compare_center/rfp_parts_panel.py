@@ -47,7 +47,12 @@ from RFQ.rfp_parts.ds_hybrid_preflight import (
     ds_baseline_output_dir,
     ds_hybrid_output_dir,
 )
-from RFQ.rfp_parts.ds_jobs import CockpitRow, DsCockpitSnapshot, get_last_ds_cockpit
+from RFQ.rfp_parts.ds_jobs import (
+    SUPPLY_HEADERS,
+    CockpitRow,
+    DsCockpitSnapshot,
+    get_last_ds_cockpit,
+)
 from RFQ.rfp_parts.ds_registry import (
     DEFAULT_REGISTRY_PATH,
     DEFAULT_RFP_BASE,
@@ -513,10 +518,12 @@ class RfpPartsPanel(QWidget):
         tabs.setDocumentMode(True)
         tabs.setMinimumHeight(560)
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._table_supply = self._make_table(box, SUPPLY_HEADERS)
         self._table_registry = self._make_table(box, _REGISTRY_HEADERS)
         self._table_groups = self._make_table(box, _GROUP_HEADERS)
         self._table_files = self._make_table(box, _DS_FILE_HEADERS)
         self._table_coverage = self._make_table(box, _COVERAGE_HEADERS)
+        self._tab_index_supply = tabs.addTab(self._table_supply, "Сводка номеров")
         self._tab_index_registry = tabs.addTab(self._table_registry, "Реестр по ДС")
         self._tab_index_groups = tabs.addTab(self._table_groups, "Итог по группам")
         self._tab_index_files = tabs.addTab(self._table_files, "Файлы")
@@ -529,6 +536,7 @@ class RfpPartsPanel(QWidget):
         )
         self._cockpit_tabs = tabs
         v.addWidget(tabs, stretch=1)
+        self._paint_tab(self._tab_index_supply, [])
         self._paint_tab(self._tab_index_registry, [])
         self._paint_tab(self._tab_index_groups, [])
         self._paint_tab(self._tab_index_files, [])
@@ -994,10 +1002,12 @@ class RfpPartsPanel(QWidget):
             f"дубли={snapshot.duplicates} · файлов ДС={snapshot.file_count} · "
             f"RFP={snapshot.rfp_file_count}"
         )
+        self._fill_table(self._table_supply, snapshot.supply_rows)
         self._fill_table(self._table_registry, snapshot.registry_rows)
         self._fill_table(self._table_groups, snapshot.group_rows)
         self._fill_table(self._table_files, snapshot.file_rows)
         self._fill_table(self._table_coverage, snapshot.coverage_rows)
+        self._paint_tab(self._tab_index_supply, snapshot.supply_rows)
         self._paint_tab(self._tab_index_registry, snapshot.registry_rows)
         self._paint_tab(self._tab_index_groups, snapshot.group_rows)
         self._paint_tab(self._tab_index_files, snapshot.file_rows)

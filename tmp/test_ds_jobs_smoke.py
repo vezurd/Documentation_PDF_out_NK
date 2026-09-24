@@ -22,8 +22,10 @@ from RFQ.ds_compare.ds_compare_config import (
 )
 from RFQ.rfp_parts.ds_baseline import IdentityDsUnitsConverter
 from RFQ.rfp_parts.ds_jobs import (
+    SUPPLY_HEADERS,
     CockpitRow,
     DsCockpitSnapshot,
+    build_supply_rows,
     get_last_ds_cockpit,
     run_ds_baseline_job,
     run_ds_coverage_job,
@@ -38,9 +40,12 @@ from RFQ.rfp_parts.ds_registry import (
     OLD_REGISTRY_NAME,
     REGISTRY_ARCHIVE_DIR_NAME,
     STATUS_ACTIVE,
+    DsRegistryDocument,
     DsRegistryError,
+    DsRegistryIssue,
     DsRegistryRelation,
     DsRegistryRow,
+    DsRegistryValidation,
     detect_registry_format,
     install_working_registry,
     pending_registry_path,
@@ -50,6 +55,7 @@ from RFQ.rfp_parts.ds_registry import (
 from RFQ.rfp_parts.ds_rfp_hybrid import (
     HYBRID_REPORT_PREFIX,
     HYBRID_XLSX_NAME,
+    DsRfpGroupResult,
     IdentityRfpUnitsConverter,
 )
 from RFQ.units_convert.models import GoogleUnitsIndex
@@ -345,6 +351,82 @@ class DsJobsSmokeTest(unittest.TestCase):
             )
 
 
+def _supply_row(source_id: str, *, status: str = STATUS_ACTIVE, rfp_file: str = "") -> DsRegistryRow:
+    return DsRegistryRow(
+        status=status,
+        source_id=source_id,
+        relations=(
+            DsRegistryRelation(
+                group_id=f"ДС{source_id}",
+                rfp_key=source_id,
+                ul_folder=f"согл УЛ ДС{source_id}",
+                rfp_file=rfp_file,
+            ),
+        ),
+    )
+
+
+class SupplyRowsSmokeTest(unittest.TestCase):
+    def test_one_row_per_number_with_hybrid_copied_onto_cluster(self) -> None:
+        shared = "ДС14_48.RFP-0007.xlsx"
+        document = DsRegistryDocument(
+            path=Path("registry.xlsx"),
+            rows=[
+                _supply_row("13", rfp_file="missing.xlsx"),
+                _supply_row("8"),
+                _supply_row("14", rfp_file=shared),
+                _supply_row("48", rfp_file=shared),
+                _supply_row("7", status="История"),
+            ],
+            validation=DsRegistryValidation(
+                issues=[
+                    DsRegistryIssue(
+                        code="rfp_conflict",
+                        level="ERROR",
+                        message="разные наборы файлов RFP",
+                        source_id="13",
+                    )
+                ]
+            ),
+            max_relation_blocks=1,
+        )
+        hybrid_group = DsRfpGroupResult(
+            group_id="cluster:14+48",
+            group_label="cluster:14+48",
+            status="MATCH",
+            selected_source="RFP",
+            reason="без смешения; ключи RFP на своих номерах",
+            overlay_blocked=False,
+            fallback=False,
+            ds_position_count=2,
+            rfp_record_count=1,
+            rfp_files=(shared,),
+            ds_source_ids=("14", "48"),
+        )
+        rows = build_supply_rows(
+            document,
+            kind="hybrid",
+            ds_files_by_id={"13": ["spec13.xlsx"], "14": ["a.xlsx"], "48": ["b.xlsx"]},
+            rfp_files_by_key={"14": [shared], "48": [shared]},
+            ds_scanned=True,
+            rfp_scanned=True,
+            hybrid=type("H", (), {"groups": [hybrid_group]})(),
+        )
+        by_number = {row.cells[0]: row for row in rows}
+        self.assertEqual(len(SUPPLY_HEADERS), 11)
+        self.assertEqual(by_number["ДС13"].cells[2], "ошибка")
+        self.assertEqual(by_number["ДС13"].cells[8], "не пишется")
+        self.assertEqual(by_number["ДС8"].cells[3], "нет файла")
+        self.assertEqual(by_number["ДС8"].cells[8], "не пишется")
+        self.assertEqual(by_number["ДС8"].tone, "error")
+        self.assertEqual(by_number["ДС14"].cells[6], "14+48")
+        self.assertEqual(by_number["ДС48"].cells[6], "14+48")
+        self.assertEqual(by_number["ДС14"].cells[7], "теги RFP на номере")
+        self.assertEqual(by_number["ДС48"].cells[7], by_number["ДС14"].cells[7])
+        self.assertEqual(by_number["ДС7"].cells[8], "вне мешка")
+        self.assertEqual(by_number["ДС7"].cells[7], "—")
+
+
 class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -421,6 +503,8 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
         panel.fill_from_snapshot(snapshot)
         self.app.processEvents()
         self.assertTrue(btn_use.isVisible())
+        self.assertEqual(panel._table_supply.columnCount(), len(SUPPLY_HEADERS))
+        self.assertEqual(panel._cockpit_tabs.tabText(panel._tab_index_supply), "Сводка номеров")
         self.assertEqual(panel._table_registry.rowCount(), 1)
         self.assertEqual(panel._table_coverage.rowCount(), 1)
         self.assertIn("ERROR=0", panel._cockpit_summary.text())

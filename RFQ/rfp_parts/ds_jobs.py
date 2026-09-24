@@ -58,9 +58,12 @@ from RFQ.rfp_parts.ds_registry import (
     MIGRATION_REPORT_PREFIX,
     OLD_REGISTRY_NAME,
     MODE_NO_UL,
+    STATUS_ACTIVE,
     DsRegistryDocument,
     DsRegistryError,
     _ds_file_names,
+    canonical_supply_group_id,
+    legal_rfp_file_clusters,
     detect_registry_format,
     default_migration_report_path,
     ensure_registry_legend,
@@ -77,7 +80,12 @@ from RFQ.rfp_parts.ds_registry import (
 )
 from RFQ.rfp_parts.ds_rfp_hybrid import (
     HYBRID_XLSX_NAME,
+    STATUS_BLOCKED,
+    STATUS_DS_ONLY,
     STATUS_MATCH,
+    STATUS_MISMATCH,
+    STATUS_RFP_ONLY,
+    DsRfpGroupResult,
     DsRfpHybridResult,
     build_ds_rfp_hybrid,
     collect_rfp_workbooks,
@@ -86,6 +94,21 @@ from RFQ.rfp_parts.ds_rfp_hybrid import (
 
 Tone = Literal["error", "warn", "match", "ok"]
 JobKind = Literal["registry", "baseline", "hybrid", "coverage"]
+
+SUPPLY_HEADERS: tuple[str, ...] = (
+    "Номер",
+    "В реестре",
+    "Чтение реестра",
+    "Файлы ДС",
+    "Файлы RFP",
+    "Папки УЛ",
+    "Кластер",
+    "Замещение",
+    "Свод",
+    "Аудит",
+    "Замечание",
+)
+_TONE_RANK = {"error": 0, "warn": 1, "match": 2, "ok": 3}
 
 DS_REGISTRY_DIR_NAME = "_ds_registry"
 ROBOT_REGISTRY_COPY_NAME = "Реестр_ДС_УЛ_migrated.xlsx"
@@ -159,6 +182,7 @@ class DsCockpitSnapshot:
     group_rows: list[CockpitRow] = field(default_factory=list)
     file_rows: list[CockpitRow] = field(default_factory=list)
     coverage_rows: list[CockpitRow] = field(default_factory=list)
+    supply_rows: list[CockpitRow] = field(default_factory=list)
 
     @property
     def banner_tone(self) -> Tone:
@@ -667,6 +691,273 @@ def _registry_next_step(
     return ""
 
 
+def _join_names(names: list[str]) -> str:
+    seen: list[str] = []
+    for name in names:
+        text = str(name or "").strip()
+        if text and text not in seen:
+            seen.append(text)
+    return "; ".join(seen)
+
+
+def _worst_tone(*tones: Tone) -> Tone:
+    return min(tones, key=lambda item: _TONE_RANK.get(item, 3), default="ok")
+
+
+def _substitution_text(item: DsRfpGroupResult) -> tuple[str, Tone]:
+    """Russian overlay verdict and its row tone."""
+    cluster = len(item.ds_source_ids) > 1 or item.group_id.startswith("cluster:")
+    slash = item.group_label if "/" in item.group_label else item.group_id
+    mixed = cluster and "смешение" in item.reason and "без смешения" not in item.reason
+    if item.status == STATUS_BLOCKED:
+        return "заблокировано, осталось ДС", "error"
+    if mixed and item.status == STATUS_MATCH:
+        return f"смешение {slash}, теги RFP", "match"
+    if mixed:
+        return f"смешение {slash}, количество ДС", "warn"
+    if cluster and item.status == STATUS_MATCH:
+        return "теги RFP на номере", "match"
+    if cluster and item.status == STATUS_MISMATCH:
+        return "теги не сели, осталось ДС", "warn"
+    if item.status == STATUS_MATCH:
+        return "заменено на RFP", "match"
+    if item.status == STATUS_MISMATCH:
+        return "осталось ДС", "warn"
+    if item.status == STATUS_DS_ONLY:
+        return "только ДС", "ok"
+    if item.status == STATUS_RFP_ONLY:
+        return "только RFP, не в своде", "warn"
+    return item.status or "—", "ok"
+
+
+def build_supply_rows(
+    document: DsRegistryDocument,
+    *,
+    kind: JobKind,
+    ds_files_by_id: dict[str, list[str]] | None = None,
+    rfp_files_by_key: dict[str, list[str]] | None = None,
+    ul_root: Path | None = None,
+    ds_scanned: bool = False,
+    rfp_scanned: bool = False,
+    hybrid: DsRfpHybridResult | None = None,
+    baseline: DsBaselineResult | None = None,
+) -> list[CockpitRow]:
+    """One cockpit row per actual DS number, plus catalog orphans.
+
+    History and disabled numbers stay in the table. A hybrid cluster verdict
+    is copied onto every member. The substitution cell stays «—» until a
+    hybrid job has run.
+    """
+    ds_files_by_id = ds_files_by_id or {}
+    rfp_files_by_key = rfp_files_by_key or {}
+    rfp_on_disk = {
+        name.casefold()
+        for names in rfp_files_by_key.values()
+        for name in names
+    }
+    issues_by_source: dict[str, list[Any]] = defaultdict(list)
+    loose: list[Any] = []
+    for item in document.validation.issues:
+        if item.source_id:
+            issues_by_source[item.source_id].append(item)
+        elif not item.group_id:
+            loose.append(item)
+    audit_by_source: dict[str, list[Any]] = defaultdict(list)
+    audit_loose: list[Any] = []
+    if baseline is not None:
+        for item in baseline.issues:
+            if item.source_id:
+                audit_by_source[item.source_id].append(item)
+            else:
+                audit_loose.append(item)
+    hybrid_by_source: dict[str, DsRfpGroupResult] = {}
+    if hybrid is not None:
+        for item in hybrid.groups:
+            owners = list(item.ds_source_ids)
+            if not owners and item.group_id.startswith("ДС") and "/" not in item.group_id:
+                owners = [item.group_id.removeprefix("ДС")]
+            for source_id in owners:
+                hybrid_by_source[str(source_id)] = item
+    clusters = {
+        source_id: cluster
+        for cluster in legal_rfp_file_clusters(document.rows)
+        for source_id in cluster
+    }
+    summary_blocked = document.validation.error_count > 0 or (
+        baseline is not None and baseline.blocking
+    )
+    by_source: dict[str, list[Any]] = defaultdict(list)
+    for row in document.rows:
+        if row.source_id:
+            by_source[row.source_id].append(row)
+
+    built: list[tuple[int, int, CockpitRow]] = []
+    for source_id, rows in by_source.items():
+        status = next((row.status for row in rows if row.status), "") or "—"
+        active = status == STATUS_ACTIVE
+        rels = [
+            rel
+            for row in rows
+            for rel in row.relations
+            if not rel.is_empty()
+        ]
+        reg_items = issues_by_source.get(source_id, [])
+        levels = {str(item.level) for item in reg_items}
+        if "ERROR" in levels:
+            read_label, read_tone = "ошибка", "error"
+        elif "WARN" in levels or "OVERLAY" in levels:
+            read_label, read_tone = "предупреждение", "warn"
+        else:
+            read_label, read_tone = "ок", "ok"
+        ds_names = list(ds_files_by_id.get(source_id, []))
+        if ds_scanned and active and not ds_names:
+            ds_cell, ds_tone = "нет файла", "warn"
+        elif ds_names:
+            ds_cell, ds_tone = _join_names(ds_names), "ok"
+        else:
+            ds_cell, ds_tone = "—", "ok"
+        named_rfp: list[str] = []
+        rfp_keys: list[str] = []
+        for rel in rels:
+            named_rfp.extend(_ds_file_names(rel.rfp_file))
+            if rel.rfp_key:
+                rfp_keys.append(rel.rfp_key)
+        disk_rfp = [
+            name
+            for key in rfp_keys
+            for name in rfp_files_by_key.get(key, [])
+        ]
+        shown_rfp = named_rfp or disk_rfp
+        missing_named = rfp_scanned and any(
+            name.casefold() not in rfp_on_disk for name in named_rfp
+        )
+        missing_key = rfp_scanned and any(key and not rfp_files_by_key.get(key) for key in rfp_keys)
+        if not shown_rfp and not rfp_keys:
+            rfp_cell, rfp_tone = "—", "ok"
+        elif rfp_scanned and (missing_named or missing_key) and not disk_rfp:
+            rfp_cell, rfp_tone = "нет файла", "warn"
+        elif rfp_scanned and (missing_named or missing_key):
+            rfp_cell, rfp_tone = _join_names(shown_rfp) + "; нет файла", "warn"
+        elif shown_rfp:
+            rfp_cell, rfp_tone = _join_names(shown_rfp), "ok"
+        else:
+            rfp_cell, rfp_tone = "; ".join(dict.fromkeys(rfp_keys)), "ok"
+        folders: list[str] = []
+        ul_missing = False
+        for rel in rels:
+            if not rel.ul_folder or rel.mode == MODE_NO_UL:
+                continue
+            for folder in _ds_file_names(rel.ul_folder) or [rel.ul_folder]:
+                if ul_root is not None and not _is_dir(ul_root / folder):
+                    folders.append(f"нет папки: {folder}")
+                    ul_missing = True
+                else:
+                    folders.append(folder)
+        ul_cell = _join_names(folders) or "—"
+        ul_tone: Tone = "warn" if ul_missing else "ok"
+        cluster = clusters.get(source_id)
+        cluster_cell = (
+            "+".join(sorted(cluster, key=lambda item: (not item.isdigit(), int(item) if item.isdigit() else item)))
+            if cluster
+            else "—"
+        )
+        verdict = hybrid_by_source.get(source_id)
+        if kind != "hybrid" or not active:
+            sub_cell, sub_tone = "—", "ok"
+            sub_note = ""
+        elif verdict is None:
+            sub_cell, sub_tone = "ещё не считалось", "ok"
+            sub_note = ""
+        else:
+            sub_cell, sub_tone = _substitution_text(verdict)
+            sub_note = verdict.reason
+        if not active:
+            summary_cell, summary_tone = "вне мешка", "ok"
+        elif summary_blocked:
+            summary_cell, summary_tone = "не пишется", "error"
+        else:
+            summary_cell, summary_tone = "войдёт", "ok"
+        audit_items = audit_by_source.get(source_id, [])
+        if baseline is None:
+            audit_cell, audit_tone = "—", "ok"
+        elif any(item.level == "ERROR" for item in audit_items):
+            audit_cell = f"{sum(item.level == 'ERROR' for item in audit_items)} ошибок"
+            audit_tone = "error"
+        elif audit_items:
+            audit_cell = f"{len(audit_items)} предупр."
+            audit_tone = "warn"
+        else:
+            audit_cell, audit_tone = "ок", "ok"
+        notes = [item.message for item in reg_items]
+        if ds_cell == "нет файла":
+            notes.append("нет файла ДС")
+        if sub_note:
+            notes.append(sub_note)
+        tone = _worst_tone(read_tone, ds_tone, rfp_tone, ul_tone, sub_tone, summary_tone, audit_tone)
+        group_hint = canonical_supply_group_id(source_id)
+        cells = (
+            group_hint,
+            status,
+            read_label,
+            ds_cell,
+            rfp_cell,
+            ul_cell,
+            cluster_cell,
+            sub_cell,
+            summary_cell,
+            audit_cell,
+            _issue_note(notes),
+        )
+        inactive_rank = 0 if active else 1
+        built.append((_TONE_RANK[tone], inactive_rank, CockpitRow(cells=cells, tone=tone)))
+
+    for item in loose:
+        built.append((
+            0,
+            0,
+            CockpitRow(
+                cells=(
+                    "—",
+                    "—",
+                    "ошибка" if item.level == "ERROR" else "предупреждение",
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    "не пишется" if item.level == "ERROR" else "—",
+                    "—",
+                    item.message,
+                ),
+                tone="error" if item.level == "ERROR" else "warn",
+            ),
+        ))
+    if audit_loose:
+        errors = sum(item.level == "ERROR" for item in audit_loose)
+        built.append((
+            0 if errors else 1,
+            0,
+            CockpitRow(
+                cells=(
+                    "—",
+                    "—",
+                    "ок",
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    "не пишется" if errors else "войдёт",
+                    f"{errors} ошибок" if errors else f"{len(audit_loose)} предупр.",
+                    _issue_note([item.message for item in audit_loose]),
+                ),
+                tone="error" if errors else "warn",
+            ),
+        ))
+    built.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in built]
+
+
 def _snapshot_from_registry(
     *,
     kind: JobKind,
@@ -815,6 +1106,17 @@ def _snapshot_from_registry(
         group_rows=group_rows,
         file_rows=file_rows,
         coverage_rows=coverage_rows,
+        supply_rows=build_supply_rows(
+            document,
+            kind=kind,
+            ds_files_by_id=ds_files_by_id,
+            rfp_files_by_key=rfp_files_by_key,
+            ul_root=ul_for_cov,
+            ds_scanned=source_root is not None and _is_dir(source_root),
+            rfp_scanned=rfp_root is not None and _is_dir(rfp_root),
+            hybrid=hybrid,
+            baseline=baseline,
+        ),
     )
 
 
@@ -1592,7 +1894,9 @@ def run_ds_coverage_job(
 
 
 __all__ = [
+    "SUPPLY_HEADERS",
     "CockpitRow",
+    "build_supply_rows",
     "DEFAULT_PARTS_DIR",
     "DEFAULT_REGISTRY_PATH",
     "DEFAULT_REPORTS_BASE_DIR",
