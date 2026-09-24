@@ -692,6 +692,28 @@ def _registry_next_step(
     return ""
 
 
+def _audit_owner(item: Any, file_owner: dict[str, str]) -> str:
+    """DS number for an audit remark.
+
+    Conversion warnings often have an empty ``source_id`` and name the workbook
+    after ``источник=``. Unmatched remarks stay out of the number table.
+    """
+    source_id = str(getattr(item, "source_id", "") or "").strip()
+    if source_id:
+        return source_id
+    message = str(getattr(item, "message", "") or "")
+    marker = "источник="
+    if marker in message:
+        filename = message.split(marker, 1)[1].split("·", 1)[0].split(";", 1)[0].strip()
+        found = file_owner.get(filename.casefold())
+        if found:
+            return found
+    relpath = str(getattr(item, "relpath", "") or "")
+    if relpath:
+        return file_owner.get(Path(relpath).name.casefold(), "")
+    return ""
+
+
 def _join_names(names: list[str]) -> str:
     seen: list[str] = []
     for name in names:
@@ -763,14 +785,17 @@ def build_supply_rows(
             issues_by_source[item.source_id].append(item)
         elif not item.group_id:
             loose.append(item)
+    file_owner = {
+        name.casefold(): source_id
+        for source_id, names in ds_files_by_id.items()
+        for name in names
+    }
     audit_by_source: dict[str, list[Any]] = defaultdict(list)
-    audit_loose: list[Any] = []
     if baseline is not None:
         for item in baseline.issues:
-            if item.source_id:
-                audit_by_source[item.source_id].append(item)
-            else:
-                audit_loose.append(item)
+            owner = _audit_owner(item, file_owner)
+            if owner:
+                audit_by_source[owner].append(item)
     hybrid_by_source: dict[str, DsRfpGroupResult] = {}
     if hybrid is not None:
         for item in hybrid.groups:
@@ -929,27 +954,6 @@ def build_supply_rows(
                     item.message,
                 ),
                 tone="error" if item.level == "ERROR" else "warn",
-            ),
-        ))
-    if audit_loose:
-        errors = sum(item.level == "ERROR" for item in audit_loose)
-        built.append((
-            0 if errors else 1,
-            0,
-            CockpitRow(
-                cells=(
-                    "—",
-                    "ок",
-                    "—",
-                    "—",
-                    "—",
-                    "—",
-                    "—",
-                    "не пишется" if errors else "войдёт",
-                    f"{errors} ошибок" if errors else f"{len(audit_loose)} предупр.",
-                    _issue_note([item.message for item in audit_loose]),
-                ),
-                tone="error" if errors else "warn",
             ),
         ))
     built.sort(key=lambda item: (item[0], item[1]))

@@ -428,6 +428,39 @@ class SupplyRowsSmokeTest(unittest.TestCase):
         self.assertEqual(by_number["ДС48"].cells[6], by_number["ДС14"].cells[6])
         self.assertEqual(by_number["ДС7"].cells[7], "вне мешка")
         self.assertEqual(by_number["ДС7"].cells[6], "—")
+        self.assertNotIn("—", by_number)
+
+    def test_google_unit_warnings_stay_on_the_file_number(self) -> None:
+        document = DsRegistryDocument(
+            path=Path("registry.xlsx"),
+            rows=[_supply_row("100")],
+            validation=DsRegistryValidation(),
+            max_relation_blocks=1,
+        )
+        warning = type(
+            "Issue",
+            (),
+            {
+                "source_id": "",
+                "level": "WARN",
+                "message": (
+                    "Нет единицы Google для кода BCC0003626, "
+                    "источник=ДС_100_45А_Спецификация №_63.xlsx·лист ·13; "
+                    "количество не изменено"
+                ),
+                "relpath": "",
+            },
+        )()
+        baseline = type("Baseline", (), {"issues": [warning], "blocking": False})()
+        rows = build_supply_rows(
+            document,
+            kind="baseline",
+            ds_files_by_id={"100": ["ДС_100_45А_Спецификация №_63.xlsx"]},
+            ds_scanned=True,
+            baseline=baseline,
+        )
+        self.assertEqual([row.cells[0] for row in rows], ["ДС100"])
+        self.assertEqual(rows[0].cells[8], "1 предупр.")
 
     def test_indicator_workbook_keeps_line_breaks(self) -> None:
         from openpyxl import load_workbook
