@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from RFQ.rfp_parts.analyze_rfp_parts import REQUIRED_FIELDS, _match_header, _parse_decimal
 from RFQ.rfp_parts.pdf_rfp_extract import (
     extract_rfp_pdf,
+    materials_coverage_issue,
     parse_ds_label_from_title_text,
     pdf_rfp_stamp_dir,
     preview_ds_label,
@@ -235,6 +236,37 @@ class RfpPdfExtractSmokeTest(unittest.TestCase):
             self.assertIn("TAG-A", tags)
             self.assertIn("TAG-B", tags)
             self.assertNotIn("TAG-ATAG-B", tags)
+
+    def test_coverage_warns_on_early_stop_not_on_appendix(self) -> None:
+        early = materials_coverage_issue(
+            pdf_page_count=100,
+            first_page=7,
+            last_page=19,
+            expected_cols=19,
+            stop_page=20,
+            stop_cols=21,
+        )
+        self.assertIsNotNone(early)
+        self.assertIn("7–19", early.message)
+        self.assertIn("из 100", early.message)
+        appendix = materials_coverage_issue(
+            pdf_page_count=100,
+            first_page=7,
+            last_page=93,
+            expected_cols=19,
+            stop_page=94,
+            stop_cols=7,
+        )
+        self.assertIsNone(appendix)
+        short_tail = materials_coverage_issue(
+            pdf_page_count=42,
+            first_page=10,
+            last_page=36,
+            expected_cols=19,
+            stop_page=37,
+            stop_cols=19,
+        )
+        self.assertIsNone(short_tail)
 
     def test_strip_diadoc_keeps_header_page_number(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -231,11 +231,21 @@ class RfpPdfPanel(QWidget):
         self._xlsx_path = result.xlsx_path
         self._report_path = result.report_path
         self._out_dir = result.out_dir
-        ok = result.contract_errors == 0 and result.outside_words == 0
-        self._banner.setText(
+        truncated = any(
+            "в xlsx попали листы" in item.message for item in result.issues
+        )
+        ok = (
+            result.contract_errors == 0
+            and result.outside_words == 0
+            and not truncated
+        )
+        banner = (
             f"Строк: {result.row_count}; ошибок контракта: {result.contract_errors}; "
             f"слов вне ячеек: {result.outside_words}"
         )
+        if truncated:
+            banner += "; таблица оборвана раньше конца PDF"
+        self._banner.setText(banner)
         self._banner.setStyleSheet(_BANNER_OK if ok else _BANNER_BAD)
         issues = result.issues[:_ISSUES_DISPLAY_CAP]
         table = self._table

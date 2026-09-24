@@ -441,7 +441,8 @@ def extract_rfp_pdf(
                 )
             )
 
-        page_tables = _collect_materials_page_tables(doc, started=started)
+        page_scan = _collect_materials_page_tables(doc, started=started)
+        page_tables = page_scan.pages
         if not page_tables:
             raise RuntimeError(
                 "в PDF не найдена таблица материалов "
@@ -457,6 +458,17 @@ def extract_rfp_pdf(
             started,
             detail=f"страниц {len(page_tables)}, строк {len(all_rows)}",
         )
+        coverage = materials_coverage_issue(
+            pdf_page_count=doc.page_count,
+            first_page=page_tables[0].page_index + 1,
+            last_page=page_tables[-1].page_index + 1,
+            expected_cols=page_tables[0].col_count,
+            stop_page=page_scan.stop_page,
+            stop_cols=page_scan.stop_cols,
+        )
+        if coverage is not None:
+            issues.append(coverage)
+            _log_phase("охват листов", started, detail=coverage.message)
 
         header_row, left_cols, right_cols = _find_materials_header(all_rows)
         if header_row is None or right_cols is None or left_cols is None:
@@ -641,11 +653,20 @@ def _page_tables(page: fitz.Page) -> list[Any]:
     return list(tables)
 
 
+@dataclass(frozen=True)
+class _MaterialsScan:
+    """Materials pages plus why the scan stopped."""
+
+    pages: list[_MaterialsPage]
+    stop_page: int | None
+    stop_cols: int | None
+
+
 def _collect_materials_page_tables(
     doc: fitz.Document,
     *,
     started: float,
-) -> list[_MaterialsPage]:
+) -> _MaterialsScan:
     """Return snapshotted materials pages.
 
     Text and cell boxes are copied before the next ``find_tables`` call.
@@ -654,6 +675,8 @@ def _collect_materials_page_tables(
     found: list[_MaterialsPage] = []
     started_run = False
     expected_cols: int | None = None
+    stop_page: int | None = None
+    stop_cols: int | None = None
     for page_index in range(doc.page_count):
         page_started = time.perf_counter()
         page = doc[page_index]
@@ -666,6 +689,7 @@ def _collect_materials_page_tables(
                 detail=f"стр. {page_index + 1}: таблиц нет, find {find_s:.2f} с",
             )
             if started_run:
+                stop_page = page_index + 1
                 break
             continue
         largest = max(tables, key=_table_area)
@@ -722,6 +746,8 @@ def _collect_materials_page_tables(
                 ),
             )
         else:
+            stop_page = page_index + 1
+            stop_cols = ncols
             _log_phase(
                 "страница",
                 started,
@@ -730,7 +756,59 @@ def _collect_materials_page_tables(
                 ),
             )
             break
-    return found
+    return _MaterialsScan(pages=found, stop_page=stop_page, stop_cols=stop_cols)
+
+
+def materials_coverage_issue(
+    *,
+    pdf_page_count: int,
+    first_page: int,
+    last_page: int,
+    expected_cols: int,
+    stop_page: int | None,
+    stop_cols: int | None,
+) -> PdfRfpIssue | None:
+    """Warn when the materials table stops while many pages are still left.
+
+    A sharp drop in column count is treated as an appendix and is not a
+    truncated extract. A similar or larger column count with a long tail is
+    the case where a stamp split the grid and the scan stopped early.
+
+    Args:
+        pdf_page_count: Pages in the PDF after the optional stamp strip.
+        first_page: First materials page, 1-based.
+        last_page: Last page written into the xlsx, 1-based.
+        expected_cols: Column count of the materials table.
+        stop_page: Page that ended the scan, 1-based, if the scan broke.
+        stop_cols: Column count on ``stop_page``, if that page had a table.
+
+    Returns:
+        A WARN issue, or None when the tail is short or looks like an appendix.
+    """
+    if pdf_page_count <= 0 or last_page <= 0:
+        return None
+    tail = pdf_page_count - last_page
+    if tail <= 0:
+        return None
+    if (
+        stop_cols is not None
+        and expected_cols > 0
+        and stop_cols <= expected_cols * 0.6
+    ):
+        return None
+    if tail <= max(3, int(pdf_page_count * 0.15)):
+        return None
+    stop = ""
+    if stop_page is not None:
+        cols = f", колонок {stop_cols}" if stop_cols is not None else ""
+        stop = f", стоп на стр. {stop_page}{cols}"
+    return PdfRfpIssue(
+        "WARN",
+        (
+            f"в xlsx попали листы {first_page}–{last_page} из {pdf_page_count}: "
+            f"после листа {last_page} осталось {tail}{stop}"
+        ),
+    )
 
 
 def _rows_continue_materials(rows: tuple[tuple[str, ...], ...]) -> bool:
@@ -1204,7 +1282,8 @@ __all__ = (
     "PdfRfpResult",
     "clean_code_cell",
     "clean_text_cell",
-    "extract_rfp_pdf",
+        "extract_rfp_pdf",
+        "materials_coverage_issue",
     "strip_diadoc_stamps",
     "get_last_pdf_rfp_result",
     "parse_ds_label_from_title_text",
