@@ -7,7 +7,9 @@ Output lives under ``RFP сводный файл/_pdf_rfp/``, never in ``RFP_З�
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -69,6 +71,28 @@ _FURNITURE_WORDS = frozenset({"страница", "из"})
 _HEADER_NPP = "№ п/п"
 _GROUP_RD = "Закупка по РД"
 _GROUP_LOT = 'Закупка по "Лоту"'
+
+
+def _log_phase(phase: str, started: float, *, detail: str = "") -> None:
+    """Print one timed line. ``print`` is mirrored into the job monitor."""
+    stamp = datetime.now().strftime("%H:%M:%S")
+    extra = f" — {detail}" if detail else ""
+    elapsed = time.perf_counter() - started
+    print(f"[pdf rfp] {stamp} {phase}{extra} — {elapsed:.2f} с", flush=True)
+
+
+@dataclass(frozen=True)
+class _MaterialsPage:
+    """Rows and cell boxes copied while the page table is still valid.
+
+    PyMuPDF table objects are overwritten by the next ``find_tables`` call,
+    so text and rectangles must be snapshotted immediately.
+    """
+
+    page_index: int
+    rows: tuple[tuple[str, ...], ...]
+    col_count: int
+    cell_rects: tuple[tuple[float, float, float, float], ...]
 
 
 @dataclass(frozen=True)
@@ -249,8 +273,11 @@ def extract_rfp_pdf(
     """
     pdf_path = Path(pdf_path)
     issues: list[PdfRfpIssue] = []
+    started = time.perf_counter()
+    _log_phase("старт", started, detail=pdf_path.name)
     doc = fitz.open(pdf_path)
     try:
+        _log_phase("pdf открыт", started, detail=f"страниц {doc.page_count}")
         page0_text = doc[0].get_text() if doc.page_count else ""
         if ds_label is None:
             raw_label = parse_ds_label_from_title_text(page0_text)
@@ -265,26 +292,37 @@ def extract_rfp_pdf(
                 )
             )
 
-        page_tables = _collect_materials_page_tables(doc)
+        page_tables = _collect_materials_page_tables(doc, started=started)
         if not page_tables:
             raise RuntimeError(
                 "в PDF не найдена таблица материалов "
                 "(нет ячейки «Наименование МТР» или «Закупка по»)"
             )
 
-        col_count = page_tables[0][2]
+        col_count = page_tables[0].col_count
         all_rows: list[list[str]] = []
-        for _page_index, table, ncols in page_tables:
-            extracted = _table_extract(table)
-            for raw_row in extracted:
-                all_rows.append(_pad_row(raw_row, ncols if ncols else col_count))
+        for materials_page in page_tables:
+            all_rows.extend(list(row) for row in materials_page.rows)
+        _log_phase(
+            "строки сняты",
+            started,
+            detail=f"страниц {len(page_tables)}, строк {len(all_rows)}",
+        )
 
         header_row, left_cols, right_cols = _find_materials_header(all_rows)
         if header_row is None or right_cols is None or left_cols is None:
+            _log_header_miss(all_rows)
             raise RuntimeError(
                 "не удалось разобрать шапку таблицы материалов "
                 f"(нужны столбцы: {format_field_list(REQUIRED_FIELDS)})"
             )
+        _log_phase(
+            "шапка",
+            started,
+            detail="лот=" + ", ".join(
+                f"{field}:{right_cols[field]}" for field in REQUIRED_FIELDS
+            ),
+        )
 
         identity_idx = _identity_column_indexes(left_cols, right_cols)
         data_rows = [
@@ -312,6 +350,7 @@ def extract_rfp_pdf(
                     )
 
         outside = _scan_outside_words(doc, page_tables)
+        _log_phase("слова вне ячеек", started, detail=str(len(outside)))
     finally:
         doc.close()
 
@@ -347,6 +386,14 @@ def extract_rfp_pdf(
         outside_words=len(outside),
         issues=issues,
         outside=outside,
+    )
+    _log_phase(
+        "готово",
+        started,
+        detail=(
+            f"строк {len(cleaned_rows)}, ошибок контракта {contract_errors}, "
+            f"слов вне ячеек {len(outside)}"
+        ),
     )
     return PdfRfpResult(
         xlsx_path=xlsx_path,
@@ -429,16 +476,6 @@ def _is_materials_table(table: Any) -> bool:
     return False
 
 
-def _first_body_cell_is_digit(table: Any) -> bool:
-    for row in _table_extract(table):
-        padded = _pad_row(row, len(row))
-        if _is_dropped_header_or_total(padded):
-            continue
-        first = padded[0].strip() if padded else ""
-        return bool(first) and first[0].isdigit()
-    return False
-
-
 def _page_tables(page: fitz.Page) -> list[Any]:
     finder = page.find_tables()
     tables = getattr(finder, "tables", None)
@@ -449,32 +486,130 @@ def _page_tables(page: fitz.Page) -> list[Any]:
 
 def _collect_materials_page_tables(
     doc: fitz.Document,
-) -> list[tuple[int, Any, int]]:
-    """Return ``(page_index, table, col_count)`` for the materials run."""
-    found: list[tuple[int, Any, int]] = []
-    started = False
+    *,
+    started: float,
+) -> list[_MaterialsPage]:
+    """Return snapshotted materials pages.
+
+    Text and cell boxes are copied before the next ``find_tables`` call.
+    A later extract of the same table object returns another page's text.
+    """
+    found: list[_MaterialsPage] = []
+    started_run = False
     expected_cols: int | None = None
     for page_index in range(doc.page_count):
+        page_started = time.perf_counter()
         page = doc[page_index]
         tables = _page_tables(page)
+        find_s = time.perf_counter() - page_started
         if not tables:
-            if started:
+            _log_phase(
+                "страница",
+                started,
+                detail=f"стр. {page_index + 1}: таблиц нет, find {find_s:.2f} с",
+            )
+            if started_run:
                 break
             continue
         largest = max(tables, key=_table_area)
         extracted = _table_extract(largest)
         ncols = _table_col_count(largest, extracted)
-        if not started:
-            if _is_materials_table(largest):
-                started = True
-                expected_cols = ncols
-                found.append((page_index, largest, ncols))
+        rows = tuple(
+            tuple(_pad_row(raw, ncols if ncols else len(raw))) for raw in extracted
+        )
+        if not started_run:
+            if not _is_materials_table(largest):
+                _log_phase(
+                    "страница",
+                    started,
+                    detail=(
+                        f"стр. {page_index + 1}: не материалы, "
+                        f"таблиц {len(tables)}, find {find_s:.2f} с"
+                    ),
+                )
+                continue
+            started_run = True
+            expected_cols = ncols
+            found.append(
+                _MaterialsPage(
+                    page_index=page_index,
+                    rows=rows,
+                    col_count=ncols,
+                    cell_rects=tuple(_table_cell_rects(largest)),
+                )
+            )
+            _log_phase(
+                "страница",
+                started,
+                detail=(
+                    f"стр. {page_index + 1}: старт материалов, "
+                    f"колонок {ncols}, строк {len(rows)}, find {find_s:.2f} с"
+                ),
+            )
             continue
-        if ncols == expected_cols and _first_body_cell_is_digit(largest):
-            found.append((page_index, largest, ncols))
+        if ncols == expected_cols and _rows_continue_materials(rows):
+            found.append(
+                _MaterialsPage(
+                    page_index=page_index,
+                    rows=rows,
+                    col_count=ncols,
+                    cell_rects=tuple(_table_cell_rects(largest)),
+                )
+            )
+            _log_phase(
+                "страница",
+                started,
+                detail=(
+                    f"стр. {page_index + 1}: продолжение, "
+                    f"строк {len(rows)}, find {find_s:.2f} с"
+                ),
+            )
         else:
+            _log_phase(
+                "страница",
+                started,
+                detail=(
+                    f"стр. {page_index + 1}: стоп, колонок {ncols}, find {find_s:.2f} с"
+                ),
+            )
             break
     return found
+
+
+def _rows_continue_materials(rows: tuple[tuple[str, ...], ...]) -> bool:
+    for row in rows:
+        padded = list(row)
+        if _is_dropped_header_or_total(padded):
+            continue
+        first = padded[0].strip() if padded else ""
+        return bool(first) and first[0].isdigit()
+    return False
+
+
+def _log_header_miss(rows: list[list[str]]) -> None:
+    """Print the closest header candidate so a failed match is visible."""
+    best_missing: list[str] | None = None
+    best_preview = ""
+    for index, row in enumerate(rows[:8]):
+        columns = _match_header(row, prefer_lot_qty=True)
+        missing = [field for field in REQUIRED_FIELDS if field not in columns]
+        preview = " | ".join(
+            (cell or "").replace("\n", "/")[:30] for cell in row[:8]
+        )
+        print(
+            f"[pdf rfp] шапка строка {index + 1}: нет {', '.join(missing) or '—'} "
+            f"— {preview}",
+            flush=True,
+        )
+        if best_missing is None or len(missing) < len(best_missing):
+            best_missing = missing
+            best_preview = preview
+    if best_missing is not None:
+        print(
+            f"[pdf rfp] ближайшая шапка, не хватает: {', '.join(best_missing)} "
+            f"— {best_preview}",
+            flush=True,
+        )
 
 
 def _is_dropped_header_or_total(row: list[str]) -> bool:
@@ -587,12 +722,12 @@ def _is_furniture_word(word: str) -> bool:
 
 def _scan_outside_words(
     doc: fitz.Document,
-    page_tables: list[tuple[int, Any, int]],
+    page_tables: list[_MaterialsPage],
 ) -> list[_OutsideWord]:
     found: list[_OutsideWord] = []
-    for page_index, table, _ncols in page_tables:
-        page = doc[page_index]
-        rects = _table_cell_rects(table)
+    for materials_page in page_tables:
+        page = doc[materials_page.page_index]
+        rects = materials_page.cell_rects
         words = page.get_text("words") or []
         for item in words:
             if len(item) < 5:
@@ -606,7 +741,7 @@ def _scan_outside_words(
                 continue
             found.append(
                 _OutsideWord(
-                    page=page_index + 1,
+                    page=materials_page.page_index + 1,
                     word=token,
                     x=cx,
                     y=cy,
