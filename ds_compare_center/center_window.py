@@ -73,6 +73,7 @@ from ds_compare_center.misc_run_panel import MiscRunPanel
 from ds_compare_center.mto_paths_panel import MtoPathsPanel
 from ds_compare_center.rfp_ds_id_panel import RfpDsIdPanel
 from ds_compare_center.rfp_ds_mp_panel import RfpDsMpPanel
+from ds_compare_center.rfp_mix_settings import read_collect_mix_mode
 from ds_compare_center.rfp_parts_panel import RfpPartsPanel, rfp_parts_reports_dir
 from ds_compare_center.rfp_progress_parser import RfpProgressParser
 from ds_compare_center.rfp_run_panel import RfpRunPanel
@@ -791,7 +792,9 @@ class CenterWindow(QWidget):
         self._persist_gui_path("last_merge_ds_folder", path)
         return path
 
-    def _start_job(self, title: str, fn, *args, job_tab: str | None = None) -> None:
+    def _start_job(
+        self, title: str, fn, *args, job_tab: str | None = None, **kwargs
+    ) -> None:
         if self._runner.is_running() or self._proc_busy():
             QMessageBox.information(self, "Занято", "Дождитесь завершения текущей операции.")
             return
@@ -824,7 +827,7 @@ class CenterWindow(QWidget):
             self._function_job_tab = "run"
             self._monitor.start_job(title)
             self._tabs.setCurrentIndex(_TAB_INDEX_RUN)
-        self._runner.start(title, fn, *args)
+        self._runner.start(title, fn, *args, **kwargs)
 
     def _proc_busy(self) -> bool:
         return self._proc_runner.process().state() != QProcess.ProcessState.NotRunning
@@ -1000,6 +1003,7 @@ class CenterWindow(QWidget):
             paths["ul_root"],
             paths["rfp_root"],
             job_tab="rfp_parts",
+            mix_mode=read_collect_mix_mode(load_config()),
         )
 
     def _run_ds_coverage(self) -> None:

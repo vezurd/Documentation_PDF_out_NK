@@ -64,6 +64,14 @@ from RFQ.rfp_parts.file_status import (
     load_file_status_payload,
     resolve_duplicate_tags_xlsx,
 )
+from RFQ.tags_rfp_compare.rfp_tags_utils import load_config
+from ds_compare_center.rfp_mix_blocks import RfpCollectJobBlock
+from ds_compare_center.rfp_mix_settings import (
+    COLLECT_JOB_DS_ONLY,
+    COLLECT_JOB_HYBRID,
+    COLLECT_JOB_PARTS,
+    format_collect_run_button,
+)
 from ds_compare_center.split_layout import (
     WrappingLabel,
     WrappingPlainText,
@@ -226,6 +234,7 @@ class RfpPartsPanel(QWidget):
         root.setContentsMargins(8, 8, 8, 8)
         root.addWidget(splitter)
         self.reload_paths_from_config()
+        self.refresh_collect_from_config()
         self._refresh_status()
         self._refresh_paths()
         self._refresh_file_status()
@@ -335,31 +344,23 @@ class RfpPartsPanel(QWidget):
             "с датой, программа берёт самую новую и хранит 5 копий.",
             self._click_ds_registry,
         )
-        self._add_action_with_comment(
-            box,
-            v,
-            "Собрать свод только из ДС",
-            "Аудит папки ДС без RFP. Пишет «Свод ДС для запуска.xlsx» в "
-            "_ds_baseline. При ошибке раскладки свод не создаётся.",
-            self._click_ds_baseline,
+        self._collect_block = shrink_h(RfpCollectJobBlock(box))
+        self._collect_block.selection_changed.connect(self._on_collect_selection)
+        v.addWidget(self._collect_block)
+        self._btn_collect = QPushButton("", box)
+        self._btn_collect.setMinimumWidth(0)
+        self._btn_collect.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
-        self._add_action_with_comment(
+        self._btn_collect.clicked.connect(self._click_collect)
+        v.addWidget(self._btn_collect)
+        collect_hint = WrappingLabel(
+            "Запускает выбранный сбор. Посадка RFP влияет только на свод ДС+RFP.",
             box,
-            v,
-            "Собрать свод из ДС и наложить RFP",
-            "Сначала аудит папки ДС, затем корень RFP_Зиновьев без подпапок. "
-            "Пишет «Свод ДС-RFP для запуска.xlsx» в _ds_hybrid. Группа целиком "
-            "из RFP только если совпали код, единица и количество. Иначе группа "
-            "остаётся из ДС.",
-            self._click_ds_hybrid,
         )
-        self._add_action_with_comment(
-            box,
-            v,
-            "Собрать свод частей RFP",
-            "Прежний сбор rfp_parts_net.xlsx. Контур ДС и реестр не трогает.",
-            self._click_run,
-        )
+        collect_hint.setStyleSheet(_ACTION_COMMENT_STYLE)
+        v.addWidget(collect_hint)
+        self._sync_collect_button()
         self._add_action_with_comment(
             box,
             v,
@@ -373,7 +374,7 @@ class RfpPartsPanel(QWidget):
             box,
             v,
             "Проверить один файл ДС",
-            "Тот же аудит, что «Собрать свод только из ДС», только выбранная книга. "
+            "Тот же аудит, что сбор только из ДС, только выбранная книга. "
             "Отчёт лежит в _проверка_одного_файла\\ДС. "
             "«Свод ДС для запуска.xlsx» остаётся от полного прогона.",
             self._click_one_ds,
@@ -949,6 +950,41 @@ class RfpPartsPanel(QWidget):
                 "Путь",
                 f"Не удалось открыть в проводнике:\n{path}\n\n{exc}",
             )
+
+    def _click_collect(self) -> None:
+        job = self._collect_block.current_job()
+        if job == COLLECT_JOB_PARTS:
+            self._click_run()
+            return
+        if job == COLLECT_JOB_DS_ONLY:
+            self._click_ds_baseline()
+            return
+        if job == COLLECT_JOB_HYBRID:
+            self._click_ds_hybrid()
+
+    def refresh_collect_from_config(self) -> None:
+        """Apply stored collect job/mix without rewriting the JSON."""
+        if not hasattr(self, "_collect_block"):
+            return
+        try:
+            config = load_config()
+        except Exception:
+            config = {}
+        self._collect_block.apply_config(config)
+        self._sync_collect_button()
+
+    def _sync_collect_button(self) -> None:
+        if not hasattr(self, "_btn_collect"):
+            return
+        self._btn_collect.setText(
+            format_collect_run_button(
+                self._collect_block.current_job(),
+                self._collect_block.current_mix(),
+            )
+        )
+
+    def _on_collect_selection(self, _job: str, _mix: str) -> None:
+        self._sync_collect_button()
 
     def _click_run(self) -> None:
         if self._on_run is None:

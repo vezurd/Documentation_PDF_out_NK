@@ -85,11 +85,14 @@ from RFQ.packing_list_provider import (
     PackingIssue,
     PackingQualityLevel,
     RegistryPackingIndex,
+    build_registry_planting_index,
     load_packing_dataset,
     normalize_packing_key_part,
     packing_match_key,
     registry_packing_scope,
     rfp_packing_match_key,
+    rfp_row_actual_ds,
+    rfp_row_supply_key,
     slim_packing_rows,
 )
 from RFQ.tags_rfp_compare.gem_supply_codes import (
@@ -1275,6 +1278,183 @@ class RfpPackingMatcherSmokeTest(unittest.TestCase):
         leftovers = _values(rows, STATUS_PACKING_ONLY)
         self.assertEqual(len(leftovers), 1)
         self.assertEqual(leftovers[0].get_value(UL_COMPARE_STATUS), STATUS_PACKING_ONLY)
+
+    def test_mixed_slash_supply_key_uses_own_folders_not_actual_fifteen(self) -> None:
+        from RFQ.rfp_parts.ds_registry import (
+            DsRegistryRelation,
+            DsRegistryRow,
+            STATUS_ACTIVE,
+        )
+
+        folder_mixed = "согл УЛ смесь 15-61"
+        folder_15 = "согл УЛ ДС15"
+        key_mixed = normalize_packing_key_part(folder_mixed)
+        key_15 = normalize_packing_key_part(folder_15)
+
+        class _Doc:
+            def __init__(self, rows: list) -> None:
+                self.active_rows = rows
+
+        document = _Doc(
+            [
+                DsRegistryRow(
+                    status=STATUS_ACTIVE,
+                    source_id="15/61",
+                    relations=(
+                        DsRegistryRelation(
+                            group_id="ДС15/61",
+                            rfp_key="99",
+                            ul_folder=folder_mixed,
+                        ),
+                    ),
+                ),
+                DsRegistryRow(
+                    status=STATUS_ACTIVE,
+                    source_id="15",
+                    relations=(
+                        DsRegistryRelation(
+                            group_id="ДС15",
+                            rfp_key="15",
+                            ul_folder=folder_15,
+                        ),
+                    ),
+                ),
+            ]
+        )
+        index = build_registry_planting_index(document)
+        self.assertEqual(index.mixed_ds_to_folders["15/61"], frozenset({key_mixed}))
+        self.assertEqual(index.ds_to_folders[15], frozenset({key_15}))
+        self.assertNotIn(99, index.rfp_number_to_actual)
+
+        mixed_rfp = _row(ds_name="ДС15/61", quantity=1)
+        simple_rfp = _row(ds_name="ДС15", quantity=1)
+        underscore = _row(ds_name="ДС15_61", quantity=1)
+        self.assertIsNone(rfp_row_actual_ds(mixed_rfp))
+        self.assertEqual(rfp_row_supply_key(mixed_rfp), "15/61")
+        self.assertEqual(rfp_row_actual_ds(underscore), 15)
+        self.assertEqual(rfp_row_supply_key(underscore), "15")
+
+        snapshot = build_ordered_snapshot([mixed_rfp, simple_rfp])
+        mixed_key = rfp_packing_match_key("15/61", "8950", "SOO1", "CODE")
+        simple_key = rfp_packing_match_key(15, "8950", "SOO1", "CODE")
+        self.assertEqual(snapshot[mixed_key], 1.0)
+        self.assertEqual(snapshot[simple_key], 1.0)
+        self.assertNotEqual(mixed_key, simple_key)
+
+        packing = [
+            _row(
+                title="8950",
+                system="SOO1",
+                quantity=1,
+                source=_ul_source("mixed.xlsx", folder_mixed),
+                excel_row=10,
+            ),
+            _row(
+                title="8950",
+                system="SOO1",
+                quantity=1,
+                source=_ul_source("only15.xlsx", folder_15),
+                excel_row=11,
+            ),
+        ]
+        with registry_packing_scope(index):
+            compare_rfp_rows_with_packing(
+                [mixed_rfp],
+                {mixed_key: 1.0},
+                _dataset(packing),
+            )
+        self.assertEqual(mixed_rfp.get_value(UL_VALUES), 1.0)
+        self.assertEqual(mixed_rfp.get_value(UL_COMPARE_STATUS), STATUS_COMPLETE)
+        self.assertIn("смесь", str(mixed_rfp.get_value(UL_SOURCE_FILES)))
+        self.assertNotIn("only15", str(mixed_rfp.get_value(UL_SOURCE_FILES)))
+        self.assertEqual(mixed_rfp.get_value(DS_ACTUAL), "ДС15/61")
+
+        empty_mixed = _row(ds_name="ДС15/61", quantity=1)
+        empty_index = RegistryPackingIndex(
+            known_source_ids=frozenset({15}),
+            ds_to_folders={15: frozenset({key_15})},
+        )
+        with registry_packing_scope(empty_index):
+            rows, _audit = compare_rfp_rows_with_packing(
+                [empty_mixed],
+                {mixed_key: 1.0},
+                _dataset(
+                    [
+                        _row(
+                            title="8950",
+                            system="SOO1",
+                            quantity=1,
+                            source=_ul_source("only15.xlsx", folder_15),
+                        )
+                    ]
+                ),
+            )
+        self.assertIsNone(empty_mixed.get_value(UL_VALUES))
+        leftovers = _values(rows, STATUS_PACKING_ONLY)
+        self.assertEqual(len(leftovers), 1)
+
+        underscore_rfp = _row(ds_name="ДС15_61", quantity=1)
+        with registry_packing_scope(index):
+            compare_rfp_rows_with_packing(
+                [underscore_rfp],
+                {simple_key: 1.0},
+                _dataset(
+                    [
+                        _row(
+                            title="8950",
+                            system="SOO1",
+                            quantity=1,
+                            source=_ul_source("only15.xlsx", folder_15),
+                        )
+                    ]
+                ),
+            )
+        self.assertEqual(underscore_rfp.get_value(UL_VALUES), 1.0)
+        self.assertEqual(underscore_rfp.get_value(DS_ACTUAL), "ДС15")
+
+    def test_mixed_manager_same_surname_and_conflict_comment(self) -> None:
+        from openpyxl import Workbook
+
+        from RFQ.tags_rfp_compare.ds_manager_matrix import (
+            apply_ds_source_columns,
+            load_ds_manager_matrix,
+        )
+
+        matrix_path = Path(tempfile.mkdtemp()) / "mp.xlsx"
+        wb = Workbook()
+        sheet = wb.active
+        sheet.title = "Лист2"
+        sheet.append(["Имя ДС", "Фамилия"])
+        sheet.append(["ДС15", "Иванов"])
+        sheet.append(["ДС61", "Иванов"])
+        sheet.append(["ДС13", "Петров"])
+        sheet.append(["ДС47", "Сидоров"])
+        wb.save(matrix_path)
+        wb.close()
+        matrix = load_ds_manager_matrix(matrix_path)
+
+        same = _row(ds_name="ДС15/61", quantity=1)
+        same.el[DS_ACTUAL].value = ""
+        apply_ds_source_columns(
+            [same],
+            matrix=matrix,
+            rfp_paths_by_key={},
+            mto_paths_by_title={},
+        )
+        self.assertEqual(same.get_value(DS_ACTUAL), "ДС15/61")
+        self.assertEqual(same.get_value(DS_MANAGER), "Иванов")
+
+        conflict = _row(ds_name="ДС13/47", quantity=1)
+        conflict.el[DS_ACTUAL].value = ""
+        apply_ds_source_columns(
+            [conflict],
+            matrix=matrix,
+            rfp_paths_by_key={},
+            mto_paths_by_title={},
+        )
+        self.assertEqual(conflict.get_value(DS_ACTUAL), "ДС13/47")
+        self.assertEqual(conflict.get_value(DS_MANAGER), "")
+        self.assertEqual(conflict.el[DS_ACTUAL].comment, "смешанный ДС13/47")
 
     def test_gf_folder_without_actual_does_not_land(self) -> None:
         rfp = _row(ds_name="ДС1", title="8950-SOO1", code="CODE", quantity=1)

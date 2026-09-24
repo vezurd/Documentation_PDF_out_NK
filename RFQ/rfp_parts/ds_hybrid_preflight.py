@@ -46,6 +46,7 @@ from RFQ.rfp_parts.ds_rfp_hybrid import (
     build_ds_rfp_hybrid,
     collect_rfp_workbooks,
 )
+from RFQ.rfp_parts.ds_rfp_tag_placement import MIX_MIXED, MIX_SEPARATE
 from RFQ.units_convert.models import GoogleUnitsIndex
 
 INPUT_MODE_LEGACY_NET = "legacy_net"
@@ -137,6 +138,7 @@ class DsHybridFreshness:
     summary: str = ""
     baseline_freshness: DsBaselineFreshness | None = None
     result: DsRfpHybridResult | None = None
+    derived_registry_path: Path | None = None
 
 
 def resolve_input_mode(config: dict[str, Any] | None = None) -> str:
@@ -156,6 +158,26 @@ def resolve_input_mode(config: dict[str, Any] | None = None) -> str:
     if text in ALLOWED_INPUT_MODES:
         return text
     return INPUT_MODE_LEGACY_NET
+
+
+def resolve_launch_mix_mode(config: dict[str, Any] | None = None) -> str:
+    """Return launch cluster mix from ``rfp_parts.launch_mix_mode``.
+
+    Does not read ``collect_mix_mode``. Unknown, empty or missing values
+    default to ``separate``.
+
+    Args:
+        config: Full RFP profile (or None).
+
+    Returns:
+        ``MIX_SEPARATE`` or ``MIX_MIXED``.
+    """
+
+    raw = _parts_section(config).get("launch_mix_mode", MIX_SEPARATE)
+    text = str(raw or "").strip()
+    if text in (MIX_SEPARATE, MIX_MIXED):
+        return text
+    return MIX_SEPARATE
 
 
 def ds_baseline_output_dir(reports_base: str | Path | None = None) -> Path:
@@ -188,6 +210,47 @@ def resolve_ds_hybrid_xlsx(*, reports_base: str | Path | None = None) -> Path | 
         return path if path.is_file() else None
     except OSError:
         return None
+
+
+def resolve_hybrid_derived_registry(
+    *,
+    reports_base: str | Path | None = None,
+    registry_path: str | Path | None = None,
+) -> Path | None:
+    """Return the derived planting registry beside the hybrid summary.
+
+    Looks up ``derived_registry_name`` in the hybrid state json, then the
+    basename of ``registry_path``. Missing files yield ``None``.
+
+    Args:
+        reports_base: Parent of ``_ds_hybrid``.
+        registry_path: Source registry whose basename was copied.
+
+    Returns:
+        Existing derived workbook path, or ``None``.
+    """
+
+    hybrid_dir = ds_hybrid_output_dir(reports_base)
+    names: list[str] = []
+    stored = _load_state(hybrid_dir)
+    if stored:
+        stored_name = str(stored.get("derived_registry_name") or "").strip()
+        if stored_name:
+            names.append(stored_name)
+    if registry_path is not None and str(registry_path).strip():
+        names.append(Path(str(registry_path).strip()).name)
+    seen: set[str] = set()
+    for name in names:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        path = hybrid_dir / name
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
 
 
 def copy_ds_sidecars_to_result_dir(
@@ -364,6 +427,7 @@ def ensure_ds_hybrid_current(
     google_index: GoogleUnitsIndex | None = None,
     matrix_path: str | Path | None = None,
     progress: bool = False,
+    mix_mode: str = MIX_SEPARATE,
 ) -> tuple[Path, DsHybridFreshness]:
     """Return a fresh hybrid workbook; never falls back to parts net.
 
@@ -378,9 +442,12 @@ def ensure_ds_hybrid_current(
         google_index: Optional Google units index.
         matrix_path: Units matrix for default converters.
         progress: When True, print short status lines.
+        mix_mode: Cluster placement passed to the hybrid rebuild. Defaults to
+            ``separate`` so older callers keep working.
 
     Returns:
         Path to ``Свод ДС-RFP для запуска.xlsx`` and the freshness decision.
+        The derived registry path is on ``DsHybridFreshness.derived_registry_path``.
 
     Raises:
         DsBaselineBlockedError: DS audit blocked; hybrid is not written.
@@ -418,10 +485,14 @@ def ensure_ds_hybrid_current(
     )
     rfp_files, _skipped = collect_rfp_workbooks(rfp_folder)
     fingerprint = _hybrid_fingerprint(
-        baseline=dummy_baseline, registry=registry, files=rfp_files
+        baseline=dummy_baseline,
+        registry=registry,
+        files=rfp_files,
+        mix_mode=mix_mode,
     )
     stored = _load_state(hybrid_dir)
     hybrid_path = hybrid_dir / HYBRID_XLSX_NAME
+    source_mtime_ns = _file_mtime_ns(registry.path)
     stale_reason = _hybrid_stale_reason(
         hybrid_path=hybrid_path,
         stored=stored,
@@ -430,8 +501,12 @@ def ensure_ds_hybrid_current(
         registry_path=registry.path,
         rfp_root=rfp_folder,
         baseline_needs_rebuild=baseline_fresh.needs_rebuild,
+        registry_mtime_ns=source_mtime_ns,
     )
     if stale_reason is None:
+        derived = _derived_registry_beside(
+            hybrid_dir, stored=stored, registry_path=registry.path
+        )
         freshness = DsHybridFreshness(
             False,
             "свод ДС-RFP актуален",
@@ -440,6 +515,7 @@ def ensure_ds_hybrid_current(
             fingerprint=fingerprint,
             summary="свод ДС-RFP актуален",
             baseline_freshness=baseline_fresh,
+            derived_registry_path=derived,
         )
         if progress:
             print(f"[ds hybrid] {freshness.reason}", flush=True)
@@ -479,6 +555,7 @@ def ensure_ds_hybrid_current(
         converter=rfp_converter,
         google_index=google,
         matrix_path=matrix,
+        mix_mode=mix_mode,
     )
     if hybrid_result.blocking or hybrid_result.hybrid_path is None:
         raise DsHybridBlockedError(
@@ -491,6 +568,7 @@ def ensure_ds_hybrid_current(
         raise FileNotFoundError(
             f"сверка ДС-RFP не создала {HYBRID_XLSX_NAME}: {hybrid_dir}"
         )
+    derived_path = hybrid_result.derived_registry_path
     _write_state(
         hybrid_dir,
         {
@@ -501,6 +579,8 @@ def ensure_ds_hybrid_current(
             "rfp_root": str(rfp_folder),
             "baseline_fingerprint": baseline_result.fingerprint,
             "stamp": hybrid_result.stamp,
+            "registry_mtime_ns": _file_mtime_ns(registry.path),
+            "derived_registry_name": registry.path.name,
         },
     )
     _prune_stale_sidecars(hybrid_dir, keep=_hybrid_keep_names(hybrid_result))
@@ -514,6 +594,7 @@ def ensure_ds_hybrid_current(
         summary=summary,
         baseline_freshness=baseline_fresh,
         result=hybrid_result,
+        derived_registry_path=derived_path,
     )
     return written, freshness
 
@@ -622,6 +703,39 @@ def _current_baseline_fingerprint(
     return _tree_fingerprint(files, registry=registry)
 
 
+def _file_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _derived_registry_beside(
+    hybrid_dir: Path,
+    *,
+    stored: dict[str, Any] | None,
+    registry_path: Path,
+) -> Path | None:
+    names: list[str] = []
+    if stored:
+        stored_name = str(stored.get("derived_registry_name") or "").strip()
+        if stored_name:
+            names.append(stored_name)
+    names.append(registry_path.name)
+    seen: set[str] = set()
+    for name in names:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        path = hybrid_dir / name
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
 def _load_state(out_dir: Path) -> dict[str, Any] | None:
     path = out_dir / STATE_JSON_NAME
     try:
@@ -677,6 +791,7 @@ def _hybrid_stale_reason(
     registry_path: Path,
     rfp_root: Path,
     baseline_needs_rebuild: bool,
+    registry_mtime_ns: int | None = None,
 ) -> str | None:
     if baseline_needs_rebuild:
         return "обновился свод ДС"
@@ -694,6 +809,14 @@ def _hybrid_stale_reason(
         return "сменилась папка закупочных ДС"
     if str(stored.get("registry_path") or "") != str(registry_path):
         return "сменился путь реестра ДС"
+    stored_mtime = stored.get("registry_mtime_ns")
+    if registry_mtime_ns is not None and stored_mtime not in (None, ""):
+        try:
+            stored_i = int(stored_mtime)
+        except (TypeError, ValueError):
+            stored_i = None
+        if stored_i is not None and registry_mtime_ns > stored_i:
+            return "реестр ДС/УЛ новее свода"
     if str(stored.get("rfp_root") or "") != str(rfp_root):
         return "сменился корень RFP_Зиновьев"
     if str(stored.get("fingerprint") or "") != fingerprint:
@@ -728,7 +851,12 @@ def _baseline_keep_names(result: DsBaselineResult) -> set[str]:
 
 def _hybrid_keep_names(result: DsRfpHybridResult) -> set[str]:
     names = {HYBRID_XLSX_NAME, STATE_JSON_NAME, HYBRID_REPORT_PREFIX}
-    for path in (result.hybrid_path, result.report_path, *result.fractional_log_paths):
+    for path in (
+        result.hybrid_path,
+        result.report_path,
+        result.derived_registry_path,
+        *result.fractional_log_paths,
+    ):
         if path is not None:
             names.add(Path(path).name)
     return names

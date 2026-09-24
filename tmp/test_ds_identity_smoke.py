@@ -18,8 +18,10 @@ from RFQ.rfp_parts.ds_id_coverage import (
     run_ds_id_coverage_job,
 )
 from RFQ.rfp_parts.ds_identity import (
+    parse_mixed_ds_label,
     parse_rfp_ds_identity,
     parse_ul_folder_ds_identity,
+    rfp_supply_key,
 )
 
 
@@ -107,6 +109,25 @@ class DsIdentityParserSmokeTest(unittest.TestCase):
             self.assertIsNone(job.result_path)
             self.assertIn("только RFP ДС95", job.message)
             self.assertIn("только RFP ДС95", buf.getvalue())
+
+    def test_mixed_slash_label_is_not_actual_fifteen(self) -> None:
+        self.assertEqual(parse_mixed_ds_label("ДС15/61"), ("15", "61"))
+        self.assertEqual(parse_mixed_ds_label("15/61"), ("15", "61"))
+        self.assertEqual(parse_mixed_ds_label("ДС4905_1/4905"), ("4905_1", "4905"))
+        self.assertIsNone(parse_mixed_ds_label("ДС15_61"))
+        self.assertIsNone(parse_mixed_ds_label("ДС15_61. AGCC"))
+
+        mixed = parse_rfp_ds_identity("ДС15/61")
+        self.assertEqual(mixed.kind, "unparsed")
+        self.assertIsNone(mixed.actual)
+        self.assertEqual(rfp_supply_key("ДС15/61"), "15/61")
+
+        underscore = parse_rfp_ds_identity("ДС15_61. file")
+        self.assertEqual(underscore.actual, 15)
+        self.assertEqual(underscore.sequential, 61)
+        self.assertTrue(underscore.compound)
+        self.assertEqual(rfp_supply_key("ДС15_61. file"), "15")
+        self.assertEqual(rfp_supply_key("ДС15_61"), "15")
 
 
 if __name__ == "__main__":

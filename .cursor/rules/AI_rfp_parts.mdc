@@ -8,14 +8,15 @@ alwaysApply: false
 
 > Отдельный контур от боевого step1–4 ([AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc)). Финальный Excel Запуска: [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc).  
 > Доверенный вход из ДС / hybrid overlay: [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc) — не подменять этим правилом `rfp_parts_net.xlsx`.  
-> Дата снимка: **2026-09-03**.
+> Кластер файлов RFP, mix `separate`/`mixed` (`collect_mix_mode` / `launch_mix_mode`), производный реестр `ДС15/61` и кнопка `Запуск (ДС+RFP · без смешения)` — только там. Ключ агрегации `analyze_rfp_parts.py` не менялся. `ALGORITHM_VERSION` гибрида — `ds_rfp_hybrid_v2` (не v5 частей). Mtime реестра не привязывать к пересборке `rfp_parts_net.xlsx`.  
+> Дата снимка: **2026-09-24**.
 
 ## Когда читать
 
 - `RFQ/rfp_parts/`, Lot qty, суммирование частей, вкладка **RFP · Сбор частей**
 - раскладка `rfp_parts_net.xlsx` для Step1: `_write_net_xlsx` / `step1_net_core_columns()`
 - **preflight Запуска:** свежесть `RFP_Зиновьев` vs `rfp_parts_net.xlsx` — [parts_net_preflight.py](RFQ/rfp_parts/parts_net_preflight.py)
-- покрытие RFP↔папки УЛ по фактическому номеру ДС ([ds_identity.py](RFQ/rfp_parts/ds_identity.py), [ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py)); ключ посадки Step4 — тот же `actual`, см. [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc)
+- покрытие RFP↔папки УЛ по фактическому номеру ДС ([ds_identity.py](RFQ/rfp_parts/ds_identity.py), [ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py)); ключ посадки Step4 — `actual` / `rfp_supply_key`, см. [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc)
 
 ## Карта файлов
 
@@ -142,7 +143,9 @@ Live-фазы в stdout Job monitor — префикс **`[parts timing]`** (`ru
 
 Вкладка **RFP · Сбор частей**, левая колонка, блок «Файлы последнего прогона»: компактная таблица xlsx прогона. Только **ОК** / **Ошибка** (ошибки сверху по алфавиту, затем ОК). Описание — критичные замечания (нет шапки, нет обязательных столбцов, пустой файл, лот, Tag содержит `RFQ` и т.п.). Дубли тегов и TAG≠лот **не** в GUI: файл `Отчет по тегам - сбор частей.xlsx` в штамп-папке и короткая кликабельная ссылка над таблицей.
 
-**Один файл.** Кнопка **«Проверить один файл RFP»** вызывает тот же `run_rfp_parts_analyze` (`only_files` — одна книга). Кнопка **«Проверить один файл ДС»** — тот же аудит, что «Собрать свод только из ДС» (`only_paths`, `write_baseline=False`). УЛ — кнопка **«Проверить один файл УЛ»** на вкладке **ДС · Упаковочные листы** (`inspect_one_tsd_file`, тот же читатель листов). Отчёты: `RFP сводный файл/_проверка_одного_файла/{RFP|ДС|УЛ}/YYYY.MM.DD_HH.MM/`. Эта папка не штамп полного прогона: `rfp_parts_net.xlsx` Запуска, `Свод ДС для запуска.xlsx` и кэш УЛ остаются от общего сбора. Модуль: [one_file_check.py](RFQ/rfp_parts/one_file_check.py).
+**Один файл.** Кнопка **«Проверить один файл RFP»** вызывает тот же `run_rfp_parts_analyze` (`only_files` — одна книга). Кнопка **«Проверить один файл ДС»** — тот же аудит, что сбор только из ДС (`only_paths`, `write_baseline=False`). УЛ — кнопка **«Проверить один файл УЛ»** на вкладке **ДС · Упаковочные листы** (`inspect_one_tsd_file`, тот же читатель листов). Отчёты: `RFP сводный файл/_проверка_одного_файла/{RFP|ДС|УЛ}/YYYY.MM.DD_HH.MM/`. Эта папка не штамп полного прогона: `rfp_parts_net.xlsx` Запуска, `Свод ДС для запуска.xlsx` и кэш УЛ остаются от общего сбора. Модуль: [one_file_check.py](RFQ/rfp_parts/one_file_check.py).
+
+На вкладке больше нет трёх кнопок «Собрать свод только из ДС» / «… из ДС и наложить RFP» / «Собрать свод частей RFP»: один свёрнутый блок (Сбор + Посадка RFP) и одна кнопка `Запуск (ДС+RFP · без смешения)`. «Посадка RFP» — mix, не выбор файла. Остаются «Проверить реестр», проверки одного файла, «Только имена и покрытие». Спека mix — [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc).
 
 Источник статуса — `rfp_parts_file_status.json`; если JSON ещё нет — сборка из `rfp_parts_sources.json` + `rfp_parts_diagnostics.xlsx`.
 
@@ -214,4 +217,4 @@ python -X utf8 -m RFQ.rfp_parts --help
 
 - [AI_rfq_context.mdc](.cursor/rules/AI_rfq_context.mdc) — launch pipeline, units gate
 - [AI_rfp_step4_excel.mdc](.cursor/rules/AI_rfp_step4_excel.mdc) — финальный Excel
-- [AI_memory.mdc](.cursor/rules/AI_memory.mdc) §16 — UNC
+- [AI_ds_rfp_hybrid.mdc](.cursor/rules/AI_ds_rfp_hybrid.mdc) — ДС baseline / hybrid / кластер / mix; не дублировать здесь

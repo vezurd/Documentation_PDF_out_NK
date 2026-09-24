@@ -34,7 +34,12 @@ from base.tables_columns import (
     VALUES,
     VENDOR,
 )
-from RFQ.rfp_parts.ds_identity import parse_rfp_ds_identity, parse_ul_folder_ds_identity
+from RFQ.rfp_parts.ds_identity import (
+    parse_mixed_ds_label,
+    parse_rfp_ds_identity,
+    parse_ul_folder_ds_identity,
+    rfp_supply_key,
+)
 
 DEFAULT_PACKING_OUTPUT_DIR = Path(
     r"\\bcc\eng\PrDoc\377_НИПИГАЗ\АГХК\КСБ\RFP_MTO_VO\_RFP\УЛ сводный файл"
@@ -208,10 +213,12 @@ class RegistryPackingIndex:
     """Actual DS numbers taken from the registry, not from folder or file names.
 
     ``known_source_ids`` are every active digit-only source. ``ds_to_folders``
-    holds those ids that name at least one UL folder. ``folder_owners`` maps
-    a normalized folder key to every active source that names it.
-    ``rfp_number_to_actual`` maps an RFP number to a source only when exactly
-    one active source names that number. Folder keys use
+    holds those ids that name at least one UL folder. ``mixed_ds_to_folders``
+    holds slash source ids such as ``15/61`` (not mapped onto the first
+    number). ``folder_owners`` maps a normalized folder key to every active
+    digit source that names it. ``rfp_number_to_actual`` maps an RFP number
+    to a source only when exactly one active digit source names that number.
+    Mixed ids are not written there. Folder keys use
     ``normalize_packing_key_part`` (whitespace removed, casefold).
     """
 
@@ -219,6 +226,7 @@ class RegistryPackingIndex:
     ds_to_folders: dict[int, frozenset[str]] = field(default_factory=dict)
     folder_owners: dict[str, frozenset[int]] = field(default_factory=dict)
     rfp_number_to_actual: dict[int, int] = field(default_factory=dict)
+    mixed_ds_to_folders: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 _REGISTRY_PACKING_INDEX: ContextVar[RegistryPackingIndex | None] = ContextVar(
@@ -244,26 +252,39 @@ def build_registry_planting_index(document) -> RegistryPackingIndex:
     """Build planting maps from active registry rows.
 
     Shared UL folders keep every owner. An RFP number maps to an actual DS
-    only when exactly one active source names it. ``validation.is_ok`` is
-    ignored so a shared RFP error does not drop folder links. History and
+    only when exactly one active digit source names it. ``validation.is_ok``
+    is ignored so a shared RFP error does not drop folder links. History and
     Disabled rows are not active. Non-digit source ids such as ``4905_1``
-    are omitted.
+    are omitted unless they are a mixed slash id (``15/61``): folders named
+    on that row are stored under supply key ``15/61`` and are not mapped
+    through ``rfp_number_to_actual`` onto the first number.
 
     Args:
         document: Loaded registry document. Only ``active_rows`` are read.
 
     Returns:
-        Index over digit-only actual DS numbers.
+        Index over digit-only actual DS numbers plus mixed slash keys.
     """
 
     known: set[int] = set()
     folders_by_ds: dict[int, set[str]] = {}
+    folders_by_mixed: dict[str, set[str]] = {}
     owners_by_folder: dict[str, set[int]] = {}
     rfp_owners: dict[int, set[int]] = {}
     for row in document.active_rows:
-        if not row.source_id.isdigit():
+        source_id = str(row.source_id or "").strip()
+        mixed = parse_mixed_ds_label(source_id)
+        if mixed is not None:
+            supply_key = "/".join(mixed)
+            for rel in row.relations:
+                if rel.ul_folder:
+                    key = normalize_packing_key_part(rel.ul_folder)
+                    if key:
+                        folders_by_mixed.setdefault(supply_key, set()).add(key)
             continue
-        actual = int(row.source_id)
+        if not source_id.isdigit():
+            continue
+        actual = int(source_id)
         known.add(actual)
         for rel in row.relations:
             if rel.ul_folder:
@@ -286,26 +307,42 @@ def build_registry_planting_index(document) -> RegistryPackingIndex:
             for number, ids in rfp_owners.items()
             if len(ids) == 1
         },
+        mixed_ds_to_folders={
+            mixed_id: frozenset(keys) for mixed_id, keys in folders_by_mixed.items()
+        },
     )
 
 
-def supply_ul_folders(actual: int | None) -> frozenset[str] | None:
-    """Return UL folder keys named by ``actual`` in the current planting index.
+def supply_ul_folders(actual: int | str | None) -> frozenset[str] | None:
+    """Return UL folder keys named by a supply key in the planting index.
 
     Args:
-        actual: Actual DS number, or ``None``.
+        actual: Digit actual DS number, mixed supply key ``15/61``, or
+            ``None``.
 
     Returns:
-        ``None`` when there is no index, ``actual`` is ``None``, or the
-        number is not a known digit source (the caller should name-match).
-        An empty frozenset when the source is known and names no UL folder.
-        The folder set otherwise.
+        ``None`` when there is no index, ``actual`` is empty, or a digit
+        source is not known (the caller should name-match). An empty
+        frozenset when the source is known and names no UL folder, and for
+        every mixed key (name-matching 15 or 61 is not allowed). The folder
+        set otherwise.
     """
 
     index = _REGISTRY_PACKING_INDEX.get()
-    if index is None or actual is None or actual not in index.known_source_ids:
+    if index is None or actual is None or actual == "":
         return None
-    return index.ds_to_folders.get(actual, frozenset())
+    if isinstance(actual, str):
+        mixed = parse_mixed_ds_label(actual)
+        if mixed is not None:
+            return index.mixed_ds_to_folders.get("/".join(mixed), frozenset())
+        if not actual.isdigit():
+            return None
+        actual_int = int(actual)
+    else:
+        actual_int = actual
+    if actual_int not in index.known_source_ids:
+        return None
+    return index.ds_to_folders.get(actual_int, frozenset())
 
 
 def normalize_packing_key_part(value: object) -> str:
@@ -366,17 +403,22 @@ def packing_row_key(row: RowStd, *, code_column: str = CODE) -> tuple[str, str, 
 def rfp_row_actual_ds(row: RowStd) -> int | None:
     """Return RFP actual DS number from ``DS_NAME``, or None.
 
+    Mixed slash labels (``ДС15/61``) return ``None`` so callers cannot
+    treat them as actual 15. Use ``rfp_row_supply_key`` for planting.
+
     Args:
         row: Step4 / RFP result row.
 
     Returns:
         ``DsIdentity.actual`` from ``DS_NAME``, or ``None`` when the cell is
-        empty or unparsed.
+        empty, mixed, or unparsed.
     """
     if DS_NAME not in row.el:
         return None
     ds_name = str(row.get_value(DS_NAME) or "").strip()
     if not ds_name:
+        return None
+    if parse_mixed_ds_label(ds_name) is not None:
         return None
     ident = parse_rfp_ds_identity(ds_name)
     if ident.kind != "compound":
@@ -392,6 +434,33 @@ def rfp_row_actual_ds(row: RowStd) -> int | None:
         if override is not None:
             return override
     return actual
+
+
+def rfp_row_supply_key(row: RowStd) -> str:
+    """Return the planting/snapshot key for an RFP result row.
+
+    Mixed ``DS_NAME`` ``ДС15/61`` yields ``15/61``. A normal name yields
+    the decimal actual string (after registry RFP-number override). Empty
+    when the row has neither.
+
+    Args:
+        row: Step4 / RFP result row.
+
+    Returns:
+        Supply key string, or ``""``.
+    """
+    if DS_NAME not in row.el:
+        return ""
+    ds_name = str(row.get_value(DS_NAME) or "").strip()
+    if not ds_name:
+        return ""
+    mixed = parse_mixed_ds_label(ds_name)
+    if mixed is not None:
+        return rfp_supply_key(ds_name)
+    actual = rfp_row_actual_ds(row)
+    if actual is None:
+        return ""
+    return str(actual)
 
 
 def packing_row_actual_ds(row: RowStd) -> int | None:

@@ -2,8 +2,9 @@
 
 One sheet row is one link (a UL folder, an RFP file, or both). Rows of the
 same actual number collapse into one specification bag. The same UL folder
-may be named by several actual numbers. One RFP number or RFP file cannot
-sit on two actual numbers. The working workbook lives
+may be named by several actual numbers. Active numbers that share one closed
+nonempty RFP file set are a legal cluster; other shared RFP numbers or files
+are an error. The working workbook lives
 in ``_RFP`` as ``Реестр_ДС_УЛ.xlsx``. «Проверить реестр» renames a legacy
 file to ``Реестр_ДС_УЛ_old.xlsx`` and replaces it. If Excel holds the file
 open, a dated copy is written; the program reads the newest of the main file
@@ -1166,6 +1167,75 @@ def _join_ds_file_names(paths: Sequence[Path]) -> str:
     return "\n".join(ordered)
 
 
+def _row_rfp_file_set(row: DsRegistryRow) -> set[str]:
+    """Normalized RFP file names named on one logical or sheet row."""
+
+    names: set[str] = set()
+    for rel in row.relations:
+        for name in _ds_file_names(rel.rfp_file):
+            names.add(_norm_link(name))
+    return names
+
+
+def legal_rfp_file_clusters(
+    rows: Sequence[DsRegistryRow],
+) -> tuple[frozenset[str], ...]:
+    """Return closed groups of active source_ids that share one RFP file set.
+
+    A cluster is two or more ``Активен`` source_ids whose nonempty RFP file
+    names (one per line, casefold via ``_ds_file_names`` / ``_norm_link``) are
+    identical, and every file in that set has exactly those active owners.
+    ``История`` and ``Отключен`` do not join a cluster.
+
+    Args:
+        rows: Registry rows. Repeats of one source_id are unioned.
+
+    Returns:
+        Frozen sets of source_id strings, one per legal cluster.
+    """
+
+    file_sets: dict[str, set[str]] = {}
+    file_owners: dict[str, set[str]] = {}
+    for row in rows:
+        if not row.is_active or not row.source_id:
+            continue
+        names = _row_rfp_file_set(row)
+        file_sets.setdefault(row.source_id, set()).update(names)
+        for name in names:
+            file_owners.setdefault(name, set()).add(row.source_id)
+
+    by_set: dict[frozenset[str], set[str]] = {}
+    for source_id, names in file_sets.items():
+        if not names:
+            continue
+        by_set.setdefault(frozenset(names), set()).add(source_id)
+
+    clusters: list[frozenset[str]] = []
+    for names, group in by_set.items():
+        if len(group) < 2:
+            continue
+        if all(file_owners.get(name, set()) == group for name in names):
+            clusters.append(frozenset(group))
+    return tuple(clusters)
+
+
+def _rfp_owners_allowed(
+    owners: set[str],
+    clusters: Sequence[frozenset[str]],
+    *,
+    allow_subset: bool,
+) -> bool:
+    """True when owners are not an illegal active RFP share."""
+
+    if len(owners) < 2:
+        return True
+    frozen = frozenset(owners)
+    for cluster in clusters:
+        if frozen == cluster or (allow_subset and frozen < cluster):
+            return True
+    return False
+
+
 def _ds_catalog_ready(ds_root: str | Path | None) -> bool:
     if not ds_root:
         return False
@@ -1468,11 +1538,15 @@ def validate_registry_rows(
 ) -> DsRegistryValidation:
     """Validate logical rows. A repeated actual number is not an error.
 
-    The same RFP number or RFP file on two actual numbers is an error, as is
-    a UL folder repeated inside one number. Two actual numbers may name the
-    same UL folder. A named UL folder that is absent from disk is painted
-    blue and does not stop the summary. A named RFP file that is absent is a
-    warning: it stays out of the RFP bag.
+    A UL folder repeated inside one number is an error. Two actual numbers
+    may name the same UL folder. Active numbers that share one closed nonempty
+    RFP file set are a legal cluster and do not emit ``ISSUE_SHARED_RFP``.
+    Other shared RFP numbers or files on two active numbers are an error.
+    ``История`` and ``Отключен`` do not join a cluster and do not create that
+    issue merely by naming the same file or number as an active row. A named
+    UL folder that is absent from disk is painted blue and does not stop the
+    summary. A named RFP file that is absent is a warning: it stays out of
+    the RFP bag.
     """
 
     del max_blocks  # wide-sheet width is not a rule anymore
@@ -1480,6 +1554,12 @@ def validate_registry_rows(
     folder_owners: dict[str, set[str]] = {}
     rfp_owner: dict[str, str] = {}
     file_owner: dict[str, str] = {}
+    rfp_key_active_owners: dict[str, list[str]] = {}
+    rfp_key_claim: dict[tuple[str, str], tuple[DsRegistryRow, DsRegistryRelation]] = {}
+    file_active_owners: dict[str, list[str]] = {}
+    file_claim: dict[
+        tuple[str, str], tuple[DsRegistryRow, DsRegistryRelation, str]
+    ] = {}
     rfp_index = index_rfp_files(rfp_root) if rfp_root else {}
     rfp_names = {
         path.name.casefold()
@@ -1591,23 +1671,7 @@ def validate_registry_rows(
                     )
                 seen_rfp.add(rel.rfp_key)
                 owner = rfp_owner.get(rel.rfp_key)
-                if owner and owner != row.source_id:
-                    issues.append(
-                        _issue(
-                            ISSUE_SHARED_RFP,
-                            "ERROR",
-                            (
-                                f"номер RFP {rel.rfp_key!r} указан у номеров "
-                                f"{format_registry_ds_number(owner)} и "
-                                f"{format_registry_ds_number(row.source_id)}"
-                            ),
-                            painted,
-                            group_id=group_id,
-                            block_index=rel.block_index,
-                            field="rfp_key",
-                        )
-                    )
-                elif owner == row.source_id and not repeated_here:
+                if owner == row.source_id and not repeated_here:
                     issues.append(
                         _issue(
                             ISSUE_DUPLICATE_LINK,
@@ -1619,8 +1683,13 @@ def validate_registry_rows(
                             field="rfp_key",
                         )
                     )
-                else:
+                elif not owner or owner == row.source_id:
                     rfp_owner[rel.rfp_key] = row.source_id
+                if row.is_active:
+                    owners = rfp_key_active_owners.setdefault(rel.rfp_key, [])
+                    if row.source_id not in owners:
+                        owners.append(row.source_id)
+                    rfp_key_claim[(rel.rfp_key, row.source_id)] = (painted, rel)
             file_names = _ds_file_names(rel.rfp_file)
             if file_names:
                 for file_name in file_names:
@@ -1639,22 +1708,7 @@ def validate_registry_rows(
                         )
                     seen_files.add(file_key)
                     owner = file_owner.get(file_key)
-                    if owner and owner != row.source_id:
-                        issues.append(
-                            _issue(
-                                ISSUE_SHARED_RFP,
-                                "ERROR",
-                                (
-                                    f"файл RFP {file_name!r} указан у номеров "
-                                    f"{format_registry_ds_number(owner)} и "
-                                    f"{format_registry_ds_number(row.source_id)}"
-                                ),
-                                painted,
-                                group_id=group_id,
-                                field="rfp_file",
-                            )
-                        )
-                    elif owner == row.source_id and not repeated_here:
+                    if owner == row.source_id and not repeated_here:
                         issues.append(
                             _issue(
                                 ISSUE_DUPLICATE_LINK,
@@ -1665,8 +1719,17 @@ def validate_registry_rows(
                                 field="rfp_file",
                             )
                         )
-                    else:
+                    elif not owner or owner == row.source_id:
                         file_owner[file_key] = row.source_id
+                    if row.is_active:
+                        owners = file_active_owners.setdefault(file_key, [])
+                        if row.source_id not in owners:
+                            owners.append(row.source_id)
+                        file_claim[(file_key, row.source_id)] = (
+                            painted,
+                            rel,
+                            file_name,
+                        )
                     if rfp_root and file_key not in rfp_names:
                         issues.append(
                             _issue(
@@ -1689,6 +1752,51 @@ def validate_registry_rows(
                         field="rfp_key",
                     )
                 )
+
+    clusters = legal_rfp_file_clusters(rows)
+    for key, owners in rfp_key_active_owners.items():
+        owner_set = set(owners)
+        if _rfp_owners_allowed(owner_set, clusters, allow_subset=True):
+            continue
+        first = owners[0]
+        for other in owners[1:]:
+            painted, rel = rfp_key_claim[(key, other)]
+            issues.append(
+                _issue(
+                    ISSUE_SHARED_RFP,
+                    "ERROR",
+                    (
+                        f"номер RFP {key!r} указан у номеров "
+                        f"{format_registry_ds_number(first)} и "
+                        f"{format_registry_ds_number(other)}"
+                    ),
+                    painted,
+                    group_id=canonical_supply_group_id(other),
+                    block_index=rel.block_index,
+                    field="rfp_key",
+                )
+            )
+    for key, owners in file_active_owners.items():
+        owner_set = set(owners)
+        if _rfp_owners_allowed(owner_set, clusters, allow_subset=False):
+            continue
+        first = owners[0]
+        for other in owners[1:]:
+            painted, rel, shown = file_claim[(key, other)]
+            issues.append(
+                _issue(
+                    ISSUE_SHARED_RFP,
+                    "ERROR",
+                    (
+                        f"файл RFP {shown!r} указан у номеров "
+                        f"{format_registry_ds_number(first)} и "
+                        f"{format_registry_ds_number(other)}"
+                    ),
+                    painted,
+                    group_id=canonical_supply_group_id(other),
+                    field="rfp_file",
+                )
+            )
 
     return DsRegistryValidation(issues=issues)
 
@@ -2674,13 +2782,14 @@ def registry_packing_maps(
     Conflicts make the document invalid; the caller then keeps the name parser.
     Only integer actual numbers are packing keys. A UL folder named by more
     than one active source is omitted so this one-int map cannot point a
-    shared folder at a single DS.
+    shared folder at a single DS. An RFP number named by more than one active
+    digit source is omitted the same way, including a legal file cluster.
     """
 
     if not document.validation.is_ok:
         return None
     folder_owners: dict[str, set[int]] = {}
-    numbers: dict[int, int] = {}
+    number_owners: dict[int, set[int]] = {}
     for row in document.active_rows:
         if not row.source_id.isdigit():
             continue
@@ -2691,10 +2800,15 @@ def registry_packing_maps(
                     actual
                 )
             if rel.rfp_key.isdigit():
-                numbers[int(rel.rfp_key)] = actual
+                number_owners.setdefault(int(rel.rfp_key), set()).add(actual)
     folders = {
         key: next(iter(owners))
         for key, owners in folder_owners.items()
+        if len(owners) == 1
+    }
+    numbers = {
+        key: next(iter(owners))
+        for key, owners in number_owners.items()
         if len(owners) == 1
     }
     return folders, numbers
@@ -2780,17 +2894,20 @@ def _paint_flat_conflicts(
     A UL folder is yellow only when the same number repeats it. Several
     numbers naming one folder are not a conflict. A named UL folder that is
     not on disk is light blue, unless the same cell is already yellow.
+    A closed RFP file cluster is not yellow; a shared file or number that is
+    not a legal cluster still is.
     """
 
     folder_rows: dict[str, list[tuple[int, str]]] = {}
-    rfp_rows: dict[str, list[tuple[int, str]]] = {}
-    file_rows: dict[str, list[tuple[int, str]]] = {}
+    rfp_rows: dict[str, list[tuple[int, str, str]]] = {}
+    file_rows: dict[str, list[tuple[int, str, str]]] = {}
     identity: dict[str, list[tuple[int, str, str, str]]] = {}
     rfp_on_disk = {
         path.name.casefold()
         for paths in links.rfp_files.values()
         for path in paths
     }
+    clusters = legal_rfp_file_clusters(rows)
     for index, row in enumerate(rows):
         excel_row = index + 2
         rel = row.relations[0] if row.relations else None
@@ -2813,11 +2930,13 @@ def _paint_flat_conflicts(
                 (excel_row, row.source_id)
             )
         if rfp_key:
-            rfp_rows.setdefault(rfp_key, []).append((excel_row, row.source_id))
+            rfp_rows.setdefault(rfp_key, []).append(
+                (excel_row, row.source_id, row.status)
+            )
         if rfp_file:
             for name in _ds_file_names(rfp_file):
                 file_rows.setdefault(_norm_link(name), []).append(
-                    (excel_row, row.source_id)
+                    (excel_row, row.source_id, row.status)
                 )
         elif (
             links.scanned_rfp
@@ -2829,19 +2948,35 @@ def _paint_flat_conflicts(
                 f"В корне RFP нет файла с номером {rfp_key}.",
             )
 
-    def _shared(groups: dict[str, list[tuple[int, str]]], column: int, label: str) -> None:
+    def _shared_rfp(
+        groups: dict[str, list[tuple[int, str, str]]],
+        column: int,
+        label: str,
+        *,
+        allow_subset: bool,
+    ) -> None:
         for items in groups.values():
-            owners = {source for _row, source in items if source}
-            if len(owners) > 1 or (len(items) > 1 and len(owners) <= 1):
-                comment = (
-                    f"{label} повторяется"
-                    + (
-                        " на разных номерах ДС"
-                        if len(owners) > 1
-                        else " внутри одного номера"
-                    )
-                )
-                for excel_row, _source in items:
+            by_source: dict[str, list[int]] = {}
+            for excel_row, source, _status in items:
+                if source:
+                    by_source.setdefault(source, []).append(excel_row)
+            for excel_rows in by_source.values():
+                if len(excel_rows) > 1:
+                    comment = f"{label} повторяется внутри одного номера"
+                    for excel_row in excel_rows:
+                        _paint_cell(
+                            ws.cell(row=excel_row, column=column), comment
+                        )
+            active_owners = {
+                source
+                for _excel_row, source, status in items
+                if source and status == STATUS_ACTIVE
+            }
+            if len(active_owners) > 1 and not _rfp_owners_allowed(
+                active_owners, clusters, allow_subset=allow_subset
+            ):
+                comment = f"{label} повторяется на разных номерах ДС"
+                for excel_row, _source, _status in items:
                     _paint_cell(ws.cell(row=excel_row, column=column), comment)
 
     for items in folder_rows.values():
@@ -2852,8 +2987,12 @@ def _paint_flat_conflicts(
                 _paint_cell(
                     ws.cell(row=excel_row, column=layout.flat_ul), comment
                 )
-    _shared(rfp_rows, layout.flat_rfp_number, "Номер RFP")
-    _shared(file_rows, layout.flat_rfp_file, "Файл RFP")
+    _shared_rfp(
+        rfp_rows, layout.flat_rfp_number, "Номер RFP", allow_subset=True
+    )
+    _shared_rfp(
+        file_rows, layout.flat_rfp_file, "Файл RFP", allow_subset=False
+    )
     if links.scanned_rfp:
         for index, row in enumerate(rows):
             rel = row.relations[0] if row.relations else None

@@ -15,6 +15,11 @@ Naming contract (after ID prep):
 ``parse_ds_name_from_file_name`` stays the legacy prefix string (``ДС92_24Б``)
 for parts aggregation. New consumers use ``parse_rfp_ds_identity`` /
 ``parse_ul_folder_ds_identity``.
+
+Slash vs underscore: ``ДС15/61`` is a mixed supply id (several actual
+numbers on one RFP). ``ДС15_61`` is actual 15, sequential 61. Mixed
+labels are ``kind='unparsed'`` on the single-actual path; use
+``rfp_supply_key`` / ``parse_mixed_ds_label`` instead of ``actual``.
 """
 
 from __future__ import annotations
@@ -55,6 +60,12 @@ _UL_COMPOUND_RE = re.compile(
 )
 _UL_BARE_NUM_RE = re.compile(r"УЛ\s+(\d+)\s*$", re.IGNORECASE)
 _GF_RE = re.compile(r"ГФ|ГОСФИН|ГОС\.ФИН", re.IGNORECASE)
+# Mixed supply label: slash-separated source ids, not ``ДС15_61``.
+# Tokens may be digit-only (``15``) or registry ids such as ``4905_1``.
+_MIXED_LABEL_RE = re.compile(
+    r"^(?:ДС\s*)?([0-9A-Za-zА-Яа-я_]+(?:/[0-9A-Za-zА-Яа-я_]+)+)",
+    re.IGNORECASE,
+)
 
 
 def _norm_letter(raw: str) -> str:
@@ -126,15 +137,93 @@ class DsIdentity:
         return []
 
 
+def parse_mixed_ds_label(text: str) -> tuple[str, ...] | None:
+    """Return mixed source ids from a slash label, or ``None``.
+
+    ``ДС15/61`` and ``15/61`` yield ``("15", "61")``. Underscore names
+    ``ДС15_61`` / ``ДС15_61. AGCC`` are not mixed. Non-digit tokens between
+    slashes are allowed as source ids (``ДС4905_1/4905``).
+
+    Args:
+        text: DS_NAME cell, file name, or registry source id.
+
+    Returns:
+        Two or more nonempty tokens, or ``None`` when the text is not a
+        slash-separated mixed label.
+    """
+    raw = str(text or "").strip()
+    if not raw or "/" not in raw:
+        return None
+    if "\\" in raw:
+        raw = raw.rsplit("\\", 1)[-1]
+    match = _MIXED_LABEL_RE.match(raw)
+    if match is None:
+        return None
+    tokens = tuple(part.strip() for part in match.group(1).split("/"))
+    if len(tokens) < 2 or not all(tokens):
+        return None
+    return tokens
+
+
+def rfp_supply_key(ds_name: str) -> str:
+    """Return the Step4 planting/snapshot key for an RFP ``DS_NAME``.
+
+    Mixed slash labels such as ``ДС15/61`` return ``15/61`` and are not
+    reduced to the first number. A normal name returns ``str(actual)``
+    (``ДС15_61. file`` → ``15``). Empty string when the name has neither
+    mixed tokens nor an actual.
+
+    Args:
+        ds_name: Sequential label, mixed slash label, or file name.
+
+    Returns:
+        ``15/61`` for mixed, a decimal actual string for a single DS, else
+        ``""``.
+    """
+    text = str(ds_name or "").strip()
+    if not text:
+        return ""
+    mixed = parse_mixed_ds_label(text)
+    if mixed is not None:
+        return "/".join(mixed)
+    ident = parse_rfp_ds_identity(text)
+    if ident.kind != "compound":
+        retry = parse_rfp_ds_identity(text + ". ")
+        if retry.compound:
+            ident = retry
+    if ident.actual is None:
+        return ""
+    return str(ident.actual)
+
+
 def parse_rfp_ds_identity(file_name: str) -> DsIdentity:
     """Parse a workbook name in ``RFP_Зиновьев``.
+
+    Mixed slash labels (``ДС15/61``) stay ``kind='unparsed'`` with
+    ``actual is None`` so the single-actual path cannot treat them as 15.
+    Callers that need a planting key must use ``rfp_supply_key``.
 
     Args:
         file_name: File name or stem (path basename is fine).
 
     Returns:
-        Identity. ``kind='unparsed'`` when no ``ДС{n}`` token is present.
+        Identity. ``kind='unparsed'`` when no ``ДС{n}`` token is present
+        or the name is a mixed slash label.
     """
+    original = str(file_name or "")
+    if parse_mixed_ds_label(original) is not None:
+        text = original.strip()
+        if "\\" in text:
+            text = text.rsplit("\\", 1)[-1]
+        return DsIdentity(
+            raw=text,
+            sequential=None,
+            actual=None,
+            letter="",
+            compound=False,
+            kind="unparsed",
+            source="rfp_file",
+        )
     text = Path(file_name).name
     compound = _RFP_COMPOUND_RE.search(text)
     if compound:

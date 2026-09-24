@@ -16,7 +16,7 @@ from RFQ.rfp_parts.ds_checklist import (
     present_in,
     table_ds_to_file_keys,
 )
-from RFQ.rfp_parts.ds_identity import parse_rfp_ds_identity
+from RFQ.rfp_parts.ds_identity import parse_mixed_ds_label, parse_rfp_ds_identity
 from RFQ.tags_rfp_compare.step4.step4_packing_compare import is_packing_only_sequential
 from base.base_classes import CheckElement, RowType
 from base.tables_columns import (
@@ -522,6 +522,10 @@ def apply_ds_source_columns(
 
     Leftover ``ДС{n}_RFP_не_найден`` rows get a surname only when that
     actual DS has one unique manager (from sibling RFP rows, else matrix).
+    Mixed slash ``ДС15/61`` writes ``DS_ACTUAL`` as that label. The surname
+    is filled only when every member id has the same one manager; otherwise
+    ``DS_MANAGER`` stays empty and ``DS_ACTUAL`` gets comment
+    ``смешанный ДС15/61``.
 
     Args:
         rows: Step4 result rows (``RowStd`` or compatible objects with ``el``).
@@ -543,11 +547,34 @@ def apply_ds_source_columns(
         ds_actual_raw = row.el.get(DS_ACTUAL)
         ds_actual = str(getattr(ds_actual_raw, "value", ds_actual_raw) or "").strip()
         leftover_seq = is_packing_only_sequential(ds_name)
+        mixed_tokens = parse_mixed_ds_label(ds_name)
 
         if leftover_seq:
             # Surname is filled in a second pass (unique actual → one MP).
             _set_cell(row, DS_MANAGER, "")
             path_lookup = ds_actual
+        elif mixed_tokens is not None:
+            mixed_label = "ДС" + "/".join(mixed_tokens)
+            _set_cell(row, DS_ACTUAL, mixed_label)
+            names: list[str] = []
+            for token in mixed_tokens:
+                entry = None
+                if matrix is not None:
+                    entry = lookup_manager(matrix, f"ДС{token}")
+                    if entry is None:
+                        entry = lookup_manager(matrix, token)
+                names.append(
+                    str(entry.manager or "").strip() if entry is not None else ""
+                )
+            unique = {name for name in names if name}
+            if names and all(names) and len(unique) == 1:
+                _set_cell(row, DS_MANAGER, next(iter(unique)))
+            else:
+                _set_cell(row, DS_MANAGER, "")
+                actual_cell = row.el.get(DS_ACTUAL)
+                if actual_cell is not None:
+                    actual_cell.comment = f"смешанный {mixed_label}"
+            path_lookup = ds_name or mixed_label
         elif not ds_name and not ds_actual:
             _set_cell(row, DS_MANAGER, "")
             _set_cell(row, PATH_RFP, "")

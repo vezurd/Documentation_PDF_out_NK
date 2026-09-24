@@ -1,6 +1,6 @@
 ---
 description: Доверенный ДС baseline и RFP overlay для RFP · Запуск (реестр, аудит, группы поставки)
-globs: RFQ/rfp_parts/ds_registry.py,RFQ/rfp_parts/ds_baseline.py,RFQ/rfp_parts/ds_rfp_hybrid.py,RFQ/rfp_parts/ds_jobs.py,RFQ/rfp_parts/ds_hybrid_preflight.py,RFQ/tags_rfp_compare/rfp_tags_utils.py,RFQ/tags_rfp_compare/agregate_tags.py,ds_compare_center/rfp_parts_panel.py,ds_compare_center/rfp_run_panel.py,ds_compare_center/rfp_settings_panel.py,ds_compare_center/center_window.py,tmp/test_ds_registry_smoke.py,tmp/test_ds_baseline_smoke.py,tmp/test_ds_rfp_hybrid_smoke.py,tmp/test_ds_jobs_smoke.py,tmp/test_ds_hybrid_preflight_smoke.py,tmp/test_rfp_effective_path_smoke.py
+globs: RFQ/rfp_parts/ds_registry.py,RFQ/rfp_parts/ds_baseline.py,RFQ/rfp_parts/ds_rfp_hybrid.py,RFQ/rfp_parts/ds_rfp_tag_placement.py,RFQ/rfp_parts/ds_jobs.py,RFQ/rfp_parts/ds_hybrid_preflight.py,RFQ/rfp_parts/ds_identity.py,RFQ/packing_list_provider.py,RFQ/tags_rfp_compare/rfp_tags_utils.py,RFQ/tags_rfp_compare/agregate_tags.py,ds_compare_center/rfp_parts_panel.py,ds_compare_center/rfp_run_panel.py,ds_compare_center/rfp_mix_blocks.py,ds_compare_center/rfp_mix_settings.py,ds_compare_center/rfp_settings_panel.py,ds_compare_center/center_window.py,tmp/test_ds_registry_smoke.py,tmp/test_ds_baseline_smoke.py,tmp/test_ds_rfp_hybrid_smoke.py,tmp/test_ds_jobs_smoke.py,tmp/test_ds_hybrid_preflight_smoke.py,tmp/test_rfp_effective_path_smoke.py,tmp/test_rfp_mix_ui_smoke.py,tmp/test_ds_identity_smoke.py
 alwaysApply: false
 ---
 
@@ -9,15 +9,16 @@ alwaysApply: false
 > Узкий контур входа Step1 из закупочных ДС. Не путать с grouped ДС vs MTO
 > ([AI_ds_compare.mdc](.cursor/rules/AI_ds_compare.mdc)) и со сбором частей
 > `rfp_parts_net.xlsx` ([AI_rfp_parts.mdc](.cursor/rules/AI_rfp_parts.mdc)).
-> Снимок: **2026-09-23**. Лист реестра — [AI_ds_registry_handoff.mdc](.cursor/rules/AI_ds_registry_handoff.mdc). Чтение книги ДС и замечания аудита — [AI_ds_validation.mdc](.cursor/rules/AI_ds_validation.mdc).
+> Снимок: **2026-09-24**. `ALGORITHM_VERSION` гибрида — `ds_rfp_hybrid_v2`. Лист реестра — [AI_ds_registry_handoff.mdc](.cursor/rules/AI_ds_registry_handoff.mdc). Чтение книги ДС и замечания аудита — [AI_ds_validation.mdc](.cursor/rules/AI_ds_validation.mdc).
 
 ## Когда читать
 
 - реестр `Реестр_ДС_УЛ.xlsx`, миграция формата, группы поставки
 - рекурсивный аудит папки ДС, `Свод ДС для запуска.xlsx`
 - сверка корневого `RFP_Зиновьев` vs ДС, `Свод ДС-RFP для запуска.xlsx`
-- вкладка **RFP · Сбор частей** в режиме ДС/hybrid
-- `rfp_parts.input_mode` = `ds_only` | `hybrid` | `legacy_net`
+- вкладка **RFP · Сбор частей** в режиме ДС/hybrid; mix `separate`/`mixed`
+- `rfp_parts.input_mode` = `ds_only` | `hybrid` | `legacy_net` (какой файл читает Запуск)
+- `rfp_parts.collect_mix_mode` / `rfp_parts.launch_mix_mode` (посадка кластера; только hybrid)
 
 Не это правило: финальная раскладка Step4, посадка УЛ, grouped DS vs MTO.
 
@@ -58,8 +59,12 @@ alwaysApply: false
 (`ДС14_48`, `ДС1_ГОСФИН`). `Фактический ДС` — ключ посадки. Подмена
 из реестра — только при ровно одном активном владельце объекта; иначе
 число из имени. Шапка Шага 4 не переименовывается. Ошибка валидации
-реестра связи папок в индексе посадки не снимает; номер RFP с двумя
-владельцами не переназначается.
+реестра связи папок в индексе посадки не снимает. Слеш `ДС15/61` —
+не составное `ДС15_61`: `parse_rfp_ds_identity("ДС15/61")` unparsed,
+ключ посадки `15/61` через `rfp_supply_key`. Имя `ДС15_61.…RFP-0009`
+пару не создаёт (первое число — актуальный, после `_` — старый
+порядковый); пара только из реестра, когда активные номера называют
+один закрытый набор файлов.
 
 `Сверка RFP` пишет робот: `совпало`, `расхождение`, `нет файла`. Одинаково
 на всех строках номера. Свод эту ячейку не читает: решение считается заново.
@@ -67,13 +72,18 @@ alwaysApply: false
 `совпало` / `расхождение` — решение overlay (коды, единицы, количества),
 не признак «файл нашёлся».
 
-Жёлтая заливка — конфликт, который останавливает свод: один номер RFP
-или один файл RFP на разных актуальных номерах; повтор той же папки
-или того же RFP внутри номера; разошлись статус или исторический
-номер; папка, файл RFP или файл ДС есть в каталоге и не названы
-ни на одной строке (жёлтая строка без номера). Пока на такой строке нет
-номера и статуса `Активен` или `Отключен`, свод не пишется. `История` тоже
-занимает объект, чтобы старая строка не блокировала каталог вечно.
+Жёлтая заливка — конфликт, который останавливает свод: разные наборы
+файлов RFP у нескольких актуальных; общий номер RFP без закрытого
+одинакового набора; повтор той же папки или того же RFP внутри номера;
+разошлись статус или исторический номер; папка, файл RFP или файл ДС
+есть в каталоге и не названы ни на одной строке (жёлтая строка без
+номера). Пока на такой строке нет номера и статуса `Активен` или
+`Отключен`, свод не пишется. `История` тоже занимает объект, чтобы
+старая строка не блокировала каталог вечно. Закрытый одинаковый
+непустой набор имён RFP у 2+ `Активен` — кластер
+(`legal_rfp_file_clusters`), не жёлтый. `История` и `Отключен` в кластер
+не входят. Живые пары 14/48 (один файл) и 13/47 (если списки из 11
+имён совпадают) — кластеры, не ошибки реестра.
 Общая папка УЛ на нескольких актуальных номерах — норма: не ошибка,
 не предупреждение, не жёлтая ячейка, свод не останавливает.
 Названной папки УЛ нет на диске — ячейка синяя, свод не останавливается.
@@ -102,8 +112,8 @@ alwaysApply: false
 
 - повтор актуального номера — норма; это не ошибка
 - одна папка УЛ может принадлежать нескольким актуальным номерам — это норма
-- один номер RFP и один файл RFP принадлежат только одному актуальному номеру
-- пара 14/48 на одном файле `ДС14_48…RFP-0007…` — ошибка реестра; пара 15/61 на папке `согл УЛ ДС15` — норма
+- закрытый одинаковый непустой набор файлов RFP у 2+ `Активен` — легальный кластер; разные наборы, общий номер RFP без такого набора и повтор внутри номера — ERROR
+- имя `ДС15_61` / `ДС14_48` пару не создаёт; слеш `ДС15/61` появляется только в производном реестре при mix=`mixed`
 - ДС8 с двумя папками («ДС1 ГФ 5титулов» и «ДС7 ГФ 2 тит») — один мешок `ДС8`
 - УЛ — не вторая спецификация и не деление количеств. Это закрытие поставки
   при посадке после RFP–MTO–VO
@@ -138,7 +148,8 @@ Identity файла — только закреплённое место, про
 
 Ключ сверки: `(group_id, normalize_code, canonical_unit)` после той же
 матрицы, что части. Qty — `Decimal`. Нулевые итоги из bag убираются,
-в отчёте остаются.
+в отчёте остаются. Номер **вне кластера** по-прежнему атомарно: все
+строки RFP или все строки ДС.
 
 - полное равенство кодов+ЕИ+qty → группа из RFP (теги RFP)
 - иначе вся группа из ДС
@@ -147,11 +158,59 @@ Identity файла — только закреплённое место, про
 - RFP только **корень** `RFP_Зиновьев`; подпапки не читаются
 - несколько разных файлов одного номера суммируются; точный дубль байтов файла блокирует группу и оставляет ДС
 - `legacy_net` этот свод не читает; правило действует в `ds_only` и `hybrid`
-- ERROR реестра (включая сирот каталога) не пишет свод; отчёт пишется
+- ERROR реестра (включая сирот каталога) не пишет свод; отчёт пишется. Кластер — не ERROR.
+
+`ALGORITHM_VERSION` = `ds_rfp_hybrid_v2`. Ключ агрегации
+`analyze_rfp_parts.py` не менялся.
+
+## Кластер и mix
+
+Закрытый одинаковый непустой набор имён файлов RFP у 2+ `Активен` —
+легальный кластер (`legal_rfp_file_clusters`). `История` и `Отключен`
+не входят. Разные наборы, общий номер RFP без такого набора и повтор
+внутри одного номера — ERROR.
+
+Mix — на **весь** кластер. Ключи независимы, default `separate`:
+`rfp_parts.collect_mix_mode` на **RFP · Сбор частей**,
+`rfp_parts.launch_mix_mode` на **RFP · Запуск**. Повседневное
+управление — Запуск. Запуск не копирует последний сбор частей.
+`input_mode` — какой файл читает Запуск (`legacy_net` / `ds_only` /
+`hybrid`). Mix действует только если job/источник hybrid. Если лежащий
+hybrid собран в другом mix — Запуск пересобирает его с
+`launch_mix_mode` (fingerprint включает mix).
+
+- **separate:** теги RFP садятся на члена, у которого составной
+  title-system + код + каноническая ЕИ уникальны и qty совпало. Если
+  хоть один ключ RFP нельзя однозначно назначить — не выдумывать
+  `ДС15/61` и не сажать теги; строки остаются на своих номерах; отчёт
+  называет сбойный ключ. Ключи только ДС остаются на своём номере без
+  тегов.
+- **mixed:** весь кластер подписан `ДС15/61`, даже если уникальный
+  разрез был возможен. Сумма qty членов == qty RFP → теги RFP один раз
+  под этим именем. Расхождение → qty ДС, пустые теги, комментарий с
+  обоими qty. Не писать рядом ещё строки ДС15 и ДС61 на то же qty.
+  Ключи только RFP количество не добавляют.
+
+Посадка: [ds_rfp_tag_placement.py](RFQ/rfp_parts/ds_rfp_tag_placement.py).
+
+## Производный реестр
+
+Имя со слешем пишется **только** в производный реестр рядом со
+`Свод ДС-RFP для запуска.xlsx` (`write_derived_hybrid_registry` в
+`_ds_hybrid`). Канон `Реестр_ДС_УЛ.xlsx` в `_RFP` не пишется.
+separate: остаются `ДС15` и `ДС61` плюс комментарий `без смешения`.
+mixed: ячейки актуального номера → `ДС15/61`, папки УЛ объединяются
+(дубль папки схлопывается), одна общая строка RFP, «Файл ДС» —
+объединение. Свежесть смотрит mtime/байты **исходного** реестра;
+текст устаревания `реестр ДС/УЛ новее свода`. Hybrid-Запуск грузит
+производный файл, не второй `resolve_latest_registry`. Сбой копии
+прогон не останавливает. Mtime реестра **не** привязывать к пересборке
+`rfp_parts_net.xlsx`. Пустой список папок УЛ не падает на папку, чьё
+имя разбирается как 15 или 61.
 
 ## Вход Step1
 
-`rfp_parts.input_mode` выбирается на вкладке **RFP · Запуск** (свёрнутый блок вверху пишет Main JSON сразу). На **RFP · Настройки** остаются галка последнего свода, папка ДС, реестр и запасной `rfp_path`.
+`rfp_parts.input_mode` выбирается на вкладке **RFP · Запуск** (свёрнутый блок вверху пишет Main JSON сразу). Mix на Запуске — копия переключателя «Посадка RFP» (`launch_mix_mode`), не тот же ключ, что сбор. На **RFP · Настройки** остаются галка последнего свода, папка ДС, реестр и запасной `rfp_path`.
 
 `rfp_parts.input_mode`:
 
@@ -169,11 +228,19 @@ As-build: `use_latest_net=false` → `paths.rfp_path`, режимы ДС не т
 `last_ds_trusted_folder`. Реестр для Запуска без явного пути: самый новый
 файл в `_RFP` (`resolve_latest_registry`), иначе `ds_registry_path` /
 `last_ds_registry_file` / UNC-канон. Явный путь в вызове не подменяется.
+Hybrid-посадка УЛ читает производный реестр в `_ds_hybrid`, не второй
+проход `resolve_latest_registry`.
 
-Стабильные папки Запуска (кнопки вкладки пишут сюда же):
+Стабильные папки (один свёрнутый блок «Сбор + Посадка RFP» и кнопка
+`Запуск (ДС+RFP · без смешения)` / `… · со смешением`; «Посадка RFP» —
+mix, не выбор файла):
 
-- `RFP сводный файл/_ds_baseline/` — `Свод ДС для запуска.xlsx` (кнопка «Собрать свод только из ДС»)
-- `RFP сводный файл/_ds_hybrid/` — `Свод ДС-RFP для запуска.xlsx` (кнопка «Собрать свод из ДС и наложить RFP»: сначала свод ДС, затем overlay)
+- `RFP сводный файл/_ds_baseline/` — `Свод ДС для запуска.xlsx`
+- `RFP сводный файл/_ds_hybrid/` — `Свод ДС-RFP для запуска.xlsx` (сначала свод ДС, затем overlay)
+
+Трёх кнопок «Собрать свод только из ДС», «Собрать свод из ДС и наложить RFP»,
+«Собрать свод частей RFP» больше нет. Остаются «Проверить реестр», проверки
+одного файла, «Только имена и покрытие». На Запуске — своя копия mix.
 
 Отчёты одного прогона лежат во вложенной папке `YYYY.MM.DD_HH.MM`
 (повтор в ту же минуту — `_2`, `_3`). По имени в проводнике новее ниже.
@@ -185,6 +252,7 @@ As-build: `use_latest_net=false` → `paths.rfp_path`, режимы ДС не т
 
 - `Свод ДС для запуска.xlsx`
 - `Свод ДС-RFP для запуска.xlsx`
+- производный реестр (basename исходного) — только в `_ds_hybrid`, канон не трогает
 - `Сводный отчет по ошибкам - ДС_<штамп>.xlsx` — единственный список
   замечаний прогона (лист «Проблемы строк»: файл, лист, строка, текст).
   Отдельные книги «качество», «без кода», «дубли тегов» не пишутся:
@@ -202,16 +270,20 @@ As-build: `use_latest_net=false` → `paths.rfp_path`, режимы ДС не т
 |---|---|
 | [ds_registry.py](RFQ/rfp_parts/ds_registry.py) | формат, валидация, миграция |
 | [ds_baseline.py](RFQ/rfp_parts/ds_baseline.py) | аудит + свод ДС |
-| [ds_rfp_hybrid.py](RFQ/rfp_parts/ds_rfp_hybrid.py) | root RFP + overlay |
-| [ds_hybrid_preflight.py](RFQ/rfp_parts/ds_hybrid_preflight.py) | freshness Запуска, sidecar copy |
+| [ds_rfp_hybrid.py](RFQ/rfp_parts/ds_rfp_hybrid.py) | root RFP + overlay; `write_derived_hybrid_registry` |
+| [ds_rfp_tag_placement.py](RFQ/rfp_parts/ds_rfp_tag_placement.py) | посадка кластера `separate`/`mixed` |
+| [ds_hybrid_preflight.py](RFQ/rfp_parts/ds_hybrid_preflight.py) | freshness Запуска (mtime/байты **исходного** реестра), sidecar copy |
 | [ds_jobs.py](RFQ/rfp_parts/ds_jobs.py) | GUI jobs вкладки **RFP · Сбор частей** |
-| [ds_identity.py](RFQ/rfp_parts/ds_identity.py) | actual/sequential **только для RFP/УЛ** |
+| [ds_identity.py](RFQ/rfp_parts/ds_identity.py) | actual/sequential **только для RFP/УЛ**; `rfp_supply_key` / слеш |
+| [rfp_mix_blocks.py](ds_compare_center/rfp_mix_blocks.py) | свёрнутый блок Сбор + Посадка RFP; mix на Запуске |
+| [rfp_mix_settings.py](ds_compare_center/rfp_mix_settings.py) | `collect_mix_mode` / `launch_mix_mode`, подписи кнопок |
 
 Публичные входы: `load_registry`, `migrate_registry`,
-`backup_and_replace_registry`, `build_ds_baseline`, `build_ds_rfp_hybrid`,
-`ensure_ds_baseline_current`, `ensure_ds_hybrid_current`,
-`run_ds_baseline_job`, `run_ds_hybrid_job`, `run_ds_coverage_job`,
-`run_ds_registry_check_job`. Один файл — [one_file_check.py](RFQ/rfp_parts/one_file_check.py):
+`backup_and_replace_registry`, `legal_rfp_file_clusters`,
+`build_ds_baseline`, `build_ds_rfp_hybrid`,
+`write_derived_hybrid_registry`, `ensure_ds_baseline_current`,
+`ensure_ds_hybrid_current`, `run_ds_baseline_job`, `run_ds_hybrid_job`,
+`run_ds_coverage_job`, `run_ds_registry_check_job`. Один файл — [one_file_check.py](RFQ/rfp_parts/one_file_check.py):
 `run_rfp_one_file_job`, `run_ds_one_file_job` (`write_baseline=False`),
 `run_ul_one_file_job`. Отчёты в `_проверка_одного_файла`, боевые своды не пишутся.
 
@@ -227,12 +299,14 @@ Jobs **не** вызывают `backup_and_replace_registry`. «Проверит
 
 ## Ловушки
 
-- Join RFP только по `actual` без реестра вешает `ДС16_75` на мёртвый 16
-- Общая папка УЛ — не ошибка; общий номер или файл RFP у 13 и 47 или у 14 и 48 — ошибка реестра, свод не пишется
+- Join RFP только по `actual` без реестра вешает `ДС16_75` на мёртвый 16; `ДС15/61` не actual=15
+- Общая папка УЛ — не ошибка; закрытый одинаковый набор файлов RFP у 14 и 48 или у 13 и 47 — кластер, не ошибка реестра
+- Имя `ДС15_61.…RFP-0009` пару не создаёт и файл с одного номера не снимать
 - `ДС8` — две папки, один мешок `ДС8`; имя папки ключ посадки не выбирает
 - 4905 / 4905_1 / 4905_2 — разные `source_id` и разные мешки
 - Не включать рекурсию в `RFP_Зиновьев` (задвоение qty)
 - Не подменять `rfp_parts_net.xlsx` и grouped `DS_summary*.xlsx`
+- Mtime исходного реестра не привязывать к пересборке `rfp_parts_net.xlsx`
 - Сводный отчёт открывается на «Проблемы строк». «Уровень» — Ошибка /
   Предупреждение / Наложение, «Код» — русское название; машинный код
   остаётся на замечании. Ширина A–G по тексту строки, «Сообщение» фиксировано.
@@ -262,6 +336,8 @@ python tmp/test_ds_rfp_hybrid_smoke.py
 python tmp/test_ds_jobs_smoke.py
 python tmp/test_rfp_effective_path_smoke.py
 python tmp/test_ds_hybrid_preflight_smoke.py
+python tmp/test_rfp_mix_ui_smoke.py
+python tmp/test_ds_identity_smoke.py
 ```
 
 UNC-замену канона и полный прогон 89 книг не делать из чата без запроса.

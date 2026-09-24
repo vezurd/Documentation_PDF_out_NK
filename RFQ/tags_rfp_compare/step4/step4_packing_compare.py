@@ -65,9 +65,10 @@ from RFQ.packing_list_provider import (
     packing_row_source,
     rfp_packing_match_key,
     rfp_row_actual_ds,
+    rfp_row_supply_key,
     supply_ul_folders,
 )
-from RFQ.rfp_parts.ds_identity import parse_ul_folder_ds_identity
+from RFQ.rfp_parts.ds_identity import parse_mixed_ds_label, parse_ul_folder_ds_identity
 from RFQ.tags_rfp_compare.rfp_supply_status import (
     CANONICAL_EXCLUDED_FROM_SUPPLY,
     is_excluded_from_supply,
@@ -277,13 +278,14 @@ def parse_composite_title(value: object) -> tuple[str, str] | None:
 def build_ordered_snapshot(
     rfp_rows: Iterable[RowStd],
 ) -> dict[tuple[str, str, str, str], float]:
-    """Sum original RFP ordered quantities by ``(actual, title, system, code)``.
+    """Sum original RFP ordered quantities by ``(supply_key, title, system, code)``.
 
-    Only source ``position_row`` rows with a parsed actual DS, a valid
-    composite title, code, and non-negative quantity contribute to the
-    snapshot. Rows without actual DS are skipped. Validation diagnostics
-    are produced later against result rows so this helper remains a plain dict
-    contract suitable for orchestration before split/matching.
+    Only source ``position_row`` rows with a parsed supply key (mixed
+    ``15/61`` or a single actual), a valid composite title, code, and
+    non-negative quantity contribute to the snapshot. Rows without a
+    supply key are skipped. Validation diagnostics are produced later
+    against result rows so this helper remains a plain dict contract
+    suitable for orchestration before split/matching.
     """
     ordered: dict[tuple[str, str, str, str], float] = defaultdict(float)
     for row in rfp_rows:
@@ -291,14 +293,14 @@ def build_ordered_snapshot(
             continue
         if is_excluded_from_supply(row):
             continue
-        actual = rfp_row_actual_ds(row)
-        if actual is None:
+        supply_key = rfp_row_supply_key(row)
+        if not supply_key:
             continue
         title_system = parse_composite_title(row.get_value(DS_TITLE))
         if title_system is None:
             continue
         code = row.get_value(CODE)
-        key = rfp_packing_match_key(actual, *title_system, code)
+        key = rfp_packing_match_key(supply_key, *title_system, code)
         if not all(key):
             continue
         try:
@@ -382,6 +384,24 @@ def _set_cell(
     row.el[column].value = value
     row.el[column].color = color
     row.el[column].comment = comment
+
+
+def _mixed_ds_actual_label(tokens: tuple[str, ...]) -> str:
+    return "ДС" + "/".join(tokens)
+
+
+def _set_rfp_row_ds_actual(row: RowStd) -> None:
+    """Fill ``DS_ACTUAL`` from mixed slash label or single actual number."""
+    ds_name = str(row.get_value(DS_NAME) or "").strip()
+    mixed = parse_mixed_ds_label(ds_name)
+    if mixed is not None:
+        _set_cell(row, DS_ACTUAL, _mixed_ds_actual_label(mixed))
+        return
+    _set_ds_actual(
+        row,
+        rfp_row_actual_ds(row),
+        missing_comment=_has_rfp(row),
+    )
 
 
 PACKING_ONLY_SEQUENTIAL_MARKER = "RFP_не_найден"
@@ -574,21 +594,24 @@ def _dataset_folders_by_parsed_actual(
 
 
 def _eligible_folder_keys(
-    actual: int,
+    supply_key: str,
     name_folders: dict[int, frozenset[str]],
 ) -> frozenset[str]:
     """Return folder keys this supply may take from in block A.
 
     ``supply_ul_folders`` is ``None`` when there is no planting index or
-    ``actual`` is not a known source: name-match every folder in this
-    dataset whose parsed actual equals ``actual``. A frozenset (including
-    empty) is the registry set only — physical folders are not added just
-    because their names parse as the same number.
+    a digit source is not known: name-match every folder in this dataset
+    whose parsed actual equals that digit. A mixed key such as ``15/61``
+    never name-matches folders that parse as 15 or 61. A frozenset
+    (including empty) is the registry set only — physical folders are not
+    added just because their names parse as the same number.
     """
-    registry = supply_ul_folders(actual)
-    if registry is None:
-        return name_folders.get(actual, frozenset())
-    return registry
+    registry = supply_ul_folders(supply_key)
+    if registry is not None:
+        return registry
+    if supply_key.isdigit():
+        return name_folders.get(int(supply_key), frozenset())
+    return frozenset()
 
 
 def packing_queue_input_by_title(
@@ -755,8 +778,8 @@ def _candidate_key(
     str,
     tuple[tuple[str, str, str, str], ...],
 ]:
-    actual = rfp_row_actual_ds(row)
-    if actual is None:
+    actual = rfp_row_supply_key(row)
+    if not actual:
         return None, "", ()
     parsed = parse_composite_title(row.get_value(DS_TITLE))
     if parsed is None:
@@ -1561,13 +1584,14 @@ def compare_rfp_rows_with_packing(
 ) -> tuple[list[RowStd], RfpPackingAudit]:
     """Allocate packing deliveries once across the current Step4 result.
 
-    Block A runs four global passes over rows that have an actual DS, using
+    Block A runs four global passes over rows that have a supply key, using
     queues keyed by physical UL folder ``(folder_key, title, system, code)``:
     own RFP tags, untagged slots, optional MTO tags, then blind same-code
-    fill. A row takes from eligible folders for its supply id
-    (``rfp_row_actual_ds``): registry folder keys when the planting index
+    fill. A row takes from eligible folders for its supply key
+    (``rfp_row_supply_key``): registry folder keys when the planting index
     knows that id, otherwise every folder in this dataset whose parsed
-    name actual equals the id. Remaining units are reindexed by
+    name actual equals a digit id. Mixed ``15/61`` never falls back to a
+    folder whose name parses as 15 or 61. Remaining units are reindexed by
     ``(title, system, code)``. Block B plants that leftover onto MTO-only
     rows (including MTO+VO on the same row). Block C plants whatever is
     left onto VO-only rows. Units still unused become packing-only leftover
@@ -1597,11 +1621,7 @@ def compare_rfp_rows_with_packing(
             _clear_ul_columns(row)
             if row.row_type == RowType.position_row:
                 stats.result_position_rows += 1
-                _set_ds_actual(
-                    row,
-                    rfp_row_actual_ds(row),
-                    missing_comment=_has_rfp(row),
-                )
+                _set_rfp_row_ds_actual(row)
                 if is_excluded_from_supply(row):
                     _set_cell(
                         row,
@@ -1620,11 +1640,11 @@ def compare_rfp_rows_with_packing(
             if id(row) in excluded_ids:
                 continue
             parsed = parse_composite_title(row.get_value(DS_TITLE))
-            actual = rfp_row_actual_ds(row)
-            if actual is None or parsed is None:
+            supply_key = rfp_row_supply_key(row)
+            if not supply_key or parsed is None:
                 ordered = 0.0
             else:
-                key = rfp_packing_match_key(actual, *parsed, row.get_value(CODE))
+                key = rfp_packing_match_key(supply_key, *parsed, row.get_value(CODE))
                 ordered = ordered_by_key.get(key, 0.0)
             _set_cell(row, UL_ORDERED_VALUES, ordered)
             _set_cell(
@@ -1663,10 +1683,10 @@ def compare_rfp_rows_with_packing(
         for _original_index, row in allocation_order:
             if id(row) in excluded_ids:
                 continue
-            actual = rfp_row_actual_ds(row)
+            supply_key = rfp_row_supply_key(row)
             eligible = (
-                _eligible_folder_keys(actual, name_folders)
-                if actual is not None
+                _eligible_folder_keys(supply_key, name_folders)
+                if supply_key
                 else frozenset()
             )
             key, fallback, queue_keys = _candidate_key(row, queues, eligible)
@@ -1711,10 +1731,10 @@ def compare_rfp_rows_with_packing(
 
             capacity = _row_capacity(row)
             parsed = parse_composite_title(row.get_value(DS_TITLE))
-            actual = rfp_row_actual_ds(row)
+            supply_key = rfp_row_supply_key(row)
             primary_order_key = (
-                rfp_packing_match_key(actual, *parsed, row.get_value(CODE))
-                if parsed is not None and actual is not None
+                rfp_packing_match_key(supply_key, *parsed, row.get_value(CODE))
+                if parsed is not None and supply_key
                 else key
             )
             if not all(primary_order_key):

@@ -354,11 +354,15 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
         from PySide6.QtWidgets import QPushButton
 
         texts = [btn.text() for btn in panel.findChildren(QPushButton)]
-        self.assertIn("Собрать свод только из ДС", texts)
-        self.assertIn("Собрать свод из ДС и наложить RFP", texts)
+        self.assertTrue(
+            any(text.startswith("Запуск (") for text in texts),
+            texts,
+        )
+        self.assertNotIn("Собрать свод только из ДС", texts)
+        self.assertNotIn("Собрать свод из ДС и наложить RFP", texts)
+        self.assertNotIn("Собрать свод частей RFP", texts)
         self.assertIn("Только имена и покрытие", texts)
         self.assertIn("Проверить реестр", texts)
-        self.assertIn("Собрать свод частей RFP", texts)
         self.assertIn("Подставить копию роботу", texts)
         self.assertIn("Папка реестра", texts)
         panel.show()

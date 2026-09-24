@@ -1400,8 +1400,9 @@ def run_ds_hybrid_job(
         output_dir: Stamp folder for baseline, hybrid and the audit report.
         ul_root: Optional TSD root.
         rfp_root: Root-only ``RFP_Зиновьев``. Default ``DEFAULT_PARTS_DIR``.
-        **kwargs: ``converter`` (DS), ``rfp_converter``, ``loader`` and other
-            ``build_ds_baseline`` / ``build_ds_rfp_hybrid`` extras.
+        **kwargs: ``converter`` (DS), ``rfp_converter``, ``loader``,
+            ``mix_mode`` and other ``build_ds_baseline`` /
+            ``build_ds_rfp_hybrid`` extras.
 
     Returns:
         Russian summary. Missing RFP root is a warning inside hybrid, not a
@@ -1443,7 +1444,14 @@ def run_ds_hybrid_job(
     rfp_kwargs = {
         key: value
         for key, value in kwargs.items()
-        if key in {"google_index", "matrix_path", "stamp", "equipment_by_code", "write_hybrid"}
+        if key in {
+            "google_index",
+            "matrix_path",
+            "stamp",
+            "equipment_by_code",
+            "write_hybrid",
+            "mix_mode",
+        }
     }
     if "rfp_converter" in kwargs:
         rfp_kwargs["converter"] = kwargs["rfp_converter"]

@@ -1,11 +1,13 @@
-"""Group-level DS↔RFP reconciliation and atomic hybrid overlay.
+"""Group-level DS↔RFP reconciliation and hybrid overlay.
 
 RFP is read from the folder root only (no recursion). The hybrid workbook
 ``Свод ДС-RFP для запуска.xlsx`` is written only when the DS baseline has
 zero blockers and this stage has zero global blockers. The Russian audit
-report is always written. Overlay is atomic per supply group: MATCH takes
-every RFP row of the group; any other status takes every DS baseline row.
-RFP-only groups are reported and excluded. Never mix rows inside a group.
+report is always written. Overlay is atomic per supply group that is not in
+a legal RFP-file cluster: MATCH takes every RFP row of the group; any other
+status takes every DS baseline row. A legal cluster is placed by
+``ds_rfp_tag_placement`` (one read of the shared files). RFP-only groups are
+reported and excluded.
 """
 
 from __future__ import annotations
@@ -21,7 +23,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Protocol, Sequence
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.comments import Comment
 from openpyxl.styles import PatternFill
 
 from RFQ.ds_compare.ds_units_normalize import normalize_units_text
@@ -60,7 +63,29 @@ from RFQ.rfp_parts.ds_baseline import (
     make_audit_stamp_dir,
 )
 from RFQ.rfp_parts.ds_identity import DsIdentity, parse_rfp_ds_identity
-from RFQ.rfp_parts.ds_registry import DsRegistryDocument
+from RFQ.rfp_parts.ds_registry import (
+    MODE_WHOLE,
+    REGISTRY_SHEET_NAME,
+    STATUS_ACTIVE,
+    DsRegistryDocument,
+    DsRegistryRelation,
+    DsRegistryRow,
+    canonical_supply_group_id,
+    legal_rfp_file_clusters,
+    normalize_header,
+    parse_registry_ds_number,
+    write_registry_workbook,
+    _claiming_links,
+    _ds_file_names,
+    _norm_link,
+)
+from RFQ.rfp_parts.ds_rfp_tag_placement import (
+    MIX_MIXED,
+    MIX_SEPARATE,
+    mixed_ds_label,
+    place_cluster_summary,
+    sorted_source_ids,
+)
 from RFQ.tags_rfp_compare.rfp_supply_status import (
     RfpSupplyStatusIssue,
     is_canonical_excluded_from_supply,
@@ -80,7 +105,7 @@ IssueLevel = Literal["ERROR", "WARN", "OVERLAY"]
 GroupStatus = Literal["MATCH", "MISMATCH", "DS_ONLY", "RFP_ONLY", "BLOCKED"]
 SelectedSource = Literal["RFP", "ДС", ""]
 
-ALGORITHM_VERSION = "ds_rfp_hybrid_v1"
+ALGORITHM_VERSION = "ds_rfp_hybrid_v2"
 HYBRID_XLSX_NAME = "Свод ДС-RFP для запуска.xlsx"
 HYBRID_REPORT_PREFIX = "Отчет по сверке ДС-RFP-УЛ"
 REPORT_XLSX_NAME = HYBRID_REPORT_PREFIX
@@ -103,6 +128,10 @@ ISSUE_OVERLAY_BLOCKED = "overlay_blocked"
 ISSUE_GROUP_FALLBACK = "group_fallback"
 ISSUE_BASELINE_BLOCKED = "baseline_blocked"
 ISSUE_RFP_ROOT = "rfp_root_missing"
+
+DERIVED_COMMENT_SEPARATE = "без смешения"
+_COMMENT_AUTHOR = "реестр ДС"
+_SOURCE_ID_HEADER_NAMES = ("Актуальный номер ДС", "Номер ДС", "ID ДС источника")
 
 _EXCEL_SUFFIXES = frozenset({".xlsx", ".xlsm"})
 _OK_CONVERSION = frozenset({STATUS_IDENTITY, STATUS_CONVERTED, ""})
@@ -248,6 +277,7 @@ class RfpFileExtract:
     stats: FileStats | None = None
     extract_error: bool = False
     mapping_issue: str = ""
+    cluster_source_ids: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass
@@ -269,6 +299,7 @@ class DsRfpHybridResult:
     stamp: str
     fingerprint: str
     algorithm_version: str = ALGORITHM_VERSION
+    mix_mode: str = MIX_SEPARATE
     files: list[DsSourceFile] = field(default_factory=list)
     skipped: list[DsSkippedFile] = field(default_factory=list)
     extracts: list[RfpFileExtract] = field(default_factory=list)
@@ -287,6 +318,7 @@ class DsRfpHybridResult:
     blocking: bool = False
     hybrid_path: Path | None = None
     report_path: Path | None = None
+    derived_registry_path: Path | None = None
     fractional_log_paths: tuple[Path, ...] = ()
 
     def summary_line(self) -> str:
@@ -507,6 +539,24 @@ def rfp_identity_key(identity: DsIdentity) -> str | None:
     return str(identity.actual)
 
 
+def _legal_cluster_group_sets(
+    registry: DsRegistryDocument,
+) -> dict[frozenset[str], frozenset[str]]:
+    """Map a frozenset of ``ДС{id}`` group ids to the cluster source_ids."""
+
+    mapping: dict[frozenset[str], frozenset[str]] = {}
+    for sources in legal_rfp_file_clusters(registry.rows):
+        groups = frozenset(canonical_supply_group_id(sid) for sid in sources)
+        mapping[groups] = frozenset(sources)
+    return mapping
+
+
+def _extract_owner_bucket(item: RfpFileExtract) -> str:
+    if item.cluster_source_ids:
+        return "cluster:" + "+".join(sorted(item.cluster_source_ids))
+    return item.group_id
+
+
 def _rfp_key_groups(registry: DsRegistryDocument) -> dict[str, tuple[str, ...]]:
     """Map an RFP number to the actual-DS group that named it.
 
@@ -647,9 +697,11 @@ def _hybrid_fingerprint(
     baseline: DsBaselineResult,
     registry: DsRegistryDocument,
     files: Sequence[DsSourceFile],
+    mix_mode: str = MIX_SEPARATE,
 ) -> str:
     digest = hashlib.sha256()
     digest.update(ALGORITHM_VERSION.encode("utf-8"))
+    digest.update(str(mix_mode).encode("utf-8"))
     digest.update(baseline.fingerprint.encode("utf-8"))
     digest.update(str(registry.path).encode("utf-8", errors="replace"))
     if registry.path.is_file():
@@ -1003,6 +1055,229 @@ def _write_hybrid_report(
 
 
 # ---------------------------------------------------------------------------
+# Derived planting registry (beside the hybrid summary)
+# ---------------------------------------------------------------------------
+
+
+def write_derived_hybrid_registry(
+    registry: DsRegistryDocument,
+    dest_dir: str | Path,
+    *,
+    mix_mode: str = MIX_SEPARATE,
+) -> Path | None:
+    """Write a derived DS/UL registry next to the hybrid summary.
+
+    The source file ``registry.path`` is never opened for write. Destination
+    name is the source basename (a dated name stays dated). Cluster members
+    stay split in ``separate`` mode and collapse to a slash id in ``mixed``.
+    Any write error is printed and swallowed: the hybrid workbook still
+    stands.
+
+    Args:
+        registry: Loaded source registry (read-only path).
+        dest_dir: Stable hybrid folder (``_ds_hybrid``).
+        mix_mode: ``separate`` or ``mixed``. Unknown values act as separate.
+
+    Returns:
+        Written path, or ``None`` when the copy was skipped or failed.
+    """
+
+    source = Path(registry.path)
+    dest = Path(dest_dir) / source.name
+    try:
+        if dest.resolve() == source.resolve():
+            print(
+                "Гибрид: производный реестр не записан: путь совпадает "
+                "с исходным реестром"
+            )
+            return None
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        rows, comments = derive_hybrid_registry_rows(
+            registry.rows, mix_mode=mix_mode
+        )
+        written = write_registry_workbook(dest, rows)
+        try:
+            _annotate_derived_registry_comments(written, comments)
+        except Exception as exc:
+            print(
+                "Гибрид: комментарии производного реестра не записаны: "
+                f"{exc}"
+            )
+        return written
+    except Exception as exc:
+        print(f"Гибрид: производный реестр не записан: {exc}")
+        return None
+
+
+def derive_hybrid_registry_rows(
+    rows: Sequence[DsRegistryRow],
+    *,
+    mix_mode: str,
+) -> tuple[list[DsRegistryRow], dict[str, str]]:
+    """Return planting rows and Excel comments keyed by source_id.
+
+    Numbers outside a legal RFP-file cluster are copied unchanged. Cluster
+    members in ``separate`` keep their ids; in ``mixed`` they become one
+    slash id with unioned UL folders, one shared RFP-file row, and a union
+    of «Файл ДС» names.
+
+    Args:
+        rows: Logical registry rows as loaded from the source workbook.
+        mix_mode: ``separate`` or ``mixed``.
+
+    Returns:
+        Derived rows and comment text per source_id (derived book only).
+    """
+
+    mode = mix_mode if mix_mode in (MIX_SEPARATE, MIX_MIXED) else MIX_SEPARATE
+    cluster_of: dict[str, frozenset[str]] = {}
+    for cluster in legal_rfp_file_clusters(rows):
+        for source_id in cluster:
+            cluster_of[source_id] = cluster
+
+    comments: dict[str, str] = {}
+    if mode == MIX_SEPARATE:
+        for source_id in cluster_of:
+            comments[source_id] = DERIVED_COMMENT_SEPARATE
+        return list(rows), comments
+
+    emitted: set[frozenset[str]] = set()
+    derived: list[DsRegistryRow] = []
+    for row in rows:
+        cluster = cluster_of.get(row.source_id)
+        if cluster is None:
+            derived.append(row)
+            continue
+        if cluster in emitted:
+            continue
+        emitted.add(cluster)
+        members = [item for item in rows if item.source_id in cluster]
+        mixed_id = "/".join(sorted_source_ids(cluster))
+        mixed_rows, comment = _merge_cluster_registry_rows(members, mixed_id)
+        derived.extend(mixed_rows)
+        if comment:
+            comments[mixed_id] = comment
+    return derived, comments
+
+
+def _merge_cluster_registry_rows(
+    members: Sequence[DsRegistryRow],
+    mixed_id: str,
+) -> tuple[list[DsRegistryRow], str]:
+    ordered = sorted_source_ids(item.source_id for item in members)
+    previous_values = {item.previous_ds for item in members if item.previous_ds}
+    comment = ""
+    previous = ""
+    if len(previous_values) == 1:
+        previous = next(iter(previous_values))
+    elif len(previous_values) > 1:
+        comment = "вместо " + " и ".join(
+            canonical_supply_group_id(sid) for sid in ordered
+        )
+
+    ds_names: list[str] = []
+    seen_files: set[str] = set()
+    for item in members:
+        for name in _ds_file_names(item.ds_file):
+            key = _norm_link(name)
+            if key in seen_files:
+                continue
+            seen_files.add(key)
+            ds_names.append(name)
+    ds_file = "\n".join(ds_names)
+
+    folders: list[str] = []
+    seen_folders: set[str] = set()
+    folder_mode: dict[str, str] = {}
+    rfp_items: list[tuple[str, str, str]] = []
+    seen_rfp: set[tuple[str, ...]] = set()
+    group_id = mixed_ds_label(ordered)
+    for item in members:
+        for rel in _claiming_links(item):
+            if rel.ul_folder:
+                folder_key = _norm_link(rel.ul_folder)
+                if folder_key not in seen_folders:
+                    seen_folders.add(folder_key)
+                    folders.append(rel.ul_folder)
+                    folder_mode[folder_key] = rel.mode or MODE_WHOLE
+            names = _ds_file_names(rel.rfp_file)
+            if names:
+                rfp_key = tuple(_norm_link(name) for name in names)
+            elif rel.rfp_key:
+                rfp_key = ("key", _norm_link(rel.rfp_key))
+            else:
+                continue
+            if rfp_key in seen_rfp:
+                continue
+            seen_rfp.add(rfp_key)
+            rfp_items.append(
+                (rel.rfp_key, rel.rfp_file, rel.mode or MODE_WHOLE)
+            )
+
+    relations: list[DsRegistryRelation] = []
+    for folder in folders:
+        relations.append(
+            DsRegistryRelation(
+                group_id=group_id,
+                rfp_key="",
+                ul_folder=folder,
+                mode=folder_mode.get(_norm_link(folder), MODE_WHOLE),
+            )
+        )
+    for rfp_key, rfp_file, mode in rfp_items:
+        relations.append(
+            DsRegistryRelation(
+                group_id=group_id,
+                rfp_key=rfp_key,
+                ul_folder="",
+                mode=mode,
+                rfp_file=rfp_file,
+            )
+        )
+    if not relations:
+        relations.append(
+            DsRegistryRelation(group_id=group_id, rfp_key="", ul_folder="")
+        )
+    row = DsRegistryRow(
+        status=STATUS_ACTIVE,
+        source_id=mixed_id,
+        previous_ds=previous,
+        ds_file=ds_file,
+        relations=tuple(relations),
+    )
+    return [row], comment
+
+
+def _annotate_derived_registry_comments(
+    path: Path, comments: dict[str, str]
+) -> None:
+    if not comments:
+        return
+    workbook = load_workbook(path)
+    try:
+        if REGISTRY_SHEET_NAME not in workbook.sheetnames:
+            return
+        sheet = workbook[REGISTRY_SHEET_NAME]
+        header = next(sheet.iter_rows(min_row=1, max_row=1), None)
+        column = 2
+        if header is not None:
+            for index, cell in enumerate(header, start=1):
+                if normalize_header(cell.value) in _SOURCE_ID_HEADER_NAMES:
+                    column = index
+                    break
+        for excel_row in range(2, sheet.max_row + 1):
+            cell = sheet.cell(row=excel_row, column=column)
+            source_id = parse_registry_ds_number(cell.value)
+            text = comments.get(source_id)
+            if not text:
+                continue
+            cell.comment = Comment(text, _COMMENT_AUTHOR)
+        workbook.save(path)
+    finally:
+        workbook.close()
+
+
+# ---------------------------------------------------------------------------
 # Public entry
 # ---------------------------------------------------------------------------
 
@@ -1022,6 +1297,7 @@ def build_ds_rfp_hybrid(
     equipment_by_code: dict[str, str] | None = None,
     progress_callback: Callable[[int, int, str, float | None], object] | None = None,
     phase_callback: Callable[[str], object] | None = None,
+    mix_mode: str = MIX_SEPARATE,
 ) -> DsRfpHybridResult:
     """Reconcile root RFP against a DS baseline and write the hybrid overlay.
 
@@ -1043,6 +1319,7 @@ def build_ds_rfp_hybrid(
         matrix_path: Units matrix for the default converter.
         stamp: Report timestamp stored in the summary sheet.
         equipment_by_code: Optional Google equipment map for net column F.
+        mix_mode: Cluster placement: ``separate`` (без смешения) or ``mixed``.
 
     Returns:
         ``DsRfpHybridResult`` with groups, issues, fingerprint and paths.
@@ -1061,6 +1338,8 @@ def build_ds_rfp_hybrid(
     else:
         report_dir = make_audit_stamp_dir(stable_dir)
     stamp_value = stamp or datetime.now().strftime(STAMP_FORMAT)
+    if mix_mode not in (MIX_SEPARATE, MIX_MIXED):
+        mix_mode = MIX_SEPARATE
     issues: list[DsRfpHybridIssue] = []
     if not root.is_dir():
         issues.append(
@@ -1089,6 +1368,10 @@ def build_ds_rfp_hybrid(
     files, skipped = collect_rfp_workbooks(root)
     key_groups = _rfp_key_groups(registry)
     file_groups = _rfp_file_groups(registry)
+    cluster_by_groups = _legal_cluster_group_sets(registry)
+    cluster_member_groups = {
+        group_id for groups in cluster_by_groups for group_id in groups
+    }
     loader_impl: RfpWorkbookLoader = loader or ProductionRfpLoader()
     extracts: list[RfpFileExtract] = []
     if phase_callback is not None:
@@ -1106,8 +1389,13 @@ def build_ds_rfp_hybrid(
         rfp_key = rfp_identity_key(identity) or ""
         group_id = ""
         mapping_issue = ""
+        cluster_source_ids: frozenset[str] = frozenset()
         named = file_groups.get(source.path.name.casefold(), ())
-        if len(named) == 1:
+        named_set = frozenset(named)
+        cluster_hit = cluster_by_groups.get(named_set)
+        if cluster_hit is not None:
+            cluster_source_ids = cluster_hit
+        elif len(named) == 1:
             group_id = named[0]
         elif len(named) > 1:
             mapping_issue = "неоднозначный файл RFP"
@@ -1190,6 +1478,7 @@ def build_ds_rfp_hybrid(
                 stats=stats,
                 extract_error=extract_error,
                 mapping_issue=mapping_issue,
+                cluster_source_ids=cluster_source_ids,
             )
         )
         if progress_callback is not None:
@@ -1202,29 +1491,37 @@ def build_ds_rfp_hybrid(
 
     hashed: dict[tuple[str, str], list[RfpFileExtract]] = defaultdict(list)
     for item in extracts:
-        if not item.group_id:
+        bucket = _extract_owner_bucket(item)
+        if not bucket:
             continue
         try:
             digest = hashlib.sha256(item.source.path.read_bytes()).hexdigest()
         except OSError:
             continue
-        hashed[(item.group_id, digest)].append(item)
+        hashed[(bucket, digest)].append(item)
     duplicate_groups: set[str] = set()
+    duplicate_clusters: set[frozenset[str]] = set()
     for items in hashed.values():
         if len(items) < 2:
             continue
-        group_id = items[0].group_id
-        duplicate_groups.add(group_id)
+        first = items[0]
+        if first.cluster_source_ids:
+            duplicate_clusters.add(frozenset(first.cluster_source_ids))
+            bucket_id = _extract_owner_bucket(first)
+        else:
+            group_id = first.group_id
+            duplicate_groups.add(group_id)
+            bucket_id = group_id
         names = ", ".join(item.source.relpath for item in items)
         issues.append(
             _issue(
                 ISSUE_DUPLICATE_RFP_KEY,
                 "ERROR",
-                f"точный дубль файла RFP в группе {group_id}: {names}",
+                f"точный дубль файла RFP в группе {bucket_id}: {names}",
                 path=items[0].source.path,
                 relpath=items[0].source.relpath,
                 rfp_key=items[0].rfp_key,
-                group_id=group_id,
+                group_id=items[0].group_id,
             )
         )
         for item in items:
@@ -1324,6 +1621,10 @@ def build_ds_rfp_hybrid(
     for item in baseline.groups:
         _remember(item.group_id)
     for item in extracts:
+        if item.cluster_source_ids:
+            for source_id in item.cluster_source_ids:
+                _remember(canonical_supply_group_id(source_id))
+            continue
         if item.group_id:
             _remember(item.group_id)
         elif item.rfp_key:
@@ -1333,7 +1634,11 @@ def build_ds_rfp_hybrid(
     group_ids.sort()
 
     extracts_by_group: dict[str, list[RfpFileExtract]] = defaultdict(list)
+    extracts_by_cluster: dict[frozenset[str], list[RfpFileExtract]] = defaultdict(list)
     for item in extracts:
+        if item.cluster_source_ids:
+            extracts_by_cluster[frozenset(item.cluster_source_ids)].append(item)
+            continue
         if item.group_id:
             extracts_by_group[item.group_id].append(item)
         elif item.rfp_key:
@@ -1356,11 +1661,114 @@ def build_ds_rfp_hybrid(
         for key, groups in key_groups.items()
         if len(groups) > 1
         for group_id in groups
+        if group_id not in cluster_member_groups
     }
 
     group_results: list[DsRfpGroupResult] = []
     chosen_rows: list[NetSummaryRow] = []
+    for source_ids in sorted(
+        cluster_by_groups.values(),
+        key=lambda ids: tuple(sorted(ids)),
+    ):
+        file_extracts = list(extracts_by_cluster.get(source_ids, ()))
+        positions_by_source = {
+            sid: list(positions_by_group.get(canonical_supply_group_id(sid), ()))
+            for sid in source_ids
+        }
+        member_gids = [canonical_supply_group_id(sid) for sid in source_ids]
+        overlay_blocked = any(gid in overlay_blocked_ids for gid in member_gids)
+        fallback = False
+        for gid in member_gids:
+            info = baseline_groups.get(gid)
+            if info is None:
+                continue
+            overlay_blocked = overlay_blocked or info.overlay_blocked
+            fallback = fallback or info.fallback
+        for positions in positions_by_source.values():
+            overlay_blocked = overlay_blocked or any(
+                item.overlay_blocked for item in positions
+            )
+            fallback = fallback or any(item.grouping_fallback for item in positions)
+        block_reasons: list[str] = []
+        if overlay_blocked:
+            block_reasons.append("группа overlay_blocked в реестре/baseline")
+            issues.append(
+                _issue(
+                    ISSUE_OVERLAY_BLOCKED,
+                    "OVERLAY",
+                    "overlay кластера заблокирован реестром или fallback",
+                    blocking=False,
+                    group_id="+".join(sorted(source_ids)),
+                )
+            )
+        if fallback:
+            block_reasons.append("grouping fallback")
+            issues.append(
+                _issue(
+                    ISSUE_GROUP_FALLBACK,
+                    "OVERLAY",
+                    "кластер в режиме fallback / неоднозначного распределения",
+                    blocking=False,
+                    group_id="+".join(sorted(source_ids)),
+                )
+            )
+        if source_ids in duplicate_clusters:
+            block_reasons.append("точный дубль файла RFP")
+        if any(item.extract_error or item.mapping_issue for item in file_extracts):
+            block_reasons.append("ошибка разбора или конвертации RFP")
+        if any(gid in convert_failed_groups for gid in member_gids):
+            block_reasons.append("ошибка разбора или конвертации RFP")
+        usable_cluster = [
+            item
+            for item in file_extracts
+            if not item.extract_error and not item.mapping_issue
+        ]
+        cluster_blocked = bool(block_reasons)
+        rfp_records = (
+            []
+            if cluster_blocked
+            else [rec for item in usable_cluster for rec in item.records]
+        )
+        listed_rfp_records = [
+            rec for item in file_extracts for rec in item.records
+        ]
+        placed = place_cluster_summary(
+            source_ids=tuple(source_ids),
+            mix_mode=mix_mode,
+            rfp_records=rfp_records,
+            positions_by_source=positions_by_source,
+            rfp_files=tuple(item.source.relpath for item in file_extracts),
+            blocked=cluster_blocked,
+            block_reason="; ".join(dict.fromkeys(block_reasons)),
+            fallback=fallback,
+        )
+        chosen_rows.extend(placed.rows)
+        all_positions = [
+            pos for sid in source_ids for pos in positions_by_source[sid]
+        ]
+        ds_bag = _ds_bag(all_positions)
+        rfp_bag = _rfp_compare_bag(rfp_records)
+        deltas = _build_deltas(placed.group_id, ds_bag, rfp_bag)
+        group_results.append(
+            DsRfpGroupResult(
+                group_id=placed.group_id,
+                group_label=placed.group_label,
+                status=placed.status,  # type: ignore[arg-type]
+                selected_source=placed.selected_source,  # type: ignore[arg-type]
+                reason=placed.reason,
+                overlay_blocked=placed.overlay_blocked or fallback,
+                fallback=fallback,
+                ds_position_count=placed.ds_position_count,
+                rfp_record_count=len(listed_rfp_records),
+                rfp_files=placed.rfp_files,
+                ds_source_ids=placed.ds_source_ids,
+                deltas=deltas,
+            )
+        )
+
     for group_id in group_ids:
+        if group_id in cluster_member_groups:
+            continue
         info = baseline_groups.get(group_id)
         positions = list(positions_by_group.get(group_id, ()))
         file_extracts = list(extracts_by_group.get(group_id, ()))
@@ -1469,7 +1877,7 @@ def build_ds_rfp_hybrid(
 
     hybrid_rows = _renumber(chosen_rows)
     fingerprint = _hybrid_fingerprint(
-        baseline=baseline, registry=registry, files=files
+        baseline=baseline, registry=registry, files=files, mix_mode=mix_mode
     )
     global_blocker_count = sum(1 for item in issues if item.global_blocker)
     blocking_count = sum(1 for item in issues if item.blocking)
@@ -1506,12 +1914,19 @@ def build_ds_rfp_hybrid(
             tmp_path.unlink(missing_ok=True)
             raise
 
+    derived_registry_path: Path | None = None
+    if hybrid_path is not None:
+        derived_registry_path = write_derived_hybrid_registry(
+            registry, stable_dir, mix_mode=mix_mode
+        )
+
     report_path = report_dir / hybrid_report_filename(stamp_value)
     summary_rows: list[tuple[str, object]] = [
         ("Корень RFP", root),
         ("Реестр", registry.path),
         ("Папка отчётов", report_dir),
         ("Алгоритм", ALGORITHM_VERSION),
+        ("Режим смешения", mix_mode),
         ("Штамп", stamp_value),
         ("Fingerprint", fingerprint),
         ("Fingerprint baseline", baseline.fingerprint),
@@ -1551,6 +1966,7 @@ def build_ds_rfp_hybrid(
         stamp=stamp_value,
         fingerprint=fingerprint,
         algorithm_version=ALGORITHM_VERSION,
+        mix_mode=mix_mode,
         files=list(files),
         skipped=list(skipped),
         extracts=extracts,
@@ -1569,5 +1985,6 @@ def build_ds_rfp_hybrid(
         blocking=blocking,
         hybrid_path=hybrid_path,
         report_path=report_path,
+        derived_registry_path=derived_registry_path,
         fractional_log_paths=fractional_paths,
     )

@@ -38,6 +38,7 @@ from RFQ.rfp_parts.ds_registry import (
     REGISTRY_SHEET_NAME,
     REGISTRY_TABLE_NAME,
     STATUS_ACTIVE,
+    STATUS_DISABLED,
     STATUS_HISTORY,
     RegistryLinks,
     DsRegistryRelation,
@@ -50,6 +51,7 @@ from RFQ.rfp_parts.ds_registry import (
     collapse_registry_rows,
     copy_registry_snapshot,
     detect_registry_format,
+    legal_rfp_file_clusters,
     load_registry,
     migrate_registry,
     no_ul_group_id,
@@ -1078,6 +1080,302 @@ class RegistrySheetLinksSmokeTest(unittest.TestCase):
             max_relation_blocks=1,
         )
         self.assertIsNone(registry_packing_maps(dirty))
+
+    def test_closed_rfp_file_cluster_is_legal(self) -> None:
+        shared_file = "ДС15_61. AGCC.287-0000-12.4.1-RFP-0009_02_RU.xlsx"
+
+        def row(source_id: str, rfp_key: str) -> DsRegistryRow:
+            return DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id=source_id,
+                relations=(
+                    DsRegistryRelation(
+                        group_id=f"ДС{source_id}",
+                        rfp_key=rfp_key,
+                        ul_folder=f"согл УЛ ДС{source_id}",
+                        rfp_file=shared_file,
+                        block_index=1,
+                    ),
+                ),
+            )
+
+        different_numbers = [row("15", "15"), row("61", "61")]
+        checked = validate_registry_rows(different_numbers)
+        self.assertTrue(checked.is_ok, checked.issues)
+        self.assertNotIn(
+            ISSUE_SHARED_RFP, {item.code for item in checked.issues}
+        )
+        self.assertEqual(
+            legal_rfp_file_clusters(different_numbers),
+            (frozenset({"15", "61"}),),
+        )
+
+        same_number = [row("15", "15"), row("61", "15")]
+        checked_same = validate_registry_rows(same_number)
+        self.assertTrue(checked_same.is_ok, checked_same.issues)
+        self.assertNotIn(
+            ISSUE_SHARED_RFP, {item.code for item in checked_same.issues}
+        )
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            path = Path(raw) / "cluster.xlsx"
+            write_registry_workbook(path, same_number)
+            loaded = load_registry(path)
+            self.assertTrue(loaded.validation.is_ok, loaded.validation.issues)
+            self.assertNotIn(
+                ISSUE_SHARED_RFP,
+                {item.code for item in loaded.validation.issues},
+            )
+            ids = {item.source_id for item in loaded.rows if item.source_id}
+            self.assertEqual({"15", "61"}, ids)
+            book = _load_xlsx(path)
+            try:
+                sheet = book[REGISTRY_SHEET_NAME]
+                self.assertFalse(_fill_rgb(sheet["F2"]).endswith("FFFF00"))
+                self.assertFalse(_fill_rgb(sheet["F3"]).endswith("FFFF00"))
+                self.assertFalse(_fill_rgb(sheet["G2"]).endswith("FFFF00"))
+                self.assertFalse(_fill_rgb(sheet["G3"]).endswith("FFFF00"))
+            finally:
+                book.close()
+
+    def test_partial_rfp_file_overlap_is_shared(self) -> None:
+        rows = [
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="15",
+                excel_row=2,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС15",
+                        rfp_key="15",
+                        ul_folder="согл УЛ ДС15",
+                        rfp_file="A.xlsx\nB.xlsx",
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="61",
+                excel_row=3,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС61",
+                        rfp_key="61",
+                        ul_folder="согл УЛ ДС61",
+                        rfp_file="A.xlsx",
+                        block_index=1,
+                    ),
+                ),
+            ),
+        ]
+        checked = validate_registry_rows(rows)
+        self.assertFalse(checked.is_ok)
+        self.assertIn(ISSUE_SHARED_RFP, {item.code for item in checked.issues})
+
+    def test_shared_rfp_number_without_closed_files_is_error(self) -> None:
+        different_files = [
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="15",
+                excel_row=2,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС15",
+                        rfp_key="15",
+                        ul_folder="согл УЛ ДС15",
+                        rfp_file="A.xlsx",
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="61",
+                excel_row=3,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС61",
+                        rfp_key="15",
+                        ul_folder="согл УЛ ДС61",
+                        rfp_file="B.xlsx",
+                        block_index=1,
+                    ),
+                ),
+            ),
+        ]
+        different = validate_registry_rows(different_files)
+        self.assertFalse(different.is_ok)
+        self.assertIn(
+            ISSUE_SHARED_RFP, {item.code for item in different.issues}
+        )
+
+        one_empty = [
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="15",
+                excel_row=2,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС15",
+                        rfp_key="15",
+                        ul_folder="согл УЛ ДС15",
+                        rfp_file="A.xlsx",
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="61",
+                excel_row=3,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС61",
+                        rfp_key="15",
+                        ul_folder="согл УЛ ДС61",
+                        rfp_file="",
+                        block_index=1,
+                    ),
+                ),
+            ),
+        ]
+        empty_side = validate_registry_rows(one_empty)
+        self.assertFalse(empty_side.is_ok)
+        self.assertIn(
+            ISSUE_SHARED_RFP, {item.code for item in empty_side.issues}
+        )
+
+    def test_history_same_rfp_file_is_not_shared(self) -> None:
+        shared_file = "shared-rfp.xlsx"
+
+        def pair(second_status: str, second_id: str) -> list[DsRegistryRow]:
+            return [
+                DsRegistryRow(
+                    status=STATUS_ACTIVE,
+                    source_id="15",
+                    excel_row=2,
+                    relations=(
+                        DsRegistryRelation(
+                            group_id="ДС15",
+                            rfp_key="15",
+                            ul_folder="согл УЛ ДС15",
+                            rfp_file=shared_file,
+                            block_index=1,
+                        ),
+                    ),
+                ),
+                DsRegistryRow(
+                    status=second_status,
+                    source_id=second_id,
+                    excel_row=3,
+                    relations=(
+                        DsRegistryRelation(
+                            group_id=f"ДС{second_id}",
+                            rfp_key=second_id,
+                            ul_folder=f"согл УЛ ДС{second_id}",
+                            rfp_file=shared_file,
+                            block_index=1,
+                        ),
+                    ),
+                ),
+            ]
+
+        for status, source_id in (
+            (STATUS_HISTORY, "61"),
+            (STATUS_DISABLED, "70"),
+        ):
+            rows = pair(status, source_id)
+            checked = validate_registry_rows(rows)
+            self.assertTrue(checked.is_ok, checked.issues)
+            self.assertNotIn(
+                ISSUE_SHARED_RFP, {item.code for item in checked.issues}
+            )
+            self.assertEqual(legal_rfp_file_clusters(rows), ())
+
+    def test_duplicate_rfp_file_inside_one_source_is_error(self) -> None:
+        rows = [
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="15",
+                excel_row=2,
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС15",
+                        rfp_key="15",
+                        ul_folder="согл УЛ ДС15",
+                        rfp_file="A.xlsx\nA.xlsx",
+                        block_index=1,
+                    ),
+                ),
+            ),
+        ]
+        checked = validate_registry_rows(rows)
+        codes = {item.code for item in checked.issues}
+        self.assertIn(ISSUE_DUPLICATE_LINK, codes)
+        self.assertNotIn(ISSUE_SHARED_RFP, codes)
+        self.assertFalse(checked.is_ok)
+
+    def test_packing_maps_omit_cluster_shared_rfp_number(self) -> None:
+        shared_file = "ДС15_61. cluster.xlsx"
+        rows = [
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="15",
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС15",
+                        rfp_key="15",
+                        ul_folder="согл УЛ ДС15",
+                        rfp_file=shared_file,
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="61",
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС61",
+                        rfp_key="15",
+                        ul_folder="согл УЛ ДС61",
+                        rfp_file=shared_file,
+                        block_index=1,
+                    ),
+                ),
+            ),
+            DsRegistryRow(
+                status=STATUS_ACTIVE,
+                source_id="99",
+                relations=(
+                    DsRegistryRelation(
+                        group_id="ДС99",
+                        rfp_key="99",
+                        ul_folder="согл УЛ ДС99",
+                        rfp_file="ДС99.xlsx",
+                        block_index=1,
+                    ),
+                ),
+            ),
+        ]
+        checked = validate_registry_rows(rows)
+        self.assertTrue(checked.is_ok, checked.issues)
+        document = DsRegistryDocument(
+            path=Path("cluster-pack.xlsx"),
+            rows=rows,
+            validation=checked,
+            max_relation_blocks=1,
+        )
+        maps = registry_packing_maps(document)
+        self.assertIsNotNone(maps)
+        assert maps is not None
+        folders, numbers = maps
+        self.assertNotIn(15, numbers)
+        self.assertEqual(numbers[99], 99)
+        self.assertEqual(folders["согл ул дс15"], 15)
+        self.assertEqual(folders["согл ул дс61"], 61)
+        self.assertEqual(folders["согл ул дс99"], 99)
 
     def test_shared_ul_folder_is_valid_and_indexed(self) -> None:
         folder = "согл УЛ общая"

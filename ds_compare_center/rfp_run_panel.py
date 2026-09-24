@@ -48,6 +48,11 @@ from RFQ.tags_rfp_compare.rfp_tags_utils import (
     resolve_effective_rfp_path,
     save_config,
 )
+from ds_compare_center.rfp_mix_blocks import RfpMixModeBlock
+from ds_compare_center.rfp_mix_settings import (
+    format_launch_rfp_button,
+    read_launch_mix_mode,
+)
 from ds_compare_center.rfp_progress_parser import (
     MILESTONE_IDS,
     MILESTONE_STATES,
@@ -372,6 +377,9 @@ class RfpRunPanel(QWidget):
         self._source_mode = shrink_h(_RfpInputModeBlock(left))
         self._source_mode.mode_changed.connect(self._on_input_mode_changed)
         left_layout.addWidget(self._source_mode, stretch=0)
+        self._mix_mode = shrink_h(RfpMixModeBlock(left))
+        self._mix_mode.mix_changed.connect(self._on_launch_mix_changed)
+        left_layout.addWidget(self._mix_mode, stretch=0)
         left_layout.addWidget(self._build_actions_group(left), stretch=0)
         left_layout.addWidget(self._build_results_group(left), stretch=0)
         left_layout.addWidget(self._build_progress_group(left), stretch=1)
@@ -501,16 +509,22 @@ class RfpRunPanel(QWidget):
             if isinstance(step4, dict)
             else False
         )
-        if include_packing:
-            text = "Сравнить RFP ↔ MTO ↔ РКД ↔ УЛ"
-        else:
-            text = "Сравнить RFP ↔ MTO ↔ РКД"
-        self._btn_rfp.setText(text)
+        self._btn_rfp.setText(
+            format_launch_rfp_button(
+                include_packing=include_packing,
+                input_mode=resolve_input_mode(config),
+                mix=read_launch_mix_mode(config),
+            )
+        )
         self._source_mode.apply_config(config)
+        self._mix_mode.apply_config(config)
         self._refresh_rfp_source_label(config)
 
     def _on_input_mode_changed(self, _mode: str) -> None:
-        self._refresh_rfp_source_label(load_config())
+        self.refresh_from_config()
+
+    def _on_launch_mix_changed(self, _mix: str) -> None:
+        self.refresh_from_config()
 
     def _refresh_rfp_source_label(self, config: dict) -> None:
         """Show which RFP workbook the main run button will load."""

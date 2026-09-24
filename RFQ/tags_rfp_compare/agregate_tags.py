@@ -73,7 +73,9 @@ from RFQ.rfp_parts.ds_hybrid_preflight import (
     copy_ds_sidecars_to_result_dir,
     ensure_ds_baseline_current,
     ensure_ds_hybrid_current,
+    resolve_hybrid_derived_registry,
     resolve_input_mode,
+    resolve_launch_mix_mode,
 )
 from RFQ.rfp_parts.file_status import (
     DUPLICATE_TAGS_XLSX_NAME,
@@ -176,11 +178,16 @@ def _registry_packing_index(
     rfp_parts_cfg: Dict[str, Any],
     include_packing_lists: bool,
     result_dir: str,
+    *,
+    input_mode: str = "",
 ):
     """Load a DS registry into the Step4 packing-key override.
 
-    A missing file leaves name parsing in place. Validation errors do not
+    Hybrid Launch prefers the derived registry beside the hybrid summary.
+    A missing derived file falls back to ``resolve_latest_registry``. A
+    missing file leaves name parsing in place. Validation errors do not
     drop UL folder links. The loaded workbook is copied into ``result_dir``.
+    A copy failure does not abort the run.
     """
 
     if not include_packing_lists:
@@ -198,16 +205,23 @@ def _registry_packing_index(
         return None
     raw = str(rfp_parts_cfg.get("ds_registry_path", "") or "").strip()
     try:
-        home = Path(raw).parent if raw else None
-        latest = resolve_latest_registry(home)
-        target = latest if latest.is_file() else Path(raw) if raw else latest
+        target = None
+        if input_mode == INPUT_MODE_HYBRID:
+            target = resolve_hybrid_derived_registry(registry_path=raw or None)
+        if target is None:
+            home = Path(raw).parent if raw else None
+            latest = resolve_latest_registry(home)
+            target = latest if latest.is_file() else Path(raw) if raw else latest
         if not target.is_file():
             return None
         document = load_registry(target)
     except Exception as exc:
         print(f"УЛ: реестр ДС не применён к ключу посадки: {exc}")
         return None
-    copy_registry_snapshot(target, Path(result_dir))
+    try:
+        copy_registry_snapshot(target, Path(result_dir))
+    except Exception as exc:
+        print(f"УЛ: копия реестра не записана в папку результата: {exc}")
     return build_registry_planting_index(document)
 
 
@@ -348,6 +362,7 @@ def main(config_override: Optional[Dict[str, Any]] = None):
                 matrix_path=str(paths.get("units_convert_matrix") or "").strip()
                 or None,
                 progress=True,
+                mix_mode=resolve_launch_mix_mode(config),
             )
         except DsBaselineBlockedError as exc:
             copy_ds_sidecars_to_result_dir(exc.output_dir, result_dir)
@@ -786,7 +801,10 @@ def main(config_override: Optional[Dict[str, Any]] = None):
             gem_supply_codes=gem_supply_codes,
             rfp_paths_by_key=rfp_paths_by_key,
             registry_packing_index=_registry_packing_index(
-                rfp_parts_cfg, include_packing_lists, result_dir
+                rfp_parts_cfg,
+                include_packing_lists,
+                result_dir,
+                input_mode=input_mode,
             ),
         )
     except (QuantityBalanceFatalError, RfpPackingFatalError) as exc:

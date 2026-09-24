@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -27,6 +29,7 @@ from RFQ.rfp_parts.ds_hybrid_preflight import (
     INPUT_MODE_DS_ONLY,
     INPUT_MODE_HYBRID,
     INPUT_MODE_LEGACY_NET,
+    STATE_JSON_NAME,
     DsBaselineBlockedError,
     copy_ds_sidecars_to_result_dir,
     ds_baseline_output_dir,
@@ -311,6 +314,60 @@ class DsHybridPreflightSmokeTest(unittest.TestCase):
             )
             self.assertFalse(again_fresh.needs_rebuild)
             self.assertEqual(again, path)
+
+    def test_source_registry_newer_mtime_stale_reason(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            rfp_root = root / "rfp"
+            reports = root / "reports"
+            registry = root / "registry.xlsx"
+            _write_registry(registry)
+            _write_xlsx(ds_root / "ДС13.xlsx", [DS_HEADER, _ds_row(qty=2)])
+            _write_rfp(rfp_root / "ДС13. AGCC.xlsx", qty=2)
+
+            path, freshness = ensure_ds_hybrid_current(
+                source_root=ds_root,
+                registry_path=registry,
+                rfp_root=rfp_root,
+                reports_base=reports,
+                rfp_converter=IdentityRfpUnitsConverter(),
+                mix_mode="separate",
+                **_ensure_kw(),
+            )
+            self.assertTrue(freshness.needs_rebuild)
+            self.assertIsNotNone(freshness.derived_registry_path)
+            derived = freshness.derived_registry_path
+            assert derived is not None
+            self.assertEqual(derived.name, registry.name)
+            self.assertTrue(derived.is_file())
+            state_path = ds_hybrid_output_dir(reports) / STATE_JSON_NAME
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["derived_registry_name"], registry.name)
+            self.assertIn("registry_mtime_ns", state)
+            stored_mtime = int(state["registry_mtime_ns"])
+
+            current = registry.stat()
+            os.utime(
+                registry,
+                ns=(current.st_atime_ns, stored_mtime + 1_000_000_000),
+            )
+
+            again, again_fresh = ensure_ds_hybrid_current(
+                source_root=ds_root,
+                registry_path=registry,
+                rfp_root=rfp_root,
+                reports_base=reports,
+                rfp_converter=IdentityRfpUnitsConverter(),
+                mix_mode="separate",
+                **_ensure_kw(),
+            )
+            self.assertTrue(again_fresh.needs_rebuild)
+            self.assertTrue(
+                again_fresh.reason.startswith("реестр ДС/УЛ новее свода")
+            )
+            self.assertTrue(again.is_file())
+            self.assertIsNotNone(again_fresh.derived_registry_path)
 
 
 class CopyDsSidecarsSmokeTest(unittest.TestCase):
