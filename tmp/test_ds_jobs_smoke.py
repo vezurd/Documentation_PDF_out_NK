@@ -22,11 +22,13 @@ from RFQ.ds_compare.ds_compare_config import (
 )
 from RFQ.rfp_parts.ds_baseline import IdentityDsUnitsConverter
 from RFQ.rfp_parts.ds_jobs import (
+    INDICATORS_XLSX_NAME,
     SUPPLY_HEADERS,
     CockpitRow,
     DsCockpitSnapshot,
     build_supply_rows,
     get_last_ds_cockpit,
+    write_indicator_workbook,
     run_ds_baseline_job,
     run_ds_coverage_job,
     run_ds_hybrid_job,
@@ -413,18 +415,39 @@ class SupplyRowsSmokeTest(unittest.TestCase):
             hybrid=type("H", (), {"groups": [hybrid_group]})(),
         )
         by_number = {row.cells[0]: row for row in rows}
-        self.assertEqual(len(SUPPLY_HEADERS), 11)
-        self.assertEqual(by_number["ДС13"].cells[2], "ошибка")
-        self.assertEqual(by_number["ДС13"].cells[8], "не пишется")
-        self.assertEqual(by_number["ДС8"].cells[3], "нет файла")
-        self.assertEqual(by_number["ДС8"].cells[8], "не пишется")
+        self.assertEqual(len(SUPPLY_HEADERS), 10)
+        self.assertNotIn("В реестре", SUPPLY_HEADERS)
+        self.assertEqual(by_number["ДС13"].cells[1], "ошибка")
+        self.assertEqual(by_number["ДС13"].cells[7], "не пишется")
+        self.assertEqual(by_number["ДС8"].cells[2], "нет файла")
+        self.assertEqual(by_number["ДС8"].cells[7], "не пишется")
         self.assertEqual(by_number["ДС8"].tone, "error")
-        self.assertEqual(by_number["ДС14"].cells[6], "14+48")
-        self.assertEqual(by_number["ДС48"].cells[6], "14+48")
-        self.assertEqual(by_number["ДС14"].cells[7], "теги RFP на номере")
-        self.assertEqual(by_number["ДС48"].cells[7], by_number["ДС14"].cells[7])
-        self.assertEqual(by_number["ДС7"].cells[8], "вне мешка")
-        self.assertEqual(by_number["ДС7"].cells[7], "—")
+        self.assertEqual(by_number["ДС14"].cells[5], "14+48")
+        self.assertEqual(by_number["ДС48"].cells[5], "14+48")
+        self.assertEqual(by_number["ДС14"].cells[6], "теги RFP на номере")
+        self.assertEqual(by_number["ДС48"].cells[6], by_number["ДС14"].cells[6])
+        self.assertEqual(by_number["ДС7"].cells[7], "вне мешка")
+        self.assertEqual(by_number["ДС7"].cells[6], "—")
+
+    def test_indicator_workbook_keeps_line_breaks(self) -> None:
+        from openpyxl import load_workbook
+
+        snapshot = DsCockpitSnapshot(
+            kind="coverage",
+            summary="ok",
+            registry_path=Path("registry.xlsx"),
+            supply_rows=[
+                CockpitRow(cells=("ДС8", "ок", "a.xlsx\nb.xlsx", "—", "—", "—", "—", "войдёт", "—", ""), tone="ok")
+            ],
+        )
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            path = write_indicator_workbook(snapshot, Path(raw))
+            self.assertIsNotNone(path)
+            assert path is not None
+            self.assertEqual(path.name, INDICATORS_XLSX_NAME)
+            book = load_workbook(path)
+            self.assertEqual(book["Сводка номеров"]["C2"].value, "a.xlsx\nb.xlsx")
+            book.close()
 
 
 class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
@@ -457,6 +480,7 @@ class RfpPartsDsCockpitPanelSmokeTest(unittest.TestCase):
         self.assertIn("Проверить реестр", texts)
         self.assertIn("Подставить копию роботу", texts)
         self.assertIn("Папка реестра", texts)
+        self.assertIn("Папка отчёта", texts)
         panel.show()
         self.app.processEvents()
         use_btns = [

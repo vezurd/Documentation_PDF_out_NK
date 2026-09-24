@@ -97,7 +97,6 @@ JobKind = Literal["registry", "baseline", "hybrid", "coverage"]
 
 SUPPLY_HEADERS: tuple[str, ...] = (
     "Номер",
-    "В реестре",
     "Чтение реестра",
     "Файлы ДС",
     "Файлы RFP",
@@ -108,6 +107,7 @@ SUPPLY_HEADERS: tuple[str, ...] = (
     "Аудит",
     "Замечание",
 )
+INDICATORS_XLSX_NAME = "Индикаторы.xlsx"
 _TONE_RANK = {"error": 0, "warn": 1, "match": 2, "ok": 3}
 
 DS_REGISTRY_DIR_NAME = "_ds_registry"
@@ -183,6 +183,7 @@ class DsCockpitSnapshot:
     file_rows: list[CockpitRow] = field(default_factory=list)
     coverage_rows: list[CockpitRow] = field(default_factory=list)
     supply_rows: list[CockpitRow] = field(default_factory=list)
+    indicators_path: Path | None = None
 
     @property
     def banner_tone(self) -> Tone:
@@ -697,7 +698,7 @@ def _join_names(names: list[str]) -> str:
         text = str(name or "").strip()
         if text and text not in seen:
             seen.append(text)
-    return "; ".join(seen)
+    return "\n".join(seen)
 
 
 def _worst_tone(*tones: Tone) -> Tone:
@@ -897,7 +898,6 @@ def build_supply_rows(
         group_hint = canonical_supply_group_id(source_id)
         cells = (
             group_hint,
-            status,
             read_label,
             ds_cell,
             rfp_cell,
@@ -917,7 +917,6 @@ def build_supply_rows(
             0,
             CockpitRow(
                 cells=(
-                    "—",
                     "—",
                     "ошибка" if item.level == "ERROR" else "предупреждение",
                     "—",
@@ -939,7 +938,6 @@ def build_supply_rows(
             0,
             CockpitRow(
                 cells=(
-                    "—",
                     "—",
                     "ок",
                     "—",
@@ -1163,8 +1161,88 @@ def _fail(message: str, result_path: Path | None = None) -> DsJobResult:
     )
 
 
+def _indicators_dir(snapshot: DsCockpitSnapshot) -> Path | None:
+    """Folder that receives ``Индикаторы.xlsx``, or None when the job has no report dir."""
+    if snapshot.output_dir is None:
+        return None
+    if snapshot.kind == "registry":
+        return snapshot.output_dir / "_индикаторы"
+    return snapshot.output_dir
+
+
+def write_indicator_workbook(snapshot: DsCockpitSnapshot, folder: Path) -> Path | None:
+    """Write the cockpit tables to ``Индикаторы.xlsx``.
+
+    Args:
+        snapshot: Rows currently shown on the indicators tabs.
+        folder: Report folder. Created when missing.
+
+    Returns:
+        Written path, or None when the folder cannot be created or the file is locked.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _emit(f"{INDICATORS_XLSX_NAME} не записан: {exc}")
+        return None
+    target = folder / INDICATORS_XLSX_NAME
+    book = Workbook()
+    header_fill = PatternFill("solid", fgColor="1B4F72")
+    header_font = Font(color="FFFFFF", bold=True)
+    wrap = Alignment(wrap_text=True, vertical="center")
+    sheets = (
+        ("Сводка номеров", SUPPLY_HEADERS, snapshot.supply_rows),
+        ("Реестр по ДС", ("ID ДС", "Статус", "Группы", "Ключ RFP", "Папка УЛ", "Режим", "Замечание"), snapshot.registry_rows),
+        ("Итог по группам", ("Группа", "ДС источники", "Ключ RFP", "УЛ", "Блок overlay", "Статус"), snapshot.group_rows),
+        ("Файлы", ("Контур", "Файл", "ID / ключ", "Статус"), snapshot.file_rows),
+        ("Покрытие", ("Группа", "Файлы ДС", "RFP", "УЛ", "Статус"), snapshot.coverage_rows),
+    )
+    first = True
+    for title, headers, rows in sheets:
+        sheet = book.active if first else book.create_sheet(title)
+        first = False
+        sheet.title = title
+        for col, header in enumerate(headers, start=1):
+            cell = sheet.cell(1, col, header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
+        for row_index, row in enumerate(rows, start=2):
+            lines = 1
+            for col, value in enumerate(row.cells, start=1):
+                cell = sheet.cell(row_index, col, value)
+                cell.alignment = wrap
+                lines = max(lines, str(value).count("\n") + 1)
+            sheet.row_dimensions[row_index].height = min(15 * lines + 4, 120)
+        for col, header in enumerate(headers, start=1):
+            width = 18
+            if header in {"Файлы ДС", "Файлы RFP", "Папки УЛ", "Замечание", "Файл"}:
+                width = 42
+            sheet.column_dimensions[sheet.cell(1, col).column_letter].width = width
+        sheet.auto_filter.ref = sheet.dimensions
+        sheet.freeze_panes = "A2"
+        sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    try:
+        book.save(target)
+    except OSError as exc:
+        _emit(f"{INDICATORS_XLSX_NAME} не записан: {exc}")
+        return None
+    finally:
+        book.close()
+    _emit(f"{INDICATORS_XLSX_NAME}: {target}")
+    return target
+
+
 def _store(snapshot: DsCockpitSnapshot) -> DsCockpitSnapshot:
     global _last_cockpit
+    folder = _indicators_dir(snapshot)
+    if folder is not None:
+        written = write_indicator_workbook(snapshot, folder)
+        if written is not None:
+            snapshot.indicators_path = written
     _last_cockpit = snapshot
     _print_snapshot(snapshot)
     return snapshot
@@ -1878,6 +1956,7 @@ def run_ds_coverage_job(
             kind="coverage",
             document=document,
             registry_format=fmt,
+            output_dir=Path(output_dir) if output_dir else None,
             source_root=source if source is not None and _is_dir(source) else None,
             rfp_root=rfp_path,
             ul_root=ul_path,
@@ -1896,7 +1975,9 @@ def run_ds_coverage_job(
 __all__ = [
     "SUPPLY_HEADERS",
     "CockpitRow",
+    "INDICATORS_XLSX_NAME",
     "build_supply_rows",
+    "write_indicator_workbook",
     "DEFAULT_PARTS_DIR",
     "DEFAULT_REGISTRY_PATH",
     "DEFAULT_REPORTS_BASE_DIR",

@@ -79,6 +79,7 @@ from ds_compare_center.rfp_mix_settings import (
     COLLECT_JOB_PARTS,
     format_collect_run_button,
 )
+from ds_compare_center.layout_persistence import DebouncedLayoutSaver
 from ds_compare_center.split_layout import (
     WrappingLabel,
     WrappingPlainText,
@@ -118,6 +119,30 @@ _FILE_STATUS_TABLE_STYLE = (
     "QTableWidget::item { padding: 1px 4px; }"
 )
 _FILE_STATUS_ROW_HEIGHT = 22
+
+
+def _row_height_for(cells: tuple[str, ...] | list[str]) -> int:
+    """Row height that fits the longest wrapped cell, capped so one row stays readable."""
+    lines = 1
+    for text in cells:
+        lines = max(lines, str(text).count("\n") + 1)
+    return min(_FILE_STATUS_ROW_HEIGHT * lines, 140)
+_INDICATOR_LAYOUT_KEY = "indicator_tables"
+_DEFAULT_COL_WIDTHS = {
+    "Номер": 78,
+    "Чтение реестра": 130,
+    "Файлы ДС": 260,
+    "Файлы RFP": 220,
+    "Папки УЛ": 180,
+    "Кластер": 90,
+    "Замещение": 180,
+    "Свод": 110,
+    "Аудит": 90,
+    "Замечание": 240,
+    "Файл": 220,
+    "Описание": 280,
+    "Примечание": 220,
+}
 _REGISTRY_HEADERS = (
     "ID ДС",
     "Статус",
@@ -235,6 +260,7 @@ class RfpPartsPanel(QWidget):
         self._on_check_one_ds = on_check_one_ds
         self._on_rfp_tag_census = on_rfp_tag_census
         self._last_reports_dir: Path | None = find_latest_rfp_parts_reports_dir()
+        self._indicators_dir: Path | None = None
         self._migrated_registry_path: Path | None = None
 
         splitter, self.monitor = build_side_by_side(
@@ -493,10 +519,10 @@ class RfpPartsPanel(QWidget):
         box.setStyleSheet(_FILE_STATUS_GROUP_STYLE)
         box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         v = QVBoxLayout(box)
-        v.setContentsMargins(8, 4, 8, 6)
+        v.setContentsMargins(8, 18, 8, 6)
         v.setSpacing(4)
         folder_row = QHBoxLayout()
-        folder_row.setContentsMargins(0, 0, 0, 0)
+        folder_row.setContentsMargins(0, 6, 0, 0)
         btn_registry_folder = QPushButton("Папка реестра", box)
         btn_registry_folder.setMinimumWidth(0)
         btn_registry_folder.setToolTip(
@@ -504,6 +530,13 @@ class RfpPartsPanel(QWidget):
         )
         btn_registry_folder.clicked.connect(self._open_registry_folder)
         folder_row.addWidget(btn_registry_folder, alignment=Qt.AlignmentFlag.AlignLeft)
+        btn_report_folder = QPushButton("Папка отчёта", box)
+        btn_report_folder.setMinimumWidth(0)
+        btn_report_folder.setToolTip(
+            "Открыть папку, куда записан файл «Индикаторы.xlsx»."
+        )
+        btn_report_folder.clicked.connect(self._open_report_folder)
+        folder_row.addWidget(btn_report_folder, alignment=Qt.AlignmentFlag.AlignLeft)
         folder_row.addStretch(1)
         v.addLayout(folder_row)
         self._cockpit_summary = QLabel("Нет данных cockpit.", box)
@@ -518,11 +551,13 @@ class RfpPartsPanel(QWidget):
         tabs.setDocumentMode(True)
         tabs.setMinimumHeight(560)
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._table_supply = self._make_table(box, SUPPLY_HEADERS)
-        self._table_registry = self._make_table(box, _REGISTRY_HEADERS)
-        self._table_groups = self._make_table(box, _GROUP_HEADERS)
-        self._table_files = self._make_table(box, _DS_FILE_HEADERS)
-        self._table_coverage = self._make_table(box, _COVERAGE_HEADERS)
+        self._indicator_tables: dict[str, QTableWidget] = {}
+        self._indicator_layout_suspended = True
+        self._table_supply = self._make_table(box, SUPPLY_HEADERS, "supply", wrap=True)
+        self._table_registry = self._make_table(box, _REGISTRY_HEADERS, "registry")
+        self._table_groups = self._make_table(box, _GROUP_HEADERS, "groups")
+        self._table_files = self._make_table(box, _DS_FILE_HEADERS, "files")
+        self._table_coverage = self._make_table(box, _COVERAGE_HEADERS, "coverage")
         self._tab_index_supply = tabs.addTab(self._table_supply, "Сводка номеров")
         self._tab_index_registry = tabs.addTab(self._table_registry, "Реестр по ДС")
         self._tab_index_groups = tabs.addTab(self._table_groups, "Итог по группам")
@@ -541,33 +576,51 @@ class RfpPartsPanel(QWidget):
         self._paint_tab(self._tab_index_groups, [])
         self._paint_tab(self._tab_index_files, [])
         self._paint_tab(self._tab_index_coverage, [])
+        self._indicator_saver = DebouncedLayoutSaver(
+            self,
+            snapshot=self._snapshot_indicator_layout,
+            on_flush=self._flush_indicator_layout,
+        )
+        self._apply_saved_indicator_layout()
+        self._indicator_layout_suspended = False
         return box
 
-    def _make_table(self, parent: QWidget, headers: tuple[str, ...]) -> QTableWidget:
+    def _make_table(
+        self,
+        parent: QWidget,
+        headers: tuple[str, ...],
+        layout_key: str = "",
+        *,
+        wrap: bool = False,
+    ) -> QTableWidget:
         table = QTableWidget(parent)
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(list(headers))
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setWordWrap(False)
+        table.setWordWrap(wrap)
         table.verticalHeader().setVisible(False)
         table.verticalHeader().setDefaultSectionSize(_FILE_STATUS_ROW_HEIGHT)
         table.verticalHeader().setMinimumSectionSize(_FILE_STATUS_ROW_HEIGHT)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        table.setSortingEnabled(False)
+        table.setSortingEnabled(True)
         table.setMinimumHeight(520)
         table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         table.setStyleSheet(_FILE_STATUS_TABLE_STYLE)
         header = table.horizontalHeader()
-        for col in range(len(headers) - 1):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(
-            len(headers) - 1, QHeaderView.ResizeMode.Stretch
-        )
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        for col in range(len(headers)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+            header.resizeSection(col, _DEFAULT_COL_WIDTHS.get(headers[col], 120))
+        if layout_key:
+            self._indicator_tables[layout_key] = table
+            header.sectionResized.connect(self._schedule_indicator_layout)
+            header.sortIndicatorChanged.connect(self._schedule_indicator_layout)
         return table
 
     def _build_file_status_page(self, parent: QWidget) -> QWidget:
@@ -607,24 +660,29 @@ class RfpPartsPanel(QWidget):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setWordWrap(False)
+        table.setWordWrap(True)
         table.setAlternatingRowColors(False)
         table.verticalHeader().setVisible(False)
         table.verticalHeader().setDefaultSectionSize(_FILE_STATUS_ROW_HEIGHT)
         table.verticalHeader().setMinimumSectionSize(_FILE_STATUS_ROW_HEIGHT)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        table.setSortingEnabled(False)
+        table.setSortingEnabled(True)
         table.setMinimumHeight(520)
         table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        for col, width in enumerate((220, 90, 280)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+            header.resizeSection(col, width)
+        header.sectionResized.connect(self._schedule_indicator_layout)
+        header.sortIndicatorChanged.connect(self._schedule_indicator_layout)
         table.setStyleSheet(_FILE_STATUS_TABLE_STYLE)
         self._file_status_table = table
+        self._indicator_tables["parts"] = table
         v.addWidget(table, stretch=1)
         return page
 
@@ -799,7 +857,7 @@ class RfpPartsPanel(QWidget):
         self._btn_copy_tag_census.clicked.connect(self._copy_tag_census)
         row.addWidget(self._btn_copy_tag_census)
         v.addLayout(row)
-        self._tag_census_table = self._make_table(page, _TAG_CENSUS_HEADERS)
+        self._tag_census_table = self._make_table(page, _TAG_CENSUS_HEADERS, "tags", wrap=True)
         v.addWidget(self._tag_census_table, stretch=1)
         return page
 
@@ -860,6 +918,10 @@ class RfpPartsPanel(QWidget):
                 f"Всего {len(files)}: ОК {ok_n} · ошибки {error_n}"
             )
         self._refresh_tag_remarks_link(run_dir, tag_n, link)
+        header = table.horizontalHeader()
+        sort_col = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        table.setSortingEnabled(False)
         table.setRowCount(0)
         table.setRowCount(len(files))
         v_center = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -887,7 +949,14 @@ class RfpPartsPanel(QWidget):
                 )
                 cell.setTextAlignment(v_center)
                 table.setItem(row_idx, col, cell)
-            table.setRowHeight(row_idx, _FILE_STATUS_ROW_HEIGHT)
+            table.setRowHeight(row_idx, _row_height_for(values))
+        table.setSortingEnabled(True)
+        if files and 0 <= sort_col < table.columnCount():
+            self._indicator_layout_suspended = True
+            try:
+                table.sortByColumn(sort_col, sort_order)
+            finally:
+                self._indicator_layout_suspended = False
         self._paint_parts_tab(
             files=bool(files), error_n=error_n, tag_n=tag_n
         )
@@ -943,22 +1012,35 @@ class RfpPartsPanel(QWidget):
         link.setVisible(True)
 
     def _fill_table(self, table: QTableWidget, rows: list[CockpitRow]) -> None:
+        header = table.horizontalHeader()
+        sort_col = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        table.setSortingEnabled(False)
         table.setRowCount(0)
         table.setRowCount(len(rows))
-        v_center = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        v_center = (
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         for row_idx, row in enumerate(rows):
             fg, bg = _TONE_COLORS.get(row.tone, _TONE_COLORS["ok"])
             for col, text in enumerate(row.cells):
                 cell = QTableWidgetItem(text)
                 cell.setForeground(QBrush(fg))
                 cell.setBackground(QBrush(bg))
-                cell.setToolTip(text)
+                cell.setToolTip(text.replace("\n", "; "))
                 cell.setFlags(
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                 )
                 cell.setTextAlignment(v_center)
                 table.setItem(row_idx, col, cell)
-            table.setRowHeight(row_idx, _FILE_STATUS_ROW_HEIGHT)
+            table.setRowHeight(row_idx, _row_height_for(row.cells))
+        table.setSortingEnabled(True)
+        if rows and 0 <= sort_col < table.columnCount():
+            self._indicator_layout_suspended = True
+            try:
+                table.sortByColumn(sort_col, sort_order)
+            finally:
+                self._indicator_layout_suspended = False
 
     def fill_from_snapshot(self, snapshot: DsCockpitSnapshot) -> None:
         """Populate banner, counters and cockpit tables from a job snapshot.
@@ -1012,6 +1094,10 @@ class RfpPartsPanel(QWidget):
         self._paint_tab(self._tab_index_groups, snapshot.group_rows)
         self._paint_tab(self._tab_index_files, snapshot.file_rows)
         self._paint_tab(self._tab_index_coverage, snapshot.coverage_rows)
+        if snapshot.indicators_path is not None:
+            self._indicators_dir = snapshot.indicators_path.parent
+        elif snapshot.output_dir is not None and snapshot.kind != "registry":
+            self._indicators_dir = snapshot.output_dir
         if snapshot.output_dir is not None and snapshot.kind != "registry":
             self._last_reports_dir = snapshot.output_dir
         self._refresh_status()
@@ -1161,6 +1247,76 @@ class RfpPartsPanel(QWidget):
         self._edit_registry.setText(str(path))
         self._persist_ds_paths()
         self._refresh_paths()
+
+    def _schedule_indicator_layout(self, *_args: object) -> None:
+        if self._indicator_layout_suspended:
+            return
+        saver = getattr(self, "_indicator_saver", None)
+        if saver is not None:
+            saver.schedule()
+
+    def _snapshot_indicator_layout(self) -> dict:
+        tables: dict[str, dict] = {}
+        for key, table in self._indicator_tables.items():
+            header = table.horizontalHeader()
+            tables[key] = {
+                "widths": [int(header.sectionSize(col)) for col in range(table.columnCount())],
+                "sort_column": int(header.sortIndicatorSection()),
+                "sort_desc": header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder,
+            }
+        return tables
+
+    def _flush_indicator_layout(self, snap: dict) -> None:
+        cfg = load_ds_compare_config()
+        cfg[_INDICATOR_LAYOUT_KEY] = snap
+        save_ds_compare_config(cfg)
+
+    def _apply_saved_indicator_layout(self) -> None:
+        raw = load_ds_compare_config().get(_INDICATOR_LAYOUT_KEY)
+        if not isinstance(raw, dict):
+            return
+        self._indicator_layout_suspended = True
+        try:
+            for key, table in self._indicator_tables.items():
+                spec = raw.get(key)
+                if not isinstance(spec, dict):
+                    continue
+                widths = spec.get("widths")
+                header = table.horizontalHeader()
+                if isinstance(widths, list):
+                    for col, width in enumerate(widths):
+                        if col >= table.columnCount():
+                            break
+                        try:
+                            header.resizeSection(col, max(40, int(width)))
+                        except (TypeError, ValueError):
+                            continue
+                try:
+                    sort_col = int(spec.get("sort_column", 0))
+                except (TypeError, ValueError):
+                    sort_col = 0
+                order = (
+                    Qt.SortOrder.DescendingOrder
+                    if spec.get("sort_desc")
+                    else Qt.SortOrder.AscendingOrder
+                )
+                if 0 <= sort_col < table.columnCount():
+                    header.setSortIndicator(sort_col, order)
+        finally:
+            self._indicator_layout_suspended = False
+
+    def _open_report_folder(self) -> None:
+        """Open the folder that holds ``Индикаторы.xlsx`` or the last report stamp."""
+        folder = self._indicators_dir or self._effective_reports_dir()
+        if folder is None or not str(folder):
+            QMessageBox.information(self, "Папка отчёта", "Папка отчёта ещё не известна.")
+            return
+        try:
+            open_dir(str(folder))
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Папка отчёта", f"Не удалось открыть:\n{folder}\n\n{exc}"
+            )
 
     def _open_registry_folder(self) -> None:
         """Open the folder that contains the registry the robot reads."""
