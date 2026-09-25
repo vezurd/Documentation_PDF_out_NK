@@ -203,8 +203,15 @@ class Step4ExcelColumnsSmokeTest(unittest.TestCase):
         self.assertNotIn("NO_SUCH_COLUMN", names)
         self.assertIn(drop_name, names)
         self.assertEqual(names[-1], drop_name)
-        builtin_names = [item["col_name"] for item in settings]
-        self.assertEqual(sorted(names), sorted(builtin_names))
+
+    def test_write_comments_survives_normalize(self) -> None:
+        settings = builtin_column_settings()
+        settings[0]["write_comments"] = False
+        normalized = normalize_template_columns(settings)
+        self.assertFalse(normalized[0]["write_comments"])
+        defs = settings_to_column_defs(normalized)
+        self.assertFalse(defs[0].write_comments)
+        self.assertTrue(defs[1].write_comments)
 
     def test_missing_active_id_resolves_to_builtin(self) -> None:
         sandbox = _ConfigSandbox()

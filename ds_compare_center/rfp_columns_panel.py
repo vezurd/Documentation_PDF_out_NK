@@ -5,18 +5,21 @@ from __future__ import annotations
 import zipfile
 from typing import Any, Callable
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QApplication,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QLayout,
     QMessageBox,
     QPushButton,
@@ -211,6 +214,7 @@ class _ColumnCard(QFrame):
     width_changed = Signal(int, int)
     output_changed = Signal(int, bool)
     header_edit_requested = Signal(int)
+    properties_requested = Signal(int)
     drag_started = Signal(str)
 
     def __init__(
@@ -309,7 +313,15 @@ class _ColumnCard(QFrame):
         self._share.setStyleSheet("color:#333333; font-size:10px;")
         self._share.setVisible(False)
         layout.addWidget(self._share)
+        self._comments_off = QLabel("комм. выкл.", self)
+        self._comments_off.setObjectName("comments-off")
+        self._comments_off.setStyleSheet("color:#B71C1C; font-size:10px; font-weight:bold;")
+        self._comments_off.setVisible(not bool(setting.get("write_comments", True)))
+        layout.addWidget(self._comments_off)
         layout.addStretch(1)
+        self.installEventFilter(self)
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
 
     def _apply_width(self, excel_width: int) -> None:
         self.setFixedWidth(_card_pixel_width(excel_width))
@@ -319,13 +331,14 @@ class _ColumnCard(QFrame):
         self.setStyleSheet(f"QFrame#column-card {{ {border} background:#ffffff; }}")
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if self._readonly:
-            return
-        if self._header.geometry().contains(event.position().toPoint()):
-            self.header_edit_requested.emit(self._index)
-            event.accept()
-            return
-        super().mouseDoubleClickEvent(event)
+        self.properties_requested.emit(self._index)
+        event.accept()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001
+        if event.type() == QEvent.Type.MouseButtonDblClick:
+            self.properties_requested.emit(self._index)
+            return True
+        return super().eventFilter(watched, event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
@@ -660,6 +673,79 @@ class _UnusedFlow(_RowFrame):
             self._reflowing = False
 
 
+class _ColumnEditor(QDialog):
+    """Larger copy of a column card: header, width, sheet flag, comments, share."""
+
+    def __init__(
+        self,
+        setting: dict[str, Any],
+        share_text: str,
+        *,
+        readonly: bool,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Столбец")
+        self.setMinimumWidth(340)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        fill = HEADER_FILL_COLORS.get(str(setting.get("section") or "rfp"), "#dbbcdb")
+        self._header = QLineEdit(str(setting.get("header_label") or ""), self)
+        self._header.setMinimumHeight(72)
+        self._header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._header.setStyleSheet(
+            f"background:{fill}; color:#000000; font-weight:bold; font-size:16px; padding:8px;"
+        )
+        layout.addWidget(self._header)
+
+        width_row = QHBoxLayout()
+        width_row.addWidget(QLabel("Ширина в Excel", self))
+        self._width = QSpinBox(self)
+        self._width.setRange(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH)
+        self._width.setValue(int(setting.get("width") or MIN_COLUMN_WIDTH))
+        width_row.addWidget(self._width)
+        layout.addLayout(width_row)
+
+        self._on_sheet = QCheckBox("На лист", self)
+        self._on_sheet.setChecked(bool(setting.get("output")))
+        layout.addWidget(self._on_sheet)
+
+        self._comments = QCheckBox("Писать комментарии", self)
+        self._comments.setChecked(bool(setting.get("write_comments", True)))
+        layout.addWidget(self._comments)
+
+        share = QLabel(share_text or "Доля в файле появится после кнопки «Доля в xlsx».", self)
+        share.setWordWrap(True)
+        share.setStyleSheet("font-size:14px;")
+        layout.addWidget(share)
+        code = QLabel(str(setting.get("col_name") or ""), self)
+        code.setStyleSheet("color:#888888;")
+        layout.addWidget(code)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            if not readonly
+            else QDialogButtonBox.StandardButton.Close,
+            self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        if readonly:
+            self._header.setReadOnly(True)
+            self._width.setEnabled(False)
+            self._on_sheet.setEnabled(False)
+            self._comments.setEnabled(False)
+
+    def values(self) -> tuple[str, int, bool, bool]:
+        return (
+            self._header.text().strip(),
+            int(self._width.value()),
+            self._on_sheet.isChecked(),
+            self._comments.isChecked(),
+        )
+
+
 class RfpColumnsPanel(QWidget):
     """Named Step4 templates: on-sheet row, unused row, group +/−."""
 
@@ -871,6 +957,7 @@ class RfpColumnsPanel(QWidget):
         card.width_changed.connect(self._on_width_changed)
         card.output_changed.connect(self._on_output_changed)
         card.header_edit_requested.connect(self._on_header_edit)
+        card.properties_requested.connect(self._on_properties)
         return card
 
     def _rebuild_rows(self) -> None:
@@ -1087,6 +1174,35 @@ class RfpColumnsPanel(QWidget):
             QMessageBox.warning(self, "Подпись столбца", "Пустая подпись не допускается.")
             return
         self._columns[index]["header_label"] = label
+        self._rebuild_rows()
+
+    def _on_properties(self, index: int) -> None:
+        if not 0 <= index < len(self._columns):
+            return
+        item = self._columns[index]
+        label = str(item.get("header_label") or "")
+        share = self._shares.get(label)
+        dialog = _ColumnEditor(
+            item,
+            "" if share is None else format_column_share(share),
+            readonly=self._is_readonly(),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted or self._is_readonly():
+            return
+        header, width, output, comments = dialog.values()
+        if not header:
+            QMessageBox.warning(self, "Столбец", "Пустая подпись не допускается.")
+            return
+        name = str(item.get("col_name") or "")
+        item["header_label"] = header
+        item["width"] = width
+        item["write_comments"] = comments
+        if bool(output) != bool(item.get("output")):
+            self._on_output_changed(index, output)
+            return
+        self._selected = {self._index_of_name(name)}
+        self._anchor = next(iter(self._selected))
         self._rebuild_rows()
 
     def _toggle_group(self, group_id: str) -> None:
@@ -1381,6 +1497,7 @@ class RfpColumnsPanel(QWidget):
                     "header_label": str(item.get("header_label") or ""),
                     "group_id": str(item.get("group_id") or ""),
                     "group_collapsed": bool(item.get("group_collapsed")),
+                    "write_comments": bool(item.get("write_comments", True)),
                 }
             )
         return payload

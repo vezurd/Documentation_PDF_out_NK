@@ -120,6 +120,7 @@ def builtin_column_settings() -> list[dict[str, Any]]:
                 "header_label": item["header_label"],
                 "group_id": gid,
                 "group_collapsed": bool(collapsed_by_id.get(gid, False)) if gid else False,
+                "write_comments": True,
             }
         )
     return settings
@@ -199,6 +200,7 @@ def normalize_template_columns(saved: list | None) -> list[dict[str, Any]]:
                         raw.get("group_collapsed"),
                         base["group_collapsed"],
                     ),
+                    "write_comments": _as_bool(raw.get("write_comments"), True),
                 }
             )
     for item in builtin:
@@ -246,6 +248,7 @@ def settings_to_column_defs(settings: list | None):
                 width=int(item.get("width") or default_width),
                 group_level=group_level,
                 group_collapsed=group_collapsed,
+                write_comments=_as_bool(item.get("write_comments"), True),
             )
         )
     return out

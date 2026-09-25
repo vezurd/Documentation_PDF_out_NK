@@ -65,6 +65,7 @@ class ColumnDef:
     # При group_level>=1: True = столбцы группы скрыты при открытии.
     # При group_level=None: True = столбец скрыт при открытии без outline (разрывает смежные группы level=1).
     group_collapsed: bool = False
+    write_comments: bool = True
 
 
 OUTPUT_COLUMNS_CONFIG: List[ColumnDef] = [
@@ -451,6 +452,11 @@ def save_match_result_to_excel(
         sorted_col_keys = sorted(output_column_dict.keys())
         comment_write_errors: list[str] = []
         comment_cells = 0
+        comment_columns = {
+            defn.col_name
+            for defn in visible_defs
+            if getattr(defn, "write_comments", True)
+        }
         progress_every = 10000 if total_rows >= 20000 else 0
 
         for row_idx, row in enumerate(data_rows):
@@ -511,7 +517,7 @@ def save_match_result_to_excel(
                     ws.write(excel_row, ci, value, fmt)
 
                 comment = row.el[col_name].comment
-                if should_write_excel_comment(col_name, row, comment):
+                if col_name in comment_columns and should_write_excel_comment(col_name, row, comment):
                     comment_cells += 1
                     try:
                         result = ws.write_comment(
