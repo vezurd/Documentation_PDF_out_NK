@@ -216,9 +216,16 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
         with mock.patch.object(cols, "load_config", sandbox.load), mock.patch.object(
             cols, "save_config", sandbox.save
         ):
-            from ds_compare_center.rfp_columns_panel import RfpColumnsPanel
+            from PySide6.QtWidgets import QLabel, QPushButton
+
+            from ds_compare_center.rfp_columns_panel import (
+                RfpColumnsPanel,
+                heal_column_groups,
+                plan_sheet_insertion,
+            )
 
             panel = RfpColumnsPanel()
+            panel.show()
             self.app.processEvents()
             try:
                 self.assertFalse(panel._btn_save.isEnabled())
@@ -226,10 +233,63 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
                 self.assertIn("По умолчанию", labels)
                 self.assertEqual(panel._combo.itemData(0), DEFAULT_TEMPLATE_ID)
                 self.assertIn(_DEFAULT_HINT_SNIPPET, panel._hint.text())
+                self.assertIsNotNone(panel.findChild(QLabel, "sheet-row") or panel.findChild(type(panel._sheet_row)))
+                toggles = panel.findChildren(QPushButton, "group-toggle")
+                self.assertTrue(any(btn.text() == "+" for btn in toggles))
+                stays = [
+                    label.text()
+                    for label in panel.findChildren(QLabel, "stays-badge")
+                    if not label.isHidden()
+                ]
+                self.assertIn("останется", stays)
+                sheet_names = {
+                    card.col_name()
+                    for card in panel._cards
+                    if card.parent() is panel._sheet_row or card.parent().objectName() == "group-box"
+                }
+                unused_names = {
+                    card.col_name()
+                    for card in panel._cards
+                    if card.parent() is panel._unused_row
+                }
+                self.assertTrue(sheet_names)
+                self.assertTrue(unused_names)
+                self.assertFalse(sheet_names & unused_names)
             finally:
                 panel.close()
                 panel.deleteLater()
                 self.app.processEvents()
+
+
+class DropPlanSmokeTest(unittest.TestCase):
+    def test_cursor_near_group_joins_and_far_stays_out(self) -> None:
+        from ds_compare_center.rfp_columns_panel import plan_sheet_insertion
+
+        units = [
+            {"left": 100, "right": 180, "start": 0, "end": 3, "group_id": "g1"},
+            {"left": 190, "right": 270, "start": 3, "end": 4, "group_id": ""},
+        ]
+        insert_at, gid = plan_sheet_insertion(units, 160)
+        self.assertEqual((insert_at, gid), (3, "g1"))
+        insert_at, gid = plan_sheet_insertion(units, 220)
+        self.assertEqual((insert_at, gid), (3, ""))
+
+    def test_heal_drops_singleton_and_keeps_collapsed_run(self) -> None:
+        from ds_compare_center.rfp_columns_panel import heal_column_groups
+
+        columns = [
+            {"output": True, "group_id": "g1", "group_collapsed": True},
+            {"output": True, "group_id": "g1", "group_collapsed": False},
+            {"output": True, "group_id": "", "group_collapsed": False},
+            {"output": True, "group_id": "g9", "group_collapsed": True},
+            {"output": False, "group_id": "g1", "group_collapsed": True},
+        ]
+        heal_column_groups(columns)
+        self.assertEqual(columns[0]["group_id"], "g1")
+        self.assertTrue(columns[0]["group_collapsed"])
+        self.assertTrue(columns[1]["group_collapsed"])
+        self.assertEqual(columns[3]["group_id"], "")
+        self.assertEqual(columns[4]["group_id"], "")
 
 
 _DEFAULT_HINT_SNIPPET = "Шаблон по умолчанию только для просмотра"

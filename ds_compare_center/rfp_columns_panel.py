@@ -1,4 +1,4 @@
-"""WYSIWYG Step4 Excel column templates for the DS/RFP control center."""
+"""WYSIWYG Step4 Excel column templates: sheet row, unused row, groups."""
 
 from __future__ import annotations
 
@@ -39,14 +39,16 @@ from RFQ.tags_rfp_compare.step4.step4_excel_columns import (
     update_template_columns,
 )
 
-_MIME_COL_INDEX = "application/x-step4-col-index"
+_MIME = "application/x-step4-col-move"
 _DEFAULT_HINT = (
     "Шаблон по умолчанию только для просмотра и отката. "
     "Создайте свой, чтобы менять столбцы."
 )
 _USER_HINT = (
-    "Перетащите карточку, чтобы менять порядок. Тяните правый край для ширины. "
-    "Двойной щелчок по заголовку — подпись. «Сохранить» записывает шаблон."
+    "Верхний ряд пишется на лист. Нижний — столбцы не на листе. "
+    "Перетащите карточку между рядами. «+» разворачивает скрытую группу, "
+    "рядом подписан столбец, который останется. "
+    "У края группы: курсор ближе к ней — столбец войдёт в группу, дальше — встанет снаружи."
 )
 _GROUP_COLORS = (
     "#2E7D32",
@@ -75,14 +77,134 @@ def _group_bar_color(group_id: str) -> str:
     return _GROUP_COLORS[acc % len(_GROUP_COLORS)]
 
 
+def _center(unit: dict[str, Any]) -> float:
+    return (float(unit["left"]) + float(unit["right"])) / 2.0
+
+
+def plan_sheet_insertion(
+    units: list[dict[str, Any]],
+    cursor_x: int,
+) -> tuple[int, str]:
+    """Pick a landing spot on the sheet row.
+
+    Each unit is one visible column or one collapsed group block:
+
+    - ``left`` / ``right``: pixel edges in the row
+    - ``start``: visible index of the first column in the unit
+    - ``end``: visible index after the last column
+    - ``group_id``: ``""`` when the unit is not in a group
+
+    The cursor joins the nearer unit's group. On the outer side of a row
+    (no neighbour) a cursor past the unit edge stays outside the group.
+
+    Args:
+        units: Visual units left to right, indices already excluding the drag source.
+        cursor_x: Horizontal cursor position in the same coordinates as ``left``.
+
+    Returns:
+        Visible insert index and the ``group_id`` to assign (``""`` = outside).
+    """
+    if not units:
+        return 0, ""
+
+    def dist_to(unit: dict[str, Any]) -> int:
+        if cursor_x < int(unit["left"]):
+            return int(unit["left"]) - cursor_x
+        if cursor_x > int(unit["right"]):
+            return cursor_x - int(unit["right"])
+        return 0
+
+    nearest_i = min(range(len(units)), key=lambda i: (dist_to(units[i]), i))
+    unit = units[nearest_i]
+    center = _center(unit)
+    prev_unit = units[nearest_i - 1] if nearest_i else None
+    next_unit = units[nearest_i + 1] if nearest_i + 1 < len(units) else None
+
+    if cursor_x < int(unit["left"]):
+        return int(unit["start"]), ""
+    if cursor_x > int(unit["right"]):
+        return int(unit["end"]), ""
+
+    if cursor_x <= center and prev_unit is not None:
+        prev_center = _center(prev_unit)
+        if abs(cursor_x - prev_center) < abs(cursor_x - center):
+            return int(unit["start"]), str(prev_unit.get("group_id") or "")
+        return int(unit["start"]), str(unit.get("group_id") or "")
+    if cursor_x > center and next_unit is not None:
+        next_center = _center(next_unit)
+        if abs(cursor_x - next_center) < abs(cursor_x - center):
+            return int(next_unit["start"]), str(next_unit.get("group_id") or "")
+        return int(unit["end"]), str(unit.get("group_id") or "")
+
+    insert_at = int(unit["start"]) if cursor_x <= center else int(unit["end"])
+    return insert_at, str(unit.get("group_id") or "")
+
+
+def insertion_line_x(units: list[dict[str, Any]], insert_at: int) -> int:
+    """X of the vertical drop line for ``insert_at``."""
+    if not units:
+        return 8
+    for unit in units:
+        if int(unit["start"]) == insert_at:
+            return int(unit["left"]) - 2
+    return int(units[-1]["right"]) + 2
+
+
+def heal_column_groups(columns: list[dict[str, Any]]) -> None:
+    """Keep a group id only on a contiguous run of on-sheet columns.
+
+    A run of one column is cleared. The same id after a gap becomes a new id.
+    ``group_collapsed`` is copied onto every member of the run.
+
+    Args:
+        columns: Template rows in sheet order, then unused. Mutated in place.
+    """
+    seen: dict[str, str] = {}
+    seq = 1
+    index = 0
+    while index < len(columns):
+        gid = str(columns[index].get("group_id") or "").strip()
+        on_sheet = bool(columns[index].get("output"))
+        if not gid or not on_sheet:
+            columns[index]["group_id"] = ""
+            columns[index]["group_collapsed"] = False
+            index += 1
+            continue
+        end = index + 1
+        while (
+            end < len(columns)
+            and bool(columns[end].get("output"))
+            and str(columns[end].get("group_id") or "").strip() == gid
+        ):
+            end += 1
+        if end - index < 2:
+            columns[index]["group_id"] = ""
+            columns[index]["group_collapsed"] = False
+            index = end
+            continue
+        if gid in seen:
+            while f"g{seq}" in seen.values() or any(
+                str(item.get("group_id") or "") == f"g{seq}" for item in columns
+            ):
+                seq += 1
+            gid = f"g{seq}"
+            seq += 1
+        seen[str(columns[index].get("group_id") or "")] = gid
+        collapsed = any(bool(columns[pos].get("group_collapsed")) for pos in range(index, end))
+        for pos in range(index, end):
+            columns[pos]["group_id"] = gid
+            columns[pos]["group_collapsed"] = collapsed
+        index = end
+
+
 class _ColumnCard(QFrame):
-    """One vertical column card (header colour matches the Excel section)."""
+    """One vertical column card. Header colour matches the Excel section."""
 
     select_requested = Signal(int, object)
-    reorder_requested = Signal(int, int)
     width_changed = Signal(int, int)
     output_changed = Signal(int, bool)
     header_edit_requested = Signal(int)
+    drag_started = Signal(str)
 
     def __init__(
         self,
@@ -90,6 +212,7 @@ class _ColumnCard(QFrame):
         setting: dict[str, Any],
         *,
         readonly: bool,
+        drop_handler: Callable[[str, QPoint, str, str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -99,9 +222,12 @@ class _ColumnCard(QFrame):
         self._resize_active = False
         self._drag_start: QPoint | None = None
         self._press_on_edge = False
+        self._drop_handler = drop_handler
+        self._col_name = str(setting.get("col_name") or "")
+        self.setObjectName("column-card")
         self.setFrameShape(QFrame.Shape.Box)
         self.setLineWidth(1)
-        self.setAcceptDrops(not readonly)
+        self.setAcceptDrops(drop_handler is not None and not readonly)
         self.setMouseTracking(True)
         self._build(setting)
         self._apply_width(int(setting.get("width") or MIN_COLUMN_WIDTH))
@@ -110,19 +236,29 @@ class _ColumnCard(QFrame):
     def column_index(self) -> int:
         return self._index
 
+    def col_name(self) -> str:
+        return self._col_name
+
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         self._refresh_chrome()
+
+    def set_stays(self, stays: bool) -> None:
+        self._stays.setVisible(stays)
 
     def _build(self, setting: dict[str, Any]) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(3)
 
-        self._group_bar = QLabel(self)
-        self._group_bar.setFixedHeight(10)
-        self._group_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._group_bar)
+        self._stays = QLabel("останется", self)
+        self._stays.setObjectName("stays-badge")
+        self._stays.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._stays.setStyleSheet(
+            "background:#1B5E20; color:#ffffff; font-size:10px; font-weight:bold; padding:1px;"
+        )
+        self._stays.setVisible(False)
+        layout.addWidget(self._stays)
 
         fill = HEADER_FILL_COLORS.get(str(setting.get("section") or "rfp"), "#dbbcdb")
         self._header = QLabel(str(setting.get("header_label") or ""), self)
@@ -133,11 +269,6 @@ class _ColumnCard(QFrame):
             f"background:{fill}; color:#000000; font-weight:bold; padding:2px;"
         )
         layout.addWidget(self._header)
-
-        self._off_sheet = QLabel("не на листе", self)
-        self._off_sheet.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._off_sheet.setStyleSheet("color:#666666; font-size:10px;")
-        layout.addWidget(self._off_sheet)
 
         width_row = QHBoxLayout()
         width_row.setContentsMargins(0, 0, 0, 0)
@@ -156,61 +287,18 @@ class _ColumnCard(QFrame):
         self._on_sheet.toggled.connect(self._on_output_toggled)
         layout.addWidget(self._on_sheet)
 
-        self._code = QLabel(str(setting.get("col_name") or ""), self)
+        self._code = QLabel(self._col_name, self)
         self._code.setStyleSheet("color:#888888; font-size:10px;")
         self._code.setWordWrap(True)
-        self._code.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         layout.addWidget(self._code)
         layout.addStretch(1)
 
-        self._apply_output_look(bool(setting.get("output")))
-        self._apply_group_bar(setting)
-
-    def _apply_group_bar(self, setting: dict[str, Any]) -> None:
-        gid = str(setting.get("group_id") or "").strip()
-        if not gid:
-            self._group_bar.setText("")
-            self._group_bar.setStyleSheet("background:transparent;")
-            return
-        color = _group_bar_color(gid)
-        collapsed = bool(setting.get("group_collapsed"))
-        self._group_bar.setText("скрыта" if collapsed else "")
-        if collapsed:
-            self._group_bar.setStyleSheet(
-                f"color:#ffffff; font-size:8px; border:1px dashed {color}; background:{color};"
-            )
-        else:
-            self._group_bar.setStyleSheet(
-                f"color:#ffffff; font-size:8px; background:{color};"
-            )
-
-    def _apply_output_look(self, on_sheet: bool) -> None:
-        self._off_sheet.setVisible(not on_sheet)
-        if on_sheet:
-            self.setStyleSheet("")
-        else:
-            self.setStyleSheet("QFrame { background:#f4f4f4; }")
-
     def _apply_width(self, excel_width: int) -> None:
-        px = _card_pixel_width(excel_width)
-        self.setFixedWidth(px)
+        self.setFixedWidth(_card_pixel_width(excel_width))
 
     def _refresh_chrome(self) -> None:
-        if self._selected:
-            self.setLineWidth(2)
-            extra = "QFrame { border: 2px solid #1565C0; }"
-            current = self.styleSheet() or ""
-            if extra not in current:
-                self.setStyleSheet(current + extra)
-        else:
-            self.setLineWidth(1)
-            current = self.styleSheet() or ""
-            self.setStyleSheet(current.replace("QFrame { border: 2px solid #1565C0; }", ""))
-
-    def set_header_fill(self, hex_color: str) -> None:
-        self._header.setStyleSheet(
-            f"background:{hex_color}; color:#000000; font-weight:bold; padding:2px;"
-        )
+        border = "border: 2px solid #1565C0;" if self._selected else "border: 1px solid #bbbbbb;"
+        self.setStyleSheet(f"QFrame#column-card {{ {border} background:#ffffff; }}")
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if self._readonly:
@@ -236,10 +324,7 @@ class _ColumnCard(QFrame):
         if self._readonly:
             return
         if self._resize_active:
-            excel_w = max(
-                MIN_COLUMN_WIDTH,
-                min(MAX_COLUMN_WIDTH, max(52, pos.x()) // 8),
-            )
+            excel_w = max(MIN_COLUMN_WIDTH, min(MAX_COLUMN_WIDTH, max(52, pos.x()) // 8))
             if self._width_spin.value() != excel_w:
                 self._width_spin.blockSignals(True)
                 self._width_spin.setValue(excel_w)
@@ -257,10 +342,11 @@ class _ColumnCard(QFrame):
             self._start_drag()
             event.accept()
             return
-        if pos.x() >= self.width() - _EDGE_PX:
-            self.setCursor(Qt.CursorShape.SizeHorCursor)
-        else:
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setCursor(
+            Qt.CursorShape.SizeHorCursor
+            if pos.x() >= self.width() - _EDGE_PX
+            else Qt.CursorShape.OpenHandCursor
+        )
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -272,79 +358,191 @@ class _ColumnCard(QFrame):
     def _start_drag(self) -> None:
         drag = QDrag(self)
         mime = QMimeData()
-        mime.setData(_MIME_COL_INDEX, str(self._index).encode("ascii"))
+        mime.setData(_MIME, f"col:{self._index}".encode("ascii"))
         drag.setMimeData(mime)
+        self.drag_started.emit(f"col:{self._index}")
         drag.exec(Qt.DropAction.MoveAction)
 
-    def dragEnterEvent(self, event) -> None:  # noqa: ANN001
-        if self._readonly or not event.mimeData().hasFormat(_MIME_COL_INDEX):
+    def _forward(self, event, kind: str) -> None:
+        if self._drop_handler is None or not event.mimeData().hasFormat(_MIME):
             event.ignore()
             return
+        top_left = self.mapTo(self._drop_root(), QPoint(0, 0))
+        pos = top_left + event.position().toPoint()
+        token = bytes(event.mimeData().data(_MIME)).decode("utf-8")
+        self._drop_handler(kind, pos, "sheet" if self._on_sheet.isChecked() else "unused", token)
         event.acceptProposedAction()
 
+    def _drop_root(self) -> QWidget:
+        widget: QWidget = self
+        while widget.parentWidget() is not None and widget.objectName() not in {
+            "sheet-row",
+            "unused-row",
+        }:
+            parent = widget.parentWidget()
+            if parent is None:
+                break
+            widget = parent
+        return widget
+
+    def dragEnterEvent(self, event) -> None:  # noqa: ANN001
+        self._forward(event, "enter")
+
+    def dragMoveEvent(self, event) -> None:  # noqa: ANN001
+        self._forward(event, "move")
+
     def dropEvent(self, event) -> None:  # noqa: ANN001
-        if self._readonly or not event.mimeData().hasFormat(_MIME_COL_INDEX):
-            event.ignore()
-            return
-        raw = bytes(event.mimeData().data(_MIME_COL_INDEX)).decode("ascii")
-        try:
-            src = int(raw)
-        except ValueError:
-            event.ignore()
-            return
-        dest = self._index
-        if event.position().x() > self.width() / 2:
-            dest += 1
-        self.reorder_requested.emit(src, dest)
-        event.acceptProposedAction()
+        self._forward(event, "drop")
 
     def _on_spin_width(self, value: int) -> None:
         self._apply_width(value)
         self.width_changed.emit(self._index, value)
 
     def _on_output_toggled(self, checked: bool) -> None:
-        self._apply_output_look(checked)
         self.output_changed.emit(self._index, checked)
 
 
-class _StripHost(QWidget):
-    """Horizontal host that accepts drops past the last card."""
+class _GroupBox(QFrame):
+    """Outline around one contiguous group, with +/− and an optional compact title."""
 
-    reorder_requested = Signal(int, int)
+    toggle_requested = Signal(str)
 
     def __init__(
         self,
-        readonly_fn: Callable[[], bool],
-        count_fn: Callable[[], int],
+        group_id: str,
+        *,
+        collapsed: bool,
+        titles: list[str],
+        readonly: bool,
+        drop_handler: Callable[[str, QPoint, str, str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._readonly_fn = readonly_fn
-        self._count_fn = count_fn
-        self.setAcceptDrops(True)
+        self.group_id = group_id
+        self.collapsed = collapsed
+        self._drop_handler = drop_handler
+        self.setAcceptDrops(drop_handler is not None and not readonly)
+        self.setObjectName("group-box")
+        color = _group_bar_color(group_id)
+        self.setStyleSheet(
+            f"QFrame#group-box {{ border: 2px solid {color}; background:#fafafa; }}"
+        )
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setSpacing(2)
+        head = QHBoxLayout()
+        self._btn = QPushButton("+" if collapsed else "−", self)
+        self._btn.setObjectName("group-toggle")
+        self._btn.setFixedSize(28, 28)
+        self._btn.setEnabled(not readonly)
+        self._btn.setToolTip(
+            "Показать столбцы группы" if collapsed else "Скрыть столбцы группы в Excel"
+        )
+        if readonly:
+            self._btn.setToolTip("Создайте свой шаблон, чтобы менять группы.")
+        self._btn.clicked.connect(lambda: self.toggle_requested.emit(group_id))
+        head.addWidget(self._btn)
+        caption = "скроется: " + " · ".join(titles) if collapsed else "группа"
+        self._caption = QLabel(caption, self)
+        self._caption.setWordWrap(True)
+        self._caption.setStyleSheet(f"color:{color}; font-weight:bold;")
+        head.addWidget(self._caption, stretch=1)
+        outer.addLayout(head)
+        self._cards = QHBoxLayout()
+        self._cards.setSpacing(4)
+        outer.addLayout(self._cards)
+        if collapsed:
+            self.setMinimumWidth(180)
+
+    def add_card(self, card: QWidget) -> None:
+        self._cards.addWidget(card)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.childAt(event.position().toPoint()) is None:
+            self._drag_origin = event.position().toPoint()
+        else:
+            self._drag_origin = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        origin = getattr(self, "_drag_origin", None)
+        if (
+            origin is not None
+            and not self._btn.geometry().contains(origin)
+            and (event.buttons() & Qt.MouseButton.LeftButton)
+            and (event.position().toPoint() - origin).manhattanLength() >= 8
+        ):
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setData(_MIME, f"group:{self.group_id}".encode("utf-8"))
+            drag.setMimeData(mime)
+            self._drag_origin = None
+            drag.exec(Qt.DropAction.MoveAction)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def _forward_drop(self, event, kind: str) -> None:  # noqa: ANN001
+        if self._drop_handler is None or not event.mimeData().hasFormat(_MIME):
+            event.ignore()
+            return
+        root: QWidget = self
+        while root.parentWidget() is not None and root.objectName() != "sheet-row":
+            parent = root.parentWidget()
+            if parent is None:
+                break
+            root = parent
+        pos = self.mapTo(root, QPoint(0, 0)) + event.position().toPoint()
+        token = bytes(event.mimeData().data(_MIME)).decode("utf-8")
+        self._drop_handler(kind, pos, "sheet", token)
+        event.acceptProposedAction()
 
     def dragEnterEvent(self, event) -> None:  # noqa: ANN001
-        if self._readonly_fn() or not event.mimeData().hasFormat(_MIME_COL_INDEX):
-            event.ignore()
-            return
-        event.acceptProposedAction()
+        self._forward_drop(event, "enter")
+
+    def dragMoveEvent(self, event) -> None:  # noqa: ANN001
+        self._forward_drop(event, "move")
 
     def dropEvent(self, event) -> None:  # noqa: ANN001
-        if self._readonly_fn() or not event.mimeData().hasFormat(_MIME_COL_INDEX):
+        self._forward_drop(event, "drop")
+
+
+class _RowFrame(QFrame):
+    """Horizontal drop row. Forwards empty-area drags to the panel."""
+
+    def __init__(
+        self,
+        name: str,
+        on_drag: Callable[[str, QPoint, str, str], None],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName(name)
+        self._row_kind = "sheet" if name == "sheet-row" else "unused"
+        self._on_drag = on_drag
+        self.setAcceptDrops(True)
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+
+    def _emit(self, event, kind: str) -> None:
+        if not event.mimeData().hasFormat(_MIME):
             event.ignore()
             return
-        raw = bytes(event.mimeData().data(_MIME_COL_INDEX)).decode("ascii")
-        try:
-            src = int(raw)
-        except ValueError:
-            event.ignore()
-            return
-        self.reorder_requested.emit(src, self._count_fn())
+        token = bytes(event.mimeData().data(_MIME)).decode("utf-8")
+        self._on_drag(kind, event.position().toPoint(), self._row_kind, token)
         event.acceptProposedAction()
+
+    def dragEnterEvent(self, event) -> None:  # noqa: ANN001
+        self._emit(event, "enter")
+
+    def dragMoveEvent(self, event) -> None:  # noqa: ANN001
+        self._emit(event, "move")
+
+    def dropEvent(self, event) -> None:  # noqa: ANN001
+        self._emit(event, "drop")
 
 
 class RfpColumnsPanel(QWidget):
-    """Named Step4 Excel column templates as a horizontal strip of cards."""
+    """Named Step4 templates: on-sheet row, unused row, group +/−."""
 
     def __init__(
         self,
@@ -360,6 +558,7 @@ class RfpColumnsPanel(QWidget):
         self._anchor = 0
         self._updating_combo = False
         self._section_by_name = self._load_sections()
+        self._units: list[dict[str, Any]] = []
 
         self._combo = QComboBox(self)
         self._hint = QLabel(_DEFAULT_HINT, self)
@@ -371,7 +570,7 @@ class RfpColumnsPanel(QWidget):
         self._btn_delete = QPushButton("Удалить", self)
         self._btn_group = QPushButton("Сгруппировать", self)
         self._btn_ungroup = QPushButton("Разгруппировать", self)
-        self._chk_hide = QCheckBox("Скрыть группу", self)
+        self._chk_hide = QCheckBox("Скрыть в Excel", self)
 
         self._btn_create.clicked.connect(self._create_from_current)
         self._btn_save.clicked.connect(self._save_active)
@@ -399,26 +598,50 @@ class RfpColumnsPanel(QWidget):
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(False)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setMinimumHeight(220)
-        self._scroll.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setMinimumHeight(460)
 
-        self._strip = _StripHost(self._is_readonly, lambda: len(self._columns), self)
-        self._strip.reorder_requested.connect(self._reorder)
-        self._strip_layout = QHBoxLayout(self._strip)
-        self._strip_layout.setContentsMargins(6, 8, 6, 8)
-        self._strip_layout.setSpacing(4)
-        self._strip_layout.addStretch(1)
-        self._scroll.setWidget(self._strip)
+        self._host = QWidget(self)
+        host_layout = QVBoxLayout(self._host)
+        host_layout.setContentsMargins(8, 8, 8, 8)
+        host_layout.setSpacing(6)
+        sheet_title = QLabel("На листе — эти столбцы пишутся в файл", self._host)
+        sheet_title.setStyleSheet("font-weight:bold;")
+        unused_title = QLabel("Не используются — на лист не попадают", self._host)
+        unused_title.setStyleSheet("font-weight:bold;")
+        self._sheet_row = _RowFrame("sheet-row", self._on_row_drag, self._host)
+        self._unused_row = _RowFrame("unused-row", self._on_row_drag, self._host)
+        self._sheet_layout = QHBoxLayout(self._sheet_row)
+        self._sheet_layout.setContentsMargins(6, 6, 28, 6)
+        self._sheet_layout.setSpacing(4)
+        self._sheet_layout.addStretch(1)
+        self._unused_layout = QHBoxLayout(self._unused_row)
+        self._unused_layout.setContentsMargins(6, 6, 28, 6)
+        self._unused_layout.setSpacing(4)
+        self._unused_layout.addStretch(1)
+        self._sheet_row.setStyleSheet("QFrame#sheet-row { background:#ffffff; border: 1px solid #cccccc; }")
+        self._unused_row.setStyleSheet("QFrame#unused-row { background:#f3f3f3; border: 1px solid #cccccc; }")
+        host_layout.addWidget(sheet_title)
+        host_layout.addWidget(self._sheet_row)
+        host_layout.addWidget(unused_title)
+        host_layout.addWidget(self._unused_row)
+
+        self._line = QFrame(self._sheet_row)
+        self._line.setObjectName("drop-line")
+        self._line.setFixedWidth(3)
+        self._line.setStyleSheet("background:#1565C0;")
+        self._line.hide()
+        self._line_label = QLabel(self._sheet_row)
+        self._line_label.setObjectName("drop-label")
+        self._line_label.hide()
+
+        self._scroll.setWidget(self._host)
 
         layout = QVBoxLayout(self)
         layout.addLayout(top)
         layout.addWidget(self._hint)
         layout.addLayout(group_row)
         layout.addWidget(self._scroll, stretch=1)
-
         self.reload_from_disk()
 
     @staticmethod
@@ -439,11 +662,11 @@ class RfpColumnsPanel(QWidget):
         return str(data)
 
     def reload_from_disk(self) -> None:
-        """Reload combo + strip from config without writing column edits."""
+        """Reload combo and both rows from config without writing column edits."""
         state = load_step4_excel_column_state()
         active_id = str(state.get("active_id") or DEFAULT_TEMPLATE_ID)
         templates = list(state.get("templates") or [])
-        known = {DEFAULT_TEMPLATE_ID} | {str(t.get("id")) for t in templates}
+        known = {DEFAULT_TEMPLATE_ID} | {str(item.get("id")) for item in templates}
         if active_id not in known:
             active_id = DEFAULT_TEMPLATE_ID
         self._updating_combo = True
@@ -482,9 +705,11 @@ class RfpColumnsPanel(QWidget):
             )
         for item in columns:
             item["section"] = self._section_by_name.get(item["col_name"], "rfp")
-        self._columns = columns
+        visible = [item for item in columns if item.get("output")]
+        unused = [item for item in columns if not item.get("output")]
+        self._columns = visible + unused
         self._selected.clear()
-        self._rebuild_strip()
+        self._rebuild_rows()
 
     def _apply_readonly(self) -> None:
         readonly = self._is_readonly()
@@ -496,38 +721,117 @@ class RfpColumnsPanel(QWidget):
         self._chk_hide.setEnabled(not readonly)
         self._hint.setText(_DEFAULT_HINT if readonly else _USER_HINT)
 
-    def _rebuild_strip(self) -> None:
-        while self._strip_layout.count() > 1:
-            item = self._strip_layout.takeAt(0)
+    def _clear_layout(self, layout: QHBoxLayout) -> None:
+        while layout.count() > 1:
+            item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
+
+    def _make_card(self, index: int, setting: dict[str, Any], row: QWidget) -> _ColumnCard:
+        card = _ColumnCard(
+            index,
+            setting,
+            readonly=self._is_readonly(),
+            drop_handler=self._on_row_drag,
+            parent=row,
+        )
+        fill = HEADER_FILL_COLORS.get(setting.get("section", "rfp"), "#dbbcdb")
+        card._header.setStyleSheet(
+            f"background:{fill}; color:#000000; font-weight:bold; padding:2px;"
+        )
+        card.set_selected(index in self._selected)
+        card.select_requested.connect(self._on_card_select)
+        card.width_changed.connect(self._on_width_changed)
+        card.output_changed.connect(self._on_output_changed)
+        card.header_edit_requested.connect(self._on_header_edit)
+        return card
+
+    def _rebuild_rows(self) -> None:
+        self._hide_drop_line()
+        self._clear_layout(self._sheet_layout)
+        self._clear_layout(self._unused_layout)
         self._cards = []
-        readonly = self._is_readonly()
-        for idx, setting in enumerate(self._columns):
-            card = _ColumnCard(idx, setting, readonly=readonly, parent=self._strip)
-            fill = HEADER_FILL_COLORS.get(setting.get("section", "rfp"), "#dbbcdb")
-            card.set_header_fill(fill)
-            card.set_selected(idx in self._selected)
-            card.select_requested.connect(self._on_card_select)
-            card.reorder_requested.connect(self._reorder)
-            card.width_changed.connect(self._on_width_changed)
-            card.output_changed.connect(self._on_output_changed)
-            card.header_edit_requested.connect(self._on_header_edit)
-            self._strip_layout.insertWidget(idx, card)
+        visible_idx = [i for i, item in enumerate(self._columns) if item.get("output")]
+        pos = 0
+        while pos < len(visible_idx):
+            master = visible_idx[pos]
+            gid = str(self._columns[master].get("group_id") or "").strip()
+            end = pos + 1
+            if gid:
+                while end < len(visible_idx) and str(
+                    self._columns[visible_idx[end]].get("group_id") or ""
+                ).strip() == gid:
+                    end += 1
+            if gid and end - pos >= 2:
+                titles = [
+                    str(self._columns[visible_idx[k]].get("header_label") or "")
+                    for k in range(pos, end)
+                ]
+                collapsed = any(
+                    bool(self._columns[visible_idx[k]].get("group_collapsed"))
+                    for k in range(pos, end)
+                )
+                box = _GroupBox(
+                    gid,
+                    collapsed=collapsed,
+                    titles=titles,
+                    readonly=self._is_readonly(),
+                    drop_handler=self._on_row_drag,
+                    parent=self._sheet_row,
+                )
+                box.toggle_requested.connect(self._toggle_group)
+                if not collapsed:
+                    for k in range(pos, end):
+                        card = self._make_card(visible_idx[k], self._columns[visible_idx[k]], box)
+                        box.add_card(card)
+                        self._cards.append(card)
+                self._sheet_layout.insertWidget(self._sheet_layout.count() - 1, box)
+                if collapsed and end < len(visible_idx):
+                    pass
+                pos = end
+                continue
+            card = self._make_card(master, self._columns[master], self._sheet_row)
+            prev_collapsed = False
+            if pos > 0:
+                prev = self._columns[visible_idx[pos - 1]]
+                prev_gid = str(prev.get("group_id") or "").strip()
+                prev_collapsed = bool(prev_gid) and bool(prev.get("group_collapsed"))
+            card.set_stays(prev_collapsed)
+            self._sheet_layout.insertWidget(self._sheet_layout.count() - 1, card)
             self._cards.append(card)
-        self._strip.adjustSize()
-        total_w = self._strip_layout.sizeHint().width()
-        total_h = max(200, self._strip_layout.sizeHint().height())
-        self._strip.resize(max(total_w, 80), total_h)
+            pos += 1
+
+        for master, setting in enumerate(self._columns):
+            if setting.get("output"):
+                continue
+            card = self._make_card(master, setting, self._unused_row)
+            self._unused_layout.insertWidget(self._unused_layout.count() - 1, card)
+            self._cards.append(card)
+        self._fit_host()
+
+    def _fit_host(self) -> None:
+        self._sheet_row.adjustSize()
+        self._unused_row.adjustSize()
+        self._host.adjustSize()
+        width = max(
+            self._sheet_layout.sizeHint().width(),
+            self._unused_layout.sizeHint().width(),
+            self._scroll.viewport().width(),
+            200,
+        )
+        height = max(self._host.sizeHint().height(), 420)
+        self._host.resize(width + 24, height)
+        self._sheet_row.setMinimumHeight(max(160, self._sheet_row.sizeHint().height()))
+        self._unused_row.setMinimumHeight(max(140, self._unused_row.sizeHint().height()))
 
     def _on_combo_changed(self, _index: int) -> None:
         if self._updating_combo:
             return
-        tid = self._current_template_id()
-        set_active_template(tid)
-        self._load_columns_for_id(tid)
+        template_id = self._current_template_id()
+        set_active_template(template_id)
+        self._load_columns_for_id(template_id)
         self._apply_readonly()
 
     def _on_card_select(self, index: int, modifiers: Qt.KeyboardModifiers) -> None:
@@ -548,12 +852,10 @@ class RfpColumnsPanel(QWidget):
         self._sync_hide_checkbox()
 
     def _sync_hide_checkbox(self) -> None:
-        if not self._selected:
-            return
         flags = [
             bool(self._columns[i].get("group_collapsed"))
             for i in sorted(self._selected)
-            if self._columns[i].get("group_id")
+            if 0 <= i < len(self._columns) and self._columns[i].get("group_id")
         ]
         if not flags:
             return
@@ -564,26 +866,32 @@ class RfpColumnsPanel(QWidget):
     def _on_width_changed(self, index: int, width: int) -> None:
         if 0 <= index < len(self._columns):
             self._columns[index]["width"] = int(width)
-        self._strip.adjustSize()
-        self._strip.resize(
-            max(self._strip_layout.sizeHint().width(), 80),
-            max(200, self._strip_layout.sizeHint().height()),
-        )
+        self._fit_host()
 
     def _on_output_changed(self, index: int, output: bool) -> None:
-        if 0 <= index < len(self._columns):
-            self._columns[index]["output"] = bool(output)
+        if self._is_readonly() or not (0 <= index < len(self._columns)):
+            return
+        name = str(self._columns[index].get("col_name") or "")
+        self._columns[index]["output"] = bool(output)
+        if not output:
+            self._columns[index]["group_id"] = ""
+            self._columns[index]["group_collapsed"] = False
+        self._partition_and_heal()
+        self._selected = {self._index_of_name(name)}
+        self._anchor = next(iter(self._selected))
+        self._rebuild_rows()
+
+    def _index_of_name(self, col_name: str) -> int:
+        for index, item in enumerate(self._columns):
+            if item.get("col_name") == col_name:
+                return index
+        return 0
 
     def _on_header_edit(self, index: int) -> None:
         if self._is_readonly() or not (0 <= index < len(self._columns)):
             return
         current = str(self._columns[index].get("header_label") or "")
-        text, ok = QInputDialog.getText(
-            self,
-            "Подпись столбца",
-            "Название в Excel:",
-            text=current,
-        )
+        text, ok = QInputDialog.getText(self, "Подпись столбца", "Название в Excel:", text=current)
         if not ok:
             return
         label = text.strip()
@@ -591,57 +899,243 @@ class RfpColumnsPanel(QWidget):
             QMessageBox.warning(self, "Подпись столбца", "Пустая подпись не допускается.")
             return
         self._columns[index]["header_label"] = label
-        self._rebuild_strip()
+        self._rebuild_rows()
 
-    def _reorder(self, src: int, dest: int) -> None:
+    def _toggle_group(self, group_id: str) -> None:
         if self._is_readonly():
             return
-        n = len(self._columns)
-        if src < 0 or src >= n:
+        members = [
+            item for item in self._columns if str(item.get("group_id") or "") == group_id
+        ]
+        if not members:
             return
-        dest = max(0, min(n, dest))
-        if dest == src or dest == src + 1:
+        collapsed = not any(bool(item.get("group_collapsed")) for item in members)
+        for item in members:
+            item["group_collapsed"] = collapsed
+        self._rebuild_rows()
+
+    def _source_indices(self, token: str) -> list[int]:
+        kind, _, payload = token.partition(":")
+        if kind == "group":
+            return [
+                i
+                for i, item in enumerate(self._columns)
+                if str(item.get("group_id") or "") == payload and item.get("output")
+            ]
+        try:
+            index = int(payload)
+        except ValueError:
+            return []
+        if 0 <= index < len(self._columns):
+            return [index]
+        return []
+
+    def _visible_units(self, skip: set[int]) -> list[dict[str, Any]]:
+        """Geometry of on-sheet units, skipping dragged master indices."""
+        self._sheet_row.adjustSize()
+        units: list[dict[str, Any]] = []
+        visible_pos = 0
+        for widget_index in range(self._sheet_layout.count() - 1):
+            widget = self._sheet_layout.itemAt(widget_index).widget()
+            if widget is None:
+                continue
+            if isinstance(widget, _GroupBox):
+                members = [
+                    i
+                    for i, item in enumerate(self._columns)
+                    if str(item.get("group_id") or "") == widget.group_id and item.get("output")
+                ]
+                kept = [i for i in members if i not in skip]
+                if not kept:
+                    continue
+                geo = widget.geometry()
+                units.append(
+                    {
+                        "left": geo.left(),
+                        "right": geo.right(),
+                        "start": visible_pos,
+                        "end": visible_pos + len(kept),
+                        "group_id": widget.group_id,
+                    }
+                )
+                visible_pos += len(kept)
+                continue
+            if isinstance(widget, _ColumnCard):
+                if widget.column_index() in skip:
+                    continue
+                geo = widget.geometry()
+                gid = str(self._columns[widget.column_index()].get("group_id") or "")
+                units.append(
+                    {
+                        "left": geo.left(),
+                        "right": geo.right(),
+                        "start": visible_pos,
+                        "end": visible_pos + 1,
+                        "group_id": gid,
+                    }
+                )
+                visible_pos += 1
+        return units
+
+    def _hide_drop_line(self) -> None:
+        self._line.hide()
+        self._line_label.hide()
+
+    def _show_drop_line(self, x: int, group_id: str, near_group: bool) -> None:
+        if group_id:
+            text = "в группу"
+            color = _group_bar_color(group_id)
+        elif near_group:
+            text = "вне группы"
+            color = "#666666"
+        else:
+            text = ""
+            color = "#1565C0"
+        self._line.setStyleSheet(f"background:{color};")
+        self._line.setGeometry(max(0, x), 4, 3, max(40, self._sheet_row.height() - 8))
+        self._line.show()
+        self._line.raise_()
+        if text:
+            self._line_label.setText(text)
+            self._line_label.setStyleSheet(
+                f"background:{color}; color:#ffffff; font-size:10px; padding:1px 3px;"
+            )
+            self._line_label.adjustSize()
+            self._line_label.move(max(0, x + 6), 6)
+            self._line_label.show()
+            self._line_label.raise_()
+        else:
+            self._line_label.hide()
+
+    def _on_row_drag(self, kind: str, pos: QPoint, row_kind: str, token: str) -> None:
+        if self._is_readonly():
+            self._hide_drop_line()
             return
-        item = self._columns.pop(src)
-        if dest > src:
-            dest -= 1
-        self._columns.insert(dest, item)
-        self._selected = {dest}
-        self._anchor = dest
-        self._rebuild_strip()
+        if kind == "drop":
+            self._hide_drop_line()
+            self._apply_drop(token, pos, row_kind)
+            return
+        if row_kind != "sheet":
+            self._hide_drop_line()
+            return
+        skip = set(self._source_indices(token))
+        units = self._visible_units(skip)
+        insert_at, gid = plan_sheet_insertion(units, pos.x())
+        near = any(str(unit.get("group_id") or "") for unit in units)
+        self._show_drop_line(
+            insertion_line_x(units, insert_at),
+            gid,
+            near_group=bool(gid) or near,
+        )
+
+    def _apply_drop(self, token: str, pos: QPoint, row_kind: str) -> None:
+        indices = self._source_indices(token)
+        if not indices:
+            return
+        names = [str(self._columns[i].get("col_name") or "") for i in indices]
+        moving_group = token.startswith("group:")
+        own_gid = token.split(":", 1)[1] if moving_group else ""
+        if row_kind == "unused":
+            self._move_names(names, visible_index=None, unused_at=self._unused_insert_at(pos.x(), indices), group_id="")
+            return
+        skip = set(indices)
+        units = self._visible_units(skip)
+        insert_at, gid = plan_sheet_insertion(units, pos.x())
+        if moving_group and not gid:
+            gid = own_gid
+        self._move_names(names, visible_index=insert_at, unused_at=None, group_id=gid)
+
+    def _unused_insert_at(self, x: int, skip: list[int]) -> int:
+        cards = [
+            card
+            for card in self._cards
+            if not self._columns[card.column_index()].get("output")
+            and card.column_index() not in skip
+        ]
+        at = 0
+        for card in cards:
+            geo = card.geometry()
+            if x > (geo.left() + geo.right()) / 2:
+                at += 1
+        return at
+
+    def _move_names(
+        self,
+        names: list[str],
+        *,
+        visible_index: int | None,
+        unused_at: int | None,
+        group_id: str,
+    ) -> None:
+        picked = [item for item in self._columns if item.get("col_name") in names]
+        if not picked:
+            return
+        remain = [item for item in self._columns if item.get("col_name") not in names]
+        visible = [item for item in remain if item.get("output")]
+        unused = [item for item in remain if not item.get("output")]
+        if visible_index is None:
+            for item in picked:
+                item["output"] = False
+                item["group_id"] = ""
+                item["group_collapsed"] = False
+            at = 0 if unused_at is None else max(0, min(len(unused), unused_at))
+            unused[at:at] = picked
+        else:
+            collapsed = False
+            if group_id:
+                collapsed = any(
+                    str(item.get("group_id") or "") == group_id and bool(item.get("group_collapsed"))
+                    for item in visible
+                )
+            for item in picked:
+                item["output"] = True
+                item["group_id"] = group_id
+                item["group_collapsed"] = collapsed if group_id else False
+            at = max(0, min(len(visible), visible_index))
+            visible[at:at] = picked
+        self._columns = visible + unused
+        heal_column_groups(self._columns)
+        focus = names[0]
+        self._selected = {self._index_of_name(focus)}
+        self._anchor = next(iter(self._selected))
+        self._rebuild_rows()
+
+    def _partition_and_heal(self) -> None:
+        visible = [item for item in self._columns if item.get("output")]
+        unused = [item for item in self._columns if not item.get("output")]
+        self._columns = visible + unused
+        heal_column_groups(self._columns)
 
     def _selected_sorted(self) -> list[int]:
         return sorted(i for i in self._selected if 0 <= i < len(self._columns))
 
     def _fresh_group_id(self) -> str:
         existing = {str(item.get("group_id") or "") for item in self._columns}
-        n = 1
-        while f"g{n}" in existing:
-            n += 1
-        return f"g{n}"
+        number = 1
+        while f"g{number}" in existing:
+            number += 1
+        return f"g{number}"
 
     def _group_selected(self) -> None:
         if self._is_readonly():
             return
-        idxs = self._selected_sorted()
+        idxs = [i for i in self._selected_sorted() if self._columns[i].get("output")]
         if len(idxs) < 2:
             QMessageBox.information(
                 self,
                 "Группа столбцов",
-                "Выберите несколько соседних столбцов (Ctrl или Shift).",
+                "Выберите несколько соседних столбцов верхнего ряда (Ctrl или Shift).",
             )
             return
         if idxs[-1] - idxs[0] + 1 != len(idxs):
-            QMessageBox.warning(
-                self, "Группа столбцов", "Группа только из соседних столбцов."
-            )
+            QMessageBox.warning(self, "Группа столбцов", "Группа только из соседних столбцов.")
             return
         gid = self._fresh_group_id()
         collapsed = self._chk_hide.isChecked()
-        for i in idxs:
-            self._columns[i]["group_id"] = gid
-            self._columns[i]["group_collapsed"] = collapsed
-        self._rebuild_strip()
+        for index in idxs:
+            self._columns[index]["group_id"] = gid
+            self._columns[index]["group_collapsed"] = collapsed
+        self._rebuild_rows()
 
     def _ungroup_selected(self) -> None:
         if self._is_readonly():
@@ -652,16 +1146,13 @@ class RfpColumnsPanel(QWidget):
         }
         ids.discard("")
         if not ids:
-            for i in self._selected_sorted():
-                self._columns[i]["group_id"] = ""
-                self._columns[i]["group_collapsed"] = False
-            self._rebuild_strip()
+            self._rebuild_rows()
             return
         for item in self._columns:
             if str(item.get("group_id") or "") in ids:
                 item["group_id"] = ""
                 item["group_collapsed"] = False
-        self._rebuild_strip()
+        self._rebuild_rows()
 
     def _on_hide_toggled(self, checked: bool) -> None:
         if self._is_readonly():
@@ -676,7 +1167,7 @@ class RfpColumnsPanel(QWidget):
         for item in self._columns:
             if str(item.get("group_id") or "") in ids:
                 item["group_collapsed"] = bool(checked)
-        self._rebuild_strip()
+        self._rebuild_rows()
 
     def _columns_payload(self) -> list[dict[str, Any]]:
         payload = []
@@ -708,20 +1199,20 @@ class RfpColumnsPanel(QWidget):
         if not label:
             QMessageBox.warning(self, "Новый шаблон", "Имя не должно быть пустым.")
             return
-        tid = create_template(label, self._columns_payload())
+        template_id = create_template(label, self._columns_payload())
         self.reload_from_disk()
-        self._select_template_id(tid)
-        self._load_columns_for_id(tid)
+        self._select_template_id(template_id)
+        self._load_columns_for_id(template_id)
         self._apply_readonly()
         if self._on_saved is not None:
             self._on_saved()
 
     def _save_active(self) -> None:
-        tid = self._current_template_id()
-        if tid == DEFAULT_TEMPLATE_ID:
+        template_id = self._current_template_id()
+        if template_id == DEFAULT_TEMPLATE_ID:
             return
         try:
-            update_template_columns(tid, self._columns_payload())
+            update_template_columns(template_id, self._columns_payload())
         except ValueError as exc:
             QMessageBox.warning(self, "Сохранить шаблон", str(exc))
             return
@@ -729,13 +1220,11 @@ class RfpColumnsPanel(QWidget):
             self._on_saved()
 
     def _rename_active(self) -> None:
-        tid = self._current_template_id()
-        if tid == DEFAULT_TEMPLATE_ID:
+        template_id = self._current_template_id()
+        if template_id == DEFAULT_TEMPLATE_ID:
             return
         current = self._combo.currentText()
-        name, ok = QInputDialog.getText(
-            self, "Переименовать", "Имя шаблона:", text=current
-        )
+        name, ok = QInputDialog.getText(self, "Переименовать", "Имя шаблона:", text=current)
         if not ok:
             return
         label = name.strip()
@@ -743,19 +1232,19 @@ class RfpColumnsPanel(QWidget):
             QMessageBox.warning(self, "Переименовать", "Имя не должно быть пустым.")
             return
         try:
-            rename_template(tid, label)
+            rename_template(template_id, label)
         except ValueError as exc:
             QMessageBox.warning(self, "Переименовать", str(exc))
             return
         self.reload_from_disk()
-        self._select_template_id(tid)
-        self._load_columns_for_id(tid)
+        self._select_template_id(template_id)
+        self._load_columns_for_id(template_id)
         if self._on_saved is not None:
             self._on_saved()
 
     def _delete_active(self) -> None:
-        tid = self._current_template_id()
-        if tid == DEFAULT_TEMPLATE_ID:
+        template_id = self._current_template_id()
+        if template_id == DEFAULT_TEMPLATE_ID:
             return
         answer = QMessageBox.question(
             self,
@@ -767,7 +1256,7 @@ class RfpColumnsPanel(QWidget):
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            delete_template(tid)
+            delete_template(template_id)
         except ValueError as exc:
             QMessageBox.warning(self, "Удалить шаблон", str(exc))
             return

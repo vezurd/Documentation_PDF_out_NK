@@ -39,7 +39,7 @@ alwaysApply: false
 |------|------|
 | [step4_6_save_match_result_to_excel.py](RFQ/tags_rfp_compare/step4/step4_6_save_match_result_to_excel.py) | `ColumnDef`, `OUTPUT_COLUMNS_CONFIG`, цвет из `CheckElement.color`, комментарии, zip→UNC |
 | [step4_excel_columns.py](RFQ/tags_rfp_compare/step4/step4_excel_columns.py) | шаблоны столбцов Step4; builtin `default` из `OUTPUT_COLUMNS_CONFIG`; outline summary = level 0 |
-| [rfp_columns_panel.py](ds_compare_center/rfp_columns_panel.py) | вкладка **RFP · Столбцы**: WYSIWYG-карточки, именованные шаблоны |
+| [rfp_columns_panel.py](ds_compare_center/rfp_columns_panel.py) | вкладка **RFP · Столбцы**: верхний ряд — на лист, нижний — не используются; «+» разворачивает группу, бейдж «останется» на столбце после свёрнутой группы |
 | [step4_6_quality_sheets.py](RFQ/tags_rfp_compare/step4/step4_6_quality_sheets.py) | доп. листы Сводка / **Статистика ДС** / Посадка / Статусы / Проблемы УЛ |
 | [step4_packing_compare.py](RFQ/tags_rfp_compare/step4/step4_packing_compare.py) | статусы УЛ, `packing_units_mismatch`, merge UL status/trace в result; skip `is_excluded_from_supply` |
 | [rfp_supply_status.py](RFQ/tags_rfp_compare/rfp_supply_status.py) | канон. «Исключен из поставки»; «тег заменен на»; unknown → fatal |
