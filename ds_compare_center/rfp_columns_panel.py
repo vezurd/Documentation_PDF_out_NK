@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import zipfile
 from typing import Any, Callable
 
 from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
+    QApplication,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -34,11 +37,13 @@ from RFQ.tags_rfp_compare.step4.step4_excel_columns import (
     builtin_column_settings,
     create_template,
     delete_template,
+    format_column_share,
     load_step4_excel_column_state,
     normalize_template_columns,
     rename_template,
     set_active_template,
     update_template_columns,
+    column_xlsx_shares,
 )
 
 _MIME = "application/x-step4-col-move"
@@ -249,6 +254,10 @@ class _ColumnCard(QFrame):
     def set_stays(self, stays: bool) -> None:
         self._stays.setVisible(stays)
 
+    def set_share(self, text: str) -> None:
+        self._share.setText(text)
+        self._share.setVisible(bool(text))
+
     def _build(self, setting: dict[str, Any]) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -294,6 +303,12 @@ class _ColumnCard(QFrame):
         self._code.setStyleSheet("color:#888888; font-size:10px;")
         self._code.setWordWrap(True)
         layout.addWidget(self._code)
+        self._share = QLabel("", self)
+        self._share.setObjectName("share-label")
+        self._share.setWordWrap(True)
+        self._share.setStyleSheet("color:#333333; font-size:10px;")
+        self._share.setVisible(False)
+        layout.addWidget(self._share)
         layout.addStretch(1)
 
     def _apply_width(self, excel_width: int) -> None:
@@ -663,6 +678,7 @@ class RfpColumnsPanel(QWidget):
         self._updating_combo = False
         self._section_by_name = self._load_sections()
         self._units: list[dict[str, Any]] = []
+        self._shares: dict[str, dict[str, float]] = {}
 
         self._combo = QComboBox(self)
         self._hint = QLabel(_DEFAULT_HINT, self)
@@ -675,6 +691,10 @@ class RfpColumnsPanel(QWidget):
         self._btn_group = QPushButton("Сгруппировать", self)
         self._btn_ungroup = QPushButton("Разгруппировать", self)
         self._chk_hide = QCheckBox("Скрыть в Excel", self)
+        self._btn_share = QPushButton("Доля в xlsx", self)
+        self._btn_share.setToolTip(
+            "По финальному файлу: доля столбца в архиве, отдельно комментарии."
+        )
 
         self._btn_create.clicked.connect(self._create_from_current)
         self._btn_save.clicked.connect(self._save_active)
@@ -683,6 +703,7 @@ class RfpColumnsPanel(QWidget):
         self._btn_group.clicked.connect(self._group_selected)
         self._btn_ungroup.clicked.connect(self._ungroup_selected)
         self._chk_hide.toggled.connect(self._on_hide_toggled)
+        self._btn_share.clicked.connect(self._load_xlsx_shares)
         self._combo.currentIndexChanged.connect(self._on_combo_changed)
 
         top = QHBoxLayout()
@@ -697,6 +718,7 @@ class RfpColumnsPanel(QWidget):
         group_row.addWidget(self._btn_group)
         group_row.addWidget(self._btn_ungroup)
         group_row.addWidget(self._chk_hide)
+        group_row.addWidget(self._btn_share)
         group_row.addStretch(1)
 
         sheet_title = QLabel("На листе — эти столбцы пишутся в файл", self)
@@ -913,6 +935,7 @@ class RfpColumnsPanel(QWidget):
                 continue
             card = self._make_card(master, setting, self._unused_row)
             self._cards.append(card)
+        self._apply_shares()
         self._fit_host()
         self._restore_sheet_scroll(saved_scroll)
 
@@ -956,6 +979,40 @@ class RfpColumnsPanel(QWidget):
                 card.adjustSize()
         unused = [card for card in self._cards if card.parent() is self._unused_row]
         self._unused_row.set_order(unused)
+
+    def _apply_shares(self) -> None:
+        for card in self._cards:
+            index = card.column_index()
+            if not 0 <= index < len(self._columns):
+                card.set_share("")
+                continue
+            label = str(self._columns[index].get("header_label") or "")
+            share = self._shares.get(label)
+            card.set_share("" if share is None else format_column_share(share))
+
+    def _load_xlsx_shares(self) -> None:
+        path, _selected = QFileDialog.getOpenFileName(
+            self,
+            "Финальный xlsx",
+            "",
+            "Excel (*.xlsx)",
+        )
+        if not path:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            shares = column_xlsx_shares(path)
+        except (OSError, zipfile.BadZipFile) as exc:
+            QMessageBox.warning(self, "Доля в xlsx", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not shares:
+            QMessageBox.information(self, "Доля в xlsx", "На первом листе нет заголовков.")
+            return
+        self._shares = shares
+        self._apply_shares()
+        self._fit_host()
 
     def _on_combo_changed(self, _index: int) -> None:
         if self._updating_combo:

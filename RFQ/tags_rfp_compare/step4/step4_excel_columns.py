@@ -7,7 +7,10 @@ The built-in template id ``default`` is always derived from
 from __future__ import annotations
 
 import copy
+import re
 import uuid
+import zipfile
+from pathlib import Path
 from typing import Any
 
 from RFQ.tags_rfp_compare.rfp_tags_utils import load_config, save_config
@@ -522,3 +525,158 @@ def update_template_columns(template_id: str, columns: list | None) -> None:
         raise Step4ColumnTemplateError(f"Unknown template id: {tid}")
     tmpl["columns"] = normalize_template_columns(columns)
     save_step4_excel_column_state(state)
+
+
+def column_xlsx_shares(path: str | Path) -> dict[str, dict[str, float]]:
+    """Share of an xlsx file taken by each header on the first sheet.
+
+    Cell XML, shared strings and hyperlinks count toward the column total.
+    Comment text and the VML note shapes count again as ``comment_ratio``.
+    Ratios are fractions of the whole file. Byte fields are the compressed
+    share (zip), so they add up to the attributed part of the file.
+
+    Args:
+        path: Path to a ``.xlsx`` workbook.
+
+    Returns:
+        Map of header text to ``ratio``, ``comment_ratio``, ``nbytes``,
+        ``comment_nbytes`` and ``file_nbytes``.
+    """
+    file_path = Path(path)
+    file_nbytes = file_path.stat().st_size
+    with zipfile.ZipFile(file_path) as archive:
+        names = set(archive.namelist())
+        sheet_name = "xl/worksheets/sheet1.xml"
+        if sheet_name not in names:
+            return {}
+        sheet = archive.read(sheet_name)
+        strings = archive.read("xl/sharedStrings.xml") if "xl/sharedStrings.xml" in names else b""
+        comments = archive.read("xl/comments1.xml") if "xl/comments1.xml" in names else b""
+        vml_name = next((name for name in names if name.startswith("xl/drawings/vmlDrawing")), "")
+        vml = archive.read(vml_name) if vml_name else b""
+        rels_name = "xl/worksheets/_rels/sheet1.xml.rels"
+        rels = archive.read(rels_name) if rels_name in names else b""
+        compressed = {info.filename: info.compress_size for info in archive.infolist()}
+
+    headers = _header_by_column(sheet, strings)
+    cell_bytes: dict[int, int] = {}
+    string_refs: dict[int, dict[int, int]] = {}
+    for match in re.finditer(br'<c r="([A-Z]+)\d+"([^>/]*)(?:/>|>(.*?)</c>)', sheet, re.DOTALL):
+        col = _col_index(match.group(1).decode("ascii"))
+        cell_bytes[col] = cell_bytes.get(col, 0) + len(match.group(0))
+        attrs = match.group(2)
+        body = match.group(3) or b""
+        if b't="s"' not in attrs:
+            continue
+        value = re.search(br"<v>(\d+)</v>", body)
+        if value is None:
+            continue
+        index = int(value.group(1))
+        bucket = string_refs.setdefault(col, {})
+        bucket[index] = bucket.get(index, 0) + 1
+
+    string_sizes = [len(chunk) for chunk in re.findall(br"<si(?: [^>]*)?>.*?</si>|<si/>", strings, re.DOTALL)]
+    text_bytes: dict[int, float] = {}
+    ref_totals: dict[int, int] = {}
+    for counts in string_refs.values():
+        for index, count in counts.items():
+            ref_totals[index] = ref_totals.get(index, 0) + count
+    for col, counts in string_refs.items():
+        for index, count in counts.items():
+            if index >= len(string_sizes) or ref_totals.get(index, 0) <= 0:
+                continue
+            text_bytes[col] = text_bytes.get(col, 0.0) + string_sizes[index] * count / ref_totals[index]
+
+    rel_size = {
+        match.group(1).decode("ascii"): len(match.group(0))
+        for match in re.finditer(br'<Relationship\b[^>]*Id="([^"]+)"[^>]*/>', rels)
+    }
+    link_bytes: dict[int, int] = {}
+    for match in re.finditer(br'<hyperlink ref="([A-Z]+)\d+"[^>]*r:id="([^"]+)"[^>]*/>', sheet):
+        col = _col_index(match.group(1).decode("ascii"))
+        link_bytes[col] = link_bytes.get(col, 0) + len(match.group(0))
+        link_bytes[col] += rel_size.get(match.group(2).decode("ascii"), 0)
+
+    comment_xml: dict[int, int] = {}
+    for match in re.finditer(br'<comment ref="([A-Z]+)\d+".*?</comment>', comments, re.DOTALL):
+        col = _col_index(match.group(1).decode("ascii"))
+        comment_xml[col] = comment_xml.get(col, 0) + len(match.group(0))
+    vml_bytes: dict[int, int] = {}
+    for shape in vml.split(b"<v:shape ")[1:]:
+        found = re.search(br"<x:Column>(\d+)</x:Column>", shape)
+        if found is None:
+            continue
+        col = int(found.group(1))
+        vml_bytes[col] = vml_bytes.get(col, 0) + len(shape)
+
+    scaled = _scale_parts(
+        {
+            "sheet": (cell_bytes, len(sheet), compressed.get(sheet_name, 0)),
+            "strings": (text_bytes, len(strings), compressed.get("xl/sharedStrings.xml", 0)),
+            "links": (link_bytes, len(rels) + sheet.count(b"<hyperlink "), compressed.get(rels_name, 0)),
+            "comments": (comment_xml, len(comments), compressed.get("xl/comments1.xml", 0)),
+            "vml": (vml_bytes, len(vml), compressed.get(vml_name, 0)),
+        }
+    )
+    result: dict[str, dict[str, float]] = {}
+    for col, header in headers.items():
+        total = scaled["sheet"].get(col, 0.0) + scaled["strings"].get(col, 0.0) + scaled["links"].get(col, 0.0)
+        comments_n = scaled["comments"].get(col, 0.0) + scaled["vml"].get(col, 0.0)
+        total += comments_n
+        label = header.strip()
+        if not label:
+            continue
+        result[label] = {
+            "ratio": total / file_nbytes if file_nbytes else 0.0,
+            "comment_ratio": comments_n / file_nbytes if file_nbytes else 0.0,
+            "nbytes": total,
+            "comment_nbytes": comments_n,
+            "file_nbytes": float(file_nbytes),
+        }
+    return result
+
+
+def format_column_share(share: dict[str, float]) -> str:
+    """One card caption: file share and a separate comment share."""
+    pct = 100.0 * float(share.get("ratio") or 0.0)
+    comment_pct = 100.0 * float(share.get("comment_ratio") or 0.0)
+    megabytes = float(share.get("nbytes") or 0.0) / (1024.0 * 1024.0)
+    return f"{pct:.1f}% · {megabytes:.2f} МБ\nкомм. {comment_pct:.1f}%"
+
+
+def _col_index(letters: str) -> int:
+    number = 0
+    for char in letters:
+        number = number * 26 + (ord(char) - 64)
+    return number - 1
+
+
+def _header_by_column(sheet: bytes, strings: bytes) -> dict[int, str]:
+    values = re.findall(br"<si(?: [^>]*)?>(.*?)</si>", strings, re.DOTALL)
+    texts = [re.sub(br"<[^>]+>", b"", raw).decode("utf-8", "replace") for raw in values]
+    row = re.search(br'<row r="1".*?</row>', sheet, re.DOTALL)
+    if row is None:
+        return {}
+    headers: dict[int, str] = {}
+    for match in re.finditer(br'<c r="([A-Z]+)1"[^>]*>(.*?)</c>', row.group(0), re.DOTALL):
+        col = _col_index(match.group(1).decode("ascii"))
+        value = re.search(br"<v>(\d+)</v>", match.group(2))
+        if value is None:
+            continue
+        index = int(value.group(1))
+        if 0 <= index < len(texts):
+            headers[col] = texts[index]
+    return headers
+
+
+def _scale_parts(
+    parts: dict[str, tuple[dict[int, float], int, int]],
+) -> dict[str, dict[int, float]]:
+    scaled: dict[str, dict[int, float]] = {}
+    for name, (by_col, raw_total, compressed) in parts.items():
+        out: dict[int, float] = {}
+        if raw_total > 0 and compressed > 0:
+            for col, amount in by_col.items():
+                out[col] = compressed * (float(amount) / raw_total)
+        scaled[name] = out
+    return scaled

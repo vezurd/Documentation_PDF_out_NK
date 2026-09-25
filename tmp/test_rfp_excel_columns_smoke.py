@@ -39,6 +39,7 @@ from RFQ.tags_rfp_compare.step4.step4_excel_columns import (
     Step4ColumnTemplateError,
     builtin_column_settings,
     create_template,
+    column_xlsx_shares,
     delete_template,
     normalize_template_columns,
     outline_options_for_visible,
@@ -81,6 +82,48 @@ class _ConfigSandbox:
 
 
 class Step4ExcelColumnsSmokeTest(unittest.TestCase):
+    def test_column_share_splits_text_and_comments(self) -> None:
+        import tempfile
+        import zipfile
+
+        strings = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<sst><si><t>Код</t></si><si><t>Примечание</t></si><si><t>ABC</t></si></sst>"
+        ).encode()
+        sheet = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<worksheet><sheetData>'
+            '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>'
+            '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="s"><v>2</v></c></row>'
+            "</sheetData>"
+            '<hyperlinks><hyperlink ref="A2" r:id="rId1"/></hyperlinks>'
+            "</worksheet>"
+        ).encode()
+        comments = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<comments><comment ref="B2"><text><t>заметка</t></text></comment></comments>'
+        ).encode()
+        vml = b'<xml><v:shape><x:ClientData><x:Column>1</x:Column></x:ClientData></v:shape></xml>'
+        rels = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Relationships><Relationship Id="rId1" Target="file.xlsx"/></Relationships>'
+        ).encode()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "sample.xlsx"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("xl/sharedStrings.xml", strings)
+                archive.writestr("xl/worksheets/sheet1.xml", sheet)
+                archive.writestr("xl/comments1.xml", comments)
+                archive.writestr("xl/drawings/vmlDrawing1.vml", vml)
+                archive.writestr("xl/worksheets/_rels/sheet1.xml.rels", rels)
+            shares = column_xlsx_shares(path)
+        self.assertIn("Код", shares)
+        self.assertIn("Примечание", shares)
+        self.assertGreater(shares["Код"]["ratio"], 0)
+        self.assertEqual(shares["Код"]["comment_ratio"], 0)
+        self.assertGreater(shares["Примечание"]["comment_ratio"], 0)
+        self.assertGreater(shares["Примечание"]["nbytes"], shares["Примечание"]["comment_nbytes"])
+
     def test_builtin_status_group_excludes_equipment_type(self) -> None:
         settings = builtin_column_settings()
         by_name = _by_name(settings)
