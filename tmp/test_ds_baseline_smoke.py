@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 import base.t_comm_initial_classes as t_com_init_cls
 from RFQ.rfp_parts.ds_baseline import (
     BASELINE_XLSX_NAME,
+    ISSUE_BAD_TITLE,
     ISSUE_EMPTY_CODE,
     ISSUE_EXACT_DUPLICATE,
     ISSUE_GROUP_FALLBACK,
@@ -728,6 +729,37 @@ class DsBaselineSmokeTest(unittest.TestCase):
             )
             self.assertEqual(result.positions, [])
             self.assertTrue(result.blocking)
+
+    def test_bad_title_mark_is_one_error_per_value_and_blocks_baseline(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    DS_HEADER,
+                    _ds_row(npp=1, title="2235", system="2235-KSB"),
+                    _ds_row(npp=2, title="2235", system="2235-KSB"),
+                    _ds_row(npp=3, title="8630", system="KSB4-ОЗХ"),
+                    _ds_row(npp=4, title="2235", system="KSB"),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            bad = [item for item in result.issues if item.code == ISSUE_BAD_TITLE]
+            self.assertEqual(len(bad), 2, [item.message for item in bad])
+            doubled = next(item for item in bad if "2235-2235-KSB" in item.message)
+            self.assertIn("2235-KSB", doubled.message)
+            self.assertIn("2 строк", doubled.message)
+            self.assertEqual(doubled.excel_row, 2)
+            self.assertEqual(doubled.level, "ERROR")
+            ozx = next(item for item in bad if "ОЗХ" in item.message)
+            self.assertIn("8630-KSB4-ОЗХ", ozx.message)
+            self.assertTrue(result.blocking)
+            self.assertIsNone(result.baseline_path)
+            self.assertEqual(len(result.positions), 4)
 
     def test_no_ds_header_says_active_sheet_failed_header_check(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:

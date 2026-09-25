@@ -72,7 +72,7 @@ from RFQ.units_convert.models import (
 
 IssueLevel = Literal["ERROR", "WARN", "OVERLAY"]
 
-ALGORITHM_VERSION = "ds_baseline_v2"
+ALGORITHM_VERSION = "ds_baseline_v3"
 BASELINE_XLSX_NAME = "Свод ДС для запуска.xlsx"
 STRUCTURE_REPORT_PREFIX = "Сводный отчет по ошибкам - ДС"
 QUALITY_REPORT_PREFIX = "Отчет по качеству данных - ДС"
@@ -143,6 +143,7 @@ ISSUE_QTY_NON_NUMERIC = "qty_non_numeric"
 ISSUE_QTY_NON_FINITE = "qty_non_finite"
 ISSUE_QTY_NEGATIVE = "qty_negative"
 ISSUE_QTY_ZERO = "qty_zero"
+ISSUE_BAD_TITLE = "bad_title_mark"
 ISSUE_EMPTY_CODE = "empty_procurement_code"
 ISSUE_UNKNOWN_GOOGLE = "unknown_google_code"
 ISSUE_EXACT_DUPLICATE = "exact_duplicate_row"
@@ -172,6 +173,7 @@ _ISSUE_LABELS = {
     ISSUE_QTY_NON_FINITE: "Количество не конечное",
     ISSUE_QTY_NEGATIVE: "Отрицательное количество",
     ISSUE_QTY_ZERO: "Нулевое количество",
+    ISSUE_BAD_TITLE: "Титул-марка не по форме",
     ISSUE_EMPTY_CODE: "Пустой закупочный код",
     ISSUE_UNKNOWN_GOOGLE: "Код вне Google",
     ISSUE_EXACT_DUPLICATE: "Дубль строки",
@@ -1500,12 +1502,24 @@ def _pad(values: Sequence[object], width: int) -> list[object]:
     return padded
 
 
+# Same token as AgccFilenamePatterns.TITLE_SYSTEM: 2235-KSB, 8630-KSB4, 7421-SKUD.1.
+_TITLE_MARK_RE = re.compile(
+    r"\d{4}-[a-zA-Zа-яА-Я]{2,5}\d{0,2}(?:\.\d)?"
+)
+
+
 def _composite_title(title: str, system: str) -> str:
     title = title.strip()
     system = system.strip()
     if title and system:
         return f"{title}-{system}"
     return title or system
+
+
+def _title_mark_is_valid(title: str, system: str) -> bool:
+    """True when the Step1 title cell is ``2235-KSB``, not ``2235-2235-KSB``."""
+
+    return _TITLE_MARK_RE.fullmatch(_composite_title(title, system)) is not None
 
 
 def _parse_qty(
@@ -1873,6 +1887,7 @@ def _parse_open_workbook(
 
     registry_row = registry_by_id.get(source_id)
     seen_core: dict[tuple[str, ...], int] = {}
+    bad_titles: dict[str, list[object]] = {}
     qty_col_index = offset + ROLE_INDEX["qty"]
     emitted_group_fallback = False
     for excel_row, formula_values, value_values, formula_cols in _iter_paired_sheet_rows(
@@ -2125,6 +2140,14 @@ def _parse_open_workbook(
                 )
             )
 
+        composite = _composite_title(title, system)
+        if not _title_mark_is_valid(title, system):
+            hit = bad_titles.get(composite)
+            if hit is None:
+                bad_titles[composite] = [1, excel_row, title, system]
+            else:
+                hit[0] = int(hit[0]) + 1
+
         positions.append(
             DsBaselinePosition(
                 source_id=source_id,
@@ -2156,6 +2179,31 @@ def _parse_open_workbook(
                 unit_source=units,
                 diagnostic_tags=tags,
                 leading_empty=offset,
+            )
+        )
+    for composite, hit in bad_titles.items():
+        count = int(hit[0])
+        first_row = int(hit[1])
+        raw_title = str(hit[2])
+        raw_system = str(hit[3])
+        rows_note = f", {count} строк" if count > 1 else ""
+        if composite:
+            text = (
+                f"титул-марка «{composite}» не вида 2235-KSB "
+                f"(титул «{raw_title}», раздел «{raw_system}»{rows_note})"
+            )
+        else:
+            text = f"титул-марка пустая, ожидается 2235-KSB{rows_note}"
+        issues.append(
+            _issue(
+                ISSUE_BAD_TITLE,
+                "ERROR",
+                text,
+                path=source.path,
+                relpath=source.relpath,
+                sheet=sheet_name,
+                excel_row=first_row,
+                source_id=source_id,
             )
         )
     return positions
