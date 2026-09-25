@@ -53,7 +53,7 @@ alwaysApply: false
 > Ориентир по UX/запуску — `AI_v2_monitor.mdc` (отдельный процесс PySide6, не смешивать с CTk `main.py`).
 
 **Пакет:** `ds_compare_center/`  
-**Запуск:** `python -m ds_compare_center [--tab run|mto_paths|settings|columns|packing|tsd|tsd_help|upd|upd_load|rfp|rfp_settings|rfp_parts|rfp_ds_id|rfp_ds_mp|misc|mto_run|bbb|mto_settings|vpn|cursor_vpn]` (без `--tab` открывается **Прочее · Запуск**)  
+**Запуск:** `python -m ds_compare_center [--tab run|mto_paths|settings|columns|packing|tsd|tsd_help|upd|upd_load|rfp|rfp_settings|rfp_columns|rfp_parts|rfp_ds_id|rfp_ds_mp|misc|mto_run|bbb|mto_settings|vpn|cursor_vpn]` (без `--tab` открывается **Прочее · Запуск**)  
 **Из `main.py`:** кнопка «Центр управления ДС vs MTO» → `subprocess.Popen([sys.executable, "-m", "ds_compare_center"])`.  
 **VS Code:** `.vscode/launch.json` — конфигурации `Python: ds_compare_center (...)`.
 
@@ -72,6 +72,7 @@ alwaysApply: false
 | `rfp_run_panel.py` | **RFP · Запуск**: сверху сворачиваемый режим источника (`rfp_parts.input_mode`); dynamic action text, aggregate/as-build, Step4, 15 live milestones. Итоговый xlsx Step4 — `AI_rfp_step4_excel.mdc` |
 | `rfp_progress_parser.py` | Chunk-safe parser `@@RFP_MILESTONE ` JSON |
 | `rfp_settings_panel.py` | **RFP · Настройки**: native PySide6, профили Main/As-build, все RFP settings, УЛ status/navigation |
+| `rfp_columns_panel.py` | **RFP · Столбцы**: вертикальные карточки шаблонов столбцов Step4 (`step4_excel_columns`) |
 | `rfp_parts_panel.py` | **RFP · Сбор частей**: report-only `python -m RFQ.rfp_parts` из `RFP_Зиновьев` (сумма в свод, без decrease); штамп-папки `…\RFP сводный файл\YYYY.MM.DD_HH.MM\` (net + collisions) |
 | `rfp_ds_id_panel.py` | **RFP · ДС ↔ УЛ**: таблица покрытия файлов RFP vs папок УЛ (`check_ds_id_coverage`) |
 | `rfp_ds_mp_panel.py` | **RFP · ДС ↔ МП**: таблица файлов RFP vs фамилий МП (`run_ds_roster_compare_job`) |
@@ -98,6 +99,7 @@ alwaysApply: false
 | **ДС · УПД** | `upd` / `upd_load` | файлы закачки 1С («Реализация 2_0»); position_row; свод с именем файла и путём |
 | **RFP · Запуск** | `rfp` / `rfp_run` | Сверху блок «Источник»: свёрнут — выбранный режим, развёрнут — выбор и описание (`legacy_net` / `ds_only` / `hybrid`, пишется в Main JSON сразу). Основной/as-build `ProcessJobRunner`, открыть Step4, открыть матрицу BCC, dynamic `↔ УЛ`, 15 live milestones |
 | **RFP · Настройки** | `rfp_settings` | Native редактор двух JSON-профилей; merge-on-save; галка последнего свода, папка ДС, реестр, `rfp_path`; as-build fixed; статус УЛ |
+| **RFP · Столбцы** | `rfp_columns` / `rfp_excel_columns` | vertical WYSIWYG column templates for Step4 |
 | **RFP · Сбор частей** | `rfp_parts` / `parts` | Report-only: папка `RFP_Зиновьев`, сумма в `rfp_parts_net.xlsx` (`AI_rfp_parts.mdc`); «Проверить части RFP и сформировать отчёт»; production Step1/`Сводная RFP.xlsx` не создаются |
 | **RFP · ДС ↔ УЛ** | `rfp_ds_id` / `ds_id` / `rfp_ul` | покрытие файлов RFP vs папок УЛ по фактическому номеру ДС; [ds_identity.py](RFQ/rfp_parts/ds_identity.py) |
 | **RFP · ДС ↔ МП** | `rfp_ds_mp` / `ds_mp` / `rfp_mp` / `rfp_managers` | файлы `RFP_Зиновьев` vs фамилии в `Список ДС - Фамилии МП.xlsx`; вердикт «ОК / надо дозаполнить / лишние / дубликаты»; на Лист2 справа столбцы Статус / Дубликат / Что делать (`Имя ДС` и `Фамилия` не меняет); [ds_manager_roster.py](RFQ/tags_rfp_compare/ds_manager_roster.py) |

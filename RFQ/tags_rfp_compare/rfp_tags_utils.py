@@ -202,6 +202,10 @@ def get_default_config() -> Dict[str, Any]:
             "finalize_timing_top_n": 5,
             "save_input_fingerprints": True,
         },
+        "step4_excel_columns": {
+            "active_id": "default",
+            "templates": [],
+        },
     }
     col_opt = _load_column_optimization_default()
     if col_opt:

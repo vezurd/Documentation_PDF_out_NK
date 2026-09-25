@@ -85,7 +85,7 @@ OUTPUT_COLUMNS_CONFIG: List[ColumnDef] = [
     ColumnDef(DS_CODE_1C,                       "Код 1С",                       "rfp", output=False),
     ColumnDef(CODE,                             "Код RFP",                      "rfp", width=15, group_level=1, group_collapsed=False),
     ColumnDef(NAME,                             "Наименование RFP",             "rfp", width=25, group_level=1, group_collapsed=False),
-    ColumnDef(TYPE_MARK,                        "Тип марки RFP",                "rfp", group_level=1, group_collapsed=False),
+    ColumnDef(TYPE_MARK,                        "Тип марки RFP",                "rfp", width=20, group_level=1, group_collapsed=False),
     ColumnDef(VENDOR,                           "Поставщик RFP",                "rfp", width=18, group_level=1, group_collapsed=False),
     ColumnDef(VALUES,                           "Кол-во RFP",                   "rfp", width=7, group_level=0, group_collapsed=False),
     ColumnDef(UNITS,                            "Ед. изм. RFP",                 "rfp", width=10, group_level=0, group_collapsed=False),
@@ -101,7 +101,7 @@ OUTPUT_COLUMNS_CONFIG: List[ColumnDef] = [
     ColumnDef(MATCH_STATUS_VO,                  "VO, Сравнение Тегов",          "status", output=False, width=22, group_level=None),
     ColumnDef(MATCH_STATUS_TAGS,                "Итог, Сравнение Тегов",        "status", output=False, width=22, group_level=None),
     ColumnDef(MATCH_STATUS_CODE_REPLACEMENT,    "Замены Кодов",                 "status", output=False, width=22,  group_level=None),
-    ColumnDef(EQUIPMENT_TYPE_STATUS,            "Тип оборудования",             "status", output=True, width=10, group_level=1),
+    ColumnDef(EQUIPMENT_TYPE_STATUS,            "Тип оборудования",             "status", output=True, width=10, group_level=None),
     ColumnDef(IN_CABINET,                       "Тег Шкафа",                    "status", output=True, width=25, group_level=0),
     ColumnDef(MTO_CABINET_EQUIPMENT,            "MTO, Шкафное оборудование",    "status", output=False, width=22, group_level=None),
     ColumnDef(MATCH_STATUS_RFP_MTO_STRUCK_CODE, "RFP vs MTO, Код (зачеркнутый)","status", output=False, width=22, group_level=None),
@@ -317,32 +317,6 @@ def _columndef_for_grouping(col_name: str) -> ColumnDef | None:
     return None
 
 
-def _get_rfp_columns_for_output() -> List[str]:
-    """Visible RFP columns in OUTPUT_COLUMNS_CONFIG order."""
-    return [d.col_name for d in OUTPUT_COLUMNS_CONFIG if d.section == "rfp" and d.output]
-
-
-def _build_output_column_dict() -> dict[int, str]:
-    rfp_cols = _get_rfp_columns_for_output()
-    result: dict[int, str] = {}
-    col_idx = 0
-    rfp_processed = False
-    for defn in OUTPUT_COLUMNS_CONFIG:
-        if not defn.output:
-            continue
-        if defn.section == "rfp":
-            if rfp_processed:
-                continue
-            rfp_processed = True
-            for col_name in rfp_cols:
-                result[col_idx] = col_name
-                col_idx += 1
-        else:
-            result[col_idx] = defn.col_name
-            col_idx += 1
-    return result
-
-
 def _path_is_unc(path: str) -> bool:
     normalized = os.path.normpath(path)
     return normalized.startswith("\\\\") or normalized.startswith("//")
@@ -353,8 +327,20 @@ def save_match_result_to_excel(
     result_dir: str,
     debug_log: List[str] | None = None,
     packing_audit: RfpPackingAudit | None = None,
+    column_config: list[ColumnDef] | None = None,
 ) -> str:
-    """Сохраняет результат сопоставления RFP и MTO в Excel (xlsxwriter)."""
+    """Save the RFP/MTO match result to an xlsx workbook.
+
+    Args:
+        result_rows: Matched rows to export.
+        result_dir: Destination directory.
+        debug_log: Optional list that receives timing lines.
+        packing_audit: Optional packing-list audit for UL hyperlinks.
+        column_config: Output columns; ``None`` uses the active Step4 template.
+
+    Returns:
+        Path of the published workbook.
+    """
     tmp_path = None
     publish_ok = False
     try:
@@ -372,36 +358,21 @@ def save_match_result_to_excel(
         )
         ws = wb.add_worksheet("Сопоставление RFP и MTO")
 
-        output_column_dict = _build_output_column_dict()
-        col_def_by_name = {d.col_name: d for d in OUTPUT_COLUMNS_CONFIG}
-        rfp_cols = _get_rfp_columns_for_output()
-
-        # Build header info: labels, sections, widths
-        headers: List[str] = []
-        col_section: dict[int, str] = {}
-        col_width: dict[int, int] = {}
-
-        col_idx = 0
-        rfp_processed = False
-        for defn in OUTPUT_COLUMNS_CONFIG:
-            if not defn.output:
-                continue
-            if defn.section == "rfp":
-                if rfp_processed:
-                    continue
-                rfp_processed = True
-                for col_name in rfp_cols:
-                    d = col_def_by_name.get(col_name)
-                    headers.append(d.header_label if d else col_name)
-                    col_section[col_idx] = "rfp"
-                    col_width[col_idx] = (d.width if d else DEFAULT_COLUMN_WIDTH) or DEFAULT_COLUMN_WIDTH
-                    col_idx += 1
-            else:
-                headers.append(defn.header_label)
-                col_section[col_idx] = defn.section
-                col_width[col_idx] = defn.width or DEFAULT_COLUMN_WIDTH
-                col_idx += 1
-
+        if column_config is None:
+            from RFQ.tags_rfp_compare.step4.step4_excel_columns import (
+                resolve_active_column_defs,
+            )
+            column_config = resolve_active_column_defs()
+        from RFQ.tags_rfp_compare.step4.step4_excel_columns import (
+            outline_options_for_visible,
+        )
+        visible_defs = [d for d in column_config if d.output]
+        output_column_dict = {i: d.col_name for i, d in enumerate(visible_defs)}
+        headers = [d.header_label for d in visible_defs]
+        col_section = {i: d.section for i, d in enumerate(visible_defs)}
+        col_width = {
+            i: (d.width or DEFAULT_COLUMN_WIDTH) for i, d in enumerate(visible_defs)
+        }
         num_cols = len(headers)
 
         # Pre-build formats
@@ -567,45 +538,12 @@ def save_match_result_to_excel(
         t_write = time.perf_counter() - t_write_start
         append_timing_log(result_dir, f"save_match_result_to_excel::write+styles: {t_write:.3f}s")
 
-        # Column widths + outline grouping
-        # Только ColumnDef с output=True (см. _columndef_for_grouping)
-        col_group_opts: dict[int, dict] = {}
-        for ci, col_name in output_column_dict.items():
-            d = _columndef_for_grouping(col_name)
-            if not d:
-                continue
-            if d.group_level is not None:
-                col_group_opts[ci] = {"level": d.group_level, "hidden": d.group_collapsed}
-            elif d.group_collapsed:
-                # Скрытый столбец вне outline — level=0, иначе соседние колонки с level=1 слипнутся в одну группу
-                col_group_opts[ci] = {"level": 0, "hidden": True}
-
-        def _is_outline_group_hidden(ci: int) -> bool:
-            o = col_group_opts.get(ci)
-            if not o or not o.get("hidden"):
-                return False
-            return int(o.get("level", 0)) >= 1
-
-        # Маркер +/- только после блока скрытых внутри outline (level>=1), не после просто hidden level=0
-        prev_collapsed = False
-        for ci in sorted(output_column_dict):
-            is_collapsed = _is_outline_group_hidden(ci)
-            if prev_collapsed and not is_collapsed:
-                existing = col_group_opts.get(ci, {})
-                merged = {**existing, "collapsed": True}
-                if "level" not in merged:
-                    merged["level"] = 0
-                col_group_opts[ci] = merged
-            prev_collapsed = is_collapsed
-
+        # Column widths + outline grouping (summary column is always level 0).
+        col_group_opts = outline_options_for_visible(column_config)
         for ci in range(num_cols):
             w = col_width.get(ci, DEFAULT_COLUMN_WIDTH)
-            opts = col_group_opts.get(ci)
-            if opts:
-                ws.set_column(ci, ci, w, None, opts)
-            else:
-                # Явный level=0 — разрыв outline между смежными блоками с level=1
-                ws.set_column(ci, ci, w, None, {"level": 0})
+            opts = col_group_opts.get(ci) or {"level": 0}
+            ws.set_column(ci, ci, w, None, opts)
 
         # Auto-filter and freeze
         if total_rows > 0:

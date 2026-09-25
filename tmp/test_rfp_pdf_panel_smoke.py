@@ -91,10 +91,10 @@ class RfpPdfPanelSmokeTest(unittest.TestCase):
         panel.deleteLater()
         self.app.processEvents()
 
-    def test_tab_index_rfp_pdf_is_11(self) -> None:
-        self.assertEqual(_TAB_INDEX_RFP_PDF, 11)
-        self.assertEqual(_TAB_BY_NAME["rfp_pdf"], 11)
-        self.assertEqual(_TAB_BY_NAME["pdf"], 11)
+    def test_tab_index_rfp_pdf_is_12(self) -> None:
+        self.assertEqual(_TAB_INDEX_RFP_PDF, 12)
+        self.assertEqual(_TAB_BY_NAME["rfp_pdf"], 12)
+        self.assertEqual(_TAB_BY_NAME["pdf"], 12)
 
 
 if __name__ == "__main__":

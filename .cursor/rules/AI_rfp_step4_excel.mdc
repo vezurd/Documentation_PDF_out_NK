@@ -7,6 +7,7 @@ globs:
   - "ds_compare_center/rfp_run_panel.py"
   - "ds_compare_center/rfp_progress_parser.py"
   - "ds_compare_center/rfp_settings_panel.py"
+  - "ds_compare_center/rfp_columns_panel.py"
   - "ds_compare_center/rfp_ds_id_panel.py"
   - "ds_compare_center/rfp_ds_mp_panel.py"
   - "RFQ/rfp_parts/ds_identity.py"
@@ -37,6 +38,8 @@ alwaysApply: false
 | Файл | Роль |
 |------|------|
 | [step4_6_save_match_result_to_excel.py](RFQ/tags_rfp_compare/step4/step4_6_save_match_result_to_excel.py) | `ColumnDef`, `OUTPUT_COLUMNS_CONFIG`, цвет из `CheckElement.color`, комментарии, zip→UNC |
+| [step4_excel_columns.py](RFQ/tags_rfp_compare/step4/step4_excel_columns.py) | шаблоны столбцов Step4; builtin `default` из `OUTPUT_COLUMNS_CONFIG`; outline summary = level 0 |
+| [rfp_columns_panel.py](ds_compare_center/rfp_columns_panel.py) | вкладка **RFP · Столбцы**: WYSIWYG-карточки, именованные шаблоны |
 | [step4_6_quality_sheets.py](RFQ/tags_rfp_compare/step4/step4_6_quality_sheets.py) | доп. листы Сводка / **Статистика ДС** / Посадка / Статусы / Проблемы УЛ |
 | [step4_packing_compare.py](RFQ/tags_rfp_compare/step4/step4_packing_compare.py) | статусы УЛ, `packing_units_mismatch`, merge UL status/trace в result; skip `is_excluded_from_supply` |
 | [rfp_supply_status.py](RFQ/tags_rfp_compare/rfp_supply_status.py) | канон. «Исключен из поставки»; «тег заменен на»; unknown → fatal |
@@ -58,7 +61,7 @@ alwaysApply: false
 | [ds_id_coverage.py](RFQ/rfp_parts/ds_id_coverage.py) | `check_ds_id_coverage`, `run_ds_id_coverage_job`; milestone `ds_id_check` |
 | [colors.py](utils/colors.py) | `Color.*` → fill в xlsxwriter |
 
-**Не путать:** вкладка **ДС · Столбцы Excel** — другой Excel. Step4 раскладка **только в коде** `OUTPUT_COLUMNS_CONFIG`.
+**Не путать:** вкладка **ДС · Столбцы Excel** — другой Excel. Builtin-раскладка Step4 — `OUTPUT_COLUMNS_CONFIG`; пользовательские шаблоны (порядок, видимость, подпись, ширина, группы) живут в `step4_excel_columns` файла `rfp_tags_compare_config.json`. Шаблон `default` только из кода, read-only, для отката; `active_id` запоминается; неизвестный id → `default`. GUI: вкладка **RFP · Столбцы** (`--tab rfp_columns` / `rfp_excel_columns`). Outline: члены группы `level=1` (+ `hidden` если свёрнута); столбец-итог **после** группы — `level=0` + `collapsed` (никогда `collapsed` вместе с `level>=1`). Баг «Тип оборудования» (`EQUIPMENT_TYPE_STATUS`) был в том, что summary оставался `level=1`.
 
 ## Видимые столбцы (актуально)
 
@@ -248,6 +251,7 @@ python tmp/test_rfp_run_progress_table_smoke.py
 python tmp/test_step4_ds_status_stats_smoke.py
 python tmp/test_rfp_supply_status_smoke.py
 python tmp/test_rfp_tag_count_mismatch_smoke.py
+python tmp/test_rfp_excel_columns_smoke.py
 ```
 
 `test_rfp_packing_compare_smoke.py` также покрывает collapse по ед. изм., MTO−RFP diff, light-copy UL, Excel UL headers, «Порядковый ДС» / «Фактический ДС», leftover «Только в УЛ» (`DS_ACTUAL`=`ДС{n}` из папки, `DS_NAME`=`ДС{n}_RFP_не_найден`, фамилия МП если фактический ДС с одной МП; ГФ — `RFP_не_найден`), госфин-ярлык `ДС1_ГОСФИН_AGCC` → МП по `ДС1`, изоляцию очередей A по папке (ДС29 vs ДС82, `ДС92_24Б`↔папка ДС92, ГФ leftover), leftover УЛ → МТО/РКД без RFP (`ds_name=""`; инцидент 2319-KSB; регрессия 8445: RFP ДС29 не теряет слоты, хвост ДС82 садится на МТО-only), «Менеджер ДС» / пути RFP·МТО, overlay ГЭМ (OPEN_UPD / «Только в МТО» + титул 8950 + справочник кодов; **вся строка** `#C6EFCE`; новые «Поставлено» статусы **не** в overlay; непустой `IN_CABINET` **не** overlay), лист **Статистика ДС**. Skip «Исключен из поставки»: **`test_rfp_supply_status_smoke.py`**.

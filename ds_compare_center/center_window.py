@@ -77,6 +77,7 @@ from ds_compare_center.columns_panel import ColumnsPanel
 from ds_compare_center.layout_persistence import DebouncedLayoutSaver
 from ds_compare_center.misc_run_panel import MiscRunPanel
 from ds_compare_center.mto_paths_panel import MtoPathsPanel
+from ds_compare_center.rfp_columns_panel import RfpColumnsPanel
 from ds_compare_center.rfp_ds_id_panel import RfpDsIdPanel
 from ds_compare_center.rfp_ds_mp_panel import RfpDsMpPanel
 from ds_compare_center.rfp_mix_settings import read_collect_mix_mode
@@ -121,14 +122,15 @@ _TAB_INDEX_UPD = 6
 _TAB_INDEX_SEP_RFP = 7
 _TAB_INDEX_RFP_RUN = 8
 _TAB_INDEX_RFP_SETTINGS = 9
-_TAB_INDEX_RFP_PARTS = 10
-_TAB_INDEX_RFP_PDF = 11
-_TAB_INDEX_RFP_DS_ID = 12
-_TAB_INDEX_RFP_DS_MP = 13
-_TAB_INDEX_SEP_MISC = 14
-_TAB_INDEX_MISC_RUN = 15
-_TAB_INDEX_BBB_SETTINGS = 16
-_TAB_INDEX_VPN = 17
+_TAB_INDEX_RFP_COLUMNS = 10
+_TAB_INDEX_RFP_PARTS = 11
+_TAB_INDEX_RFP_PDF = 12
+_TAB_INDEX_RFP_DS_ID = 13
+_TAB_INDEX_RFP_DS_MP = 14
+_TAB_INDEX_SEP_MISC = 15
+_TAB_INDEX_MISC_RUN = 16
+_TAB_INDEX_BBB_SETTINGS = 17
+_TAB_INDEX_VPN = 18
 _WINDOW_TITLE = "Центр ДС, RFP и MTO"
 _EXCEL_FILTER = "Excel files (*.xlsx *.xlsm *.xls);;All files (*.*)"
 # Vertical gaps (~15–20% tighter than original) so block 3 actions fit without scroll on open.
@@ -203,6 +205,8 @@ _TAB_BY_NAME = {
     "rfp": _TAB_INDEX_RFP_RUN,
     "rfp_run": _TAB_INDEX_RFP_RUN,
     "rfp_settings": _TAB_INDEX_RFP_SETTINGS,
+    "rfp_columns": _TAB_INDEX_RFP_COLUMNS,
+    "rfp_excel_columns": _TAB_INDEX_RFP_COLUMNS,
     "rfp_parts": _TAB_INDEX_RFP_PARTS,
     "parts": _TAB_INDEX_RFP_PARTS,
     "rfp_pdf": _TAB_INDEX_RFP_PDF,
@@ -313,6 +317,7 @@ class CenterWindow(QWidget):
             on_saved=self._on_rfp_settings_saved,
             on_goto_packing=self._goto_tsd_packing,
         )
+        self._rfp_columns_panel = RfpColumnsPanel()
         self._rfp_parts_panel = RfpPartsPanel(
             on_run=self._run_rfp_parts,
             on_ds_baseline=self._run_ds_baseline,
@@ -358,6 +363,7 @@ class CenterWindow(QWidget):
         self._tabs.setTabEnabled(sep_idx, False)
         self._tabs.addTab(self._rfp_run_panel, "RFP · Запуск")
         self._tabs.addTab(self._rfp_settings_panel, "RFP · Настройки")
+        self._tabs.addTab(self._rfp_columns_panel, "RFP · Столбцы")
         self._tabs.addTab(self._rfp_parts_panel, "RFP · Сбор частей")
         self._tabs.addTab(self._rfp_pdf_panel, "RFP · PDF")
         self._tabs.addTab(self._rfp_ds_id_panel, "RFP · ДС ↔ УЛ")
