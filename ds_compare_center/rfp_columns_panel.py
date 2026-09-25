@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -596,10 +595,6 @@ class _UnusedFlow(_RowFrame):
         super().__init__(name, on_drag, parent)
         self._order: list[_ColumnCard] = []
         self._reflowing = False
-        self._grid = QGridLayout(self)
-        self._grid.setContentsMargins(6, 6, 6, 6)
-        self._grid.setSpacing(4)
-        self._grid.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     def set_order(self, cards: list[_ColumnCard]) -> None:
@@ -626,47 +621,32 @@ class _UnusedFlow(_RowFrame):
         self._reflowing = True
         try:
             cards = [card for card in self._order if card.parent() in {self, None}]
-            while self._grid.count():
-                self._grid.takeAt(0)
-            for col in range(self._grid.columnCount()):
-                self._grid.setColumnStretch(col, 0)
-                self._grid.setColumnMinimumWidth(col, 0)
-            width = self._viewport_width()
+            width = max(self._viewport_width(), 80)
             self.setMinimumWidth(0)
             self.setMaximumWidth(width)
             margin = 6
             spacing = 4
             limit = width - margin
             x = margin
-            col = 0
-            row = 0
+            y = margin
+            row_h = 0
             for card in cards:
                 card.setParent(self)
-                card.show()
-                card_w = max(card.width(), 52)
-                if col > 0 and x + card_w > limit:
+                card.setMaximumHeight(16777215)
+                card.setMinimumHeight(0)
+                card.adjustSize()
+                card_w = max(card.width(), card.sizeHint().width(), 52)
+                card_h = max(card.sizeHint().height(), card.minimumSizeHint().height(), 120)
+                if x > margin and x + card_w > limit:
                     x = margin
-                    row += 1
-                    col = 0
-                layout = card.layout()
-                if layout is not None and layout.hasHeightForWidth():
-                    card_h = layout.heightForWidth(card_w)
-                else:
-                    card_h = card.sizeHint().height()
-                card_h = max(card_h, card.minimumSizeHint().height(), 160)
-                card.setMinimumHeight(card_h)
-                card.setMaximumHeight(card_h)
-                self._grid.addWidget(
-                    card,
-                    row,
-                    col,
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                )
-                self._grid.setColumnMinimumWidth(col, 0)
+                    y += row_h + spacing
+                    row_h = 0
+                card.setGeometry(x, y, card_w, card_h)
+                card.show()
+                card.raise_()
                 x += card_w + spacing
-                col += 1
-            self._grid.activate()
-            content_h = max(self._grid.totalMinimumSize().height(), 80)
+                row_h = max(row_h, card_h)
+            content_h = y + row_h + margin if cards else 80
             if self.minimumHeight() != content_h:
                 self.setMinimumHeight(content_h)
         finally:
@@ -1039,6 +1019,7 @@ class RfpColumnsPanel(QWidget):
     def _clear_unused_cards(self) -> None:
         for child in list(self._unused_row.children()):
             if isinstance(child, _ColumnCard):
+                child.hide()
                 child.setParent(None)
                 child.deleteLater()
 

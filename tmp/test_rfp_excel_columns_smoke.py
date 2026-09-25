@@ -380,6 +380,23 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
                 panel._move_names([name], visible_index=4, unused_at=None, group_id="")
                 self.app.processEvents()
                 self.assertEqual(bar.value(), target)
+                wide = next(
+                    item["col_name"]
+                    for item in panel._columns
+                    if item.get("output") and int(item.get("width") or 0) >= 20
+                )
+                panel._move_names([str(wide)], visible_index=None, unused_at=0, group_id="")
+                self.app.processEvents()
+                dropped = [
+                    card for card in panel._cards if card.parent() is panel._unused_row
+                ]
+                self.assertGreater(len(dropped), 1)
+                for left_i, left in enumerate(dropped):
+                    for right in dropped[left_i + 1 :]:
+                        self.assertFalse(
+                            left.geometry().intersects(right.geometry()),
+                            f"{left.col_name()} overlaps {right.col_name()}",
+                        )
             finally:
                 panel.close()
                 panel.deleteLater()
