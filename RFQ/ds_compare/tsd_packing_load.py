@@ -16,6 +16,7 @@ from typing import Any
 
 import openpyxl
 import xlsxwriter
+from openpyxl.styles import Alignment, Font
 from prettytable import PrettyTable
 
 import base.t_comm_initial_classes as t_com_init_cls
@@ -99,6 +100,19 @@ _SUMMARY_COLUMNS: tuple[tuple[str, str, int], ...] = (
     ("VENDOR", "Поставщик", 18),
 )
 _SUMMARY_HEADER_FILL = "#dbbcdb"  # same as step4 RFP section
+UL_FOLDER_STATS_SHEET = "Статистика по папкам"
+_UL_FOLDER_STATS_HEADERS = (
+    "Папка",
+    "Всего строк",
+    "Строк с кодом РД",
+    "Строк с наименованием",
+    "Строк с кол-вом",
+)
+_UL_FOLDER_STATS_NOTE = (
+    "Число строк свода, в которых ячейка заполнена. "
+    "Это не сумма колонки «Кол-во» и не число разных значений. "
+    "Папка — каталог, в котором лежит файл УЛ."
+)
 
 
 @dataclass
@@ -1105,6 +1119,195 @@ def _summary_row_values(row: RowStd) -> list[object]:
     ]
 
 
+def _ul_cell_filled(value: object) -> bool:
+    """True when a summary cell is non-blank, including numeric zero."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _ul_folder_sort_key(name: str) -> tuple:
+    parts = re.split(r"(\d+)", name)
+    key: list[tuple[int, int | str]] = []
+    for part in parts:
+        if not part:
+            continue
+        if part.isdigit():
+            key.append((0, int(part)))
+        else:
+            key.append((1, part.casefold()))
+    return tuple(key)
+
+
+def ul_folder_stat_rows(
+    samples: list[tuple[object, object, object, object]],
+) -> list[tuple[str, int, int, int, int]]:
+    """Count summary rows per source folder that contain code, name, and qty.
+
+    Args:
+        samples: ``(folder, code, name, qty)`` for each data row.
+
+    Returns:
+        One tuple per folder, then a total row labelled ``ИТОГО``.
+    """
+    buckets: dict[str, list[int]] = {}
+    for folder, code, name, qty in samples:
+        label = str(folder or "").strip() or "(корень)"
+        counts = buckets.setdefault(label, [0, 0, 0, 0])
+        counts[0] += 1
+        if _ul_cell_filled(code):
+            counts[1] += 1
+        if _ul_cell_filled(name):
+            counts[2] += 1
+        if _ul_cell_filled(qty):
+            counts[3] += 1
+    rows = [
+        (label, *buckets[label])
+        for label in sorted(buckets, key=_ul_folder_sort_key)
+    ]
+    totals = [0, 0, 0, 0]
+    for _label, *counts in rows:
+        for index, value in enumerate(counts):
+            totals[index] += value
+    rows.append(("ИТОГО", *totals))
+    return rows
+
+
+def _folder_stat_samples(rows: list[RowStd]) -> list[tuple[str, str, str, str]]:
+    samples: list[tuple[str, str, str, str]] = []
+    for row in rows:
+        if row.row_type != RowType.position_row:
+            continue
+        source_rel = _cell_str(row.el[ANNOTATION].value)
+        samples.append(
+            (
+                _parent_folder_key(source_rel),
+                _cell_str(row.el[CODE].value),
+                _cell_str(row.el[NAME].value),
+                _cell_str(row.el[VALUES].value),
+            )
+        )
+    return samples
+
+
+def _write_ul_folder_stats_sheet(
+    wb: xlsxwriter.Workbook,
+    samples: list[tuple[object, object, object, object]],
+) -> None:
+    """Second sheet: row counts of filled code, name, and quantity by folder."""
+    ws = wb.add_worksheet(UL_FOLDER_STATS_SHEET)
+    header_fmt = wb.add_format(
+        {
+            "bold": True,
+            "align": "center",
+            "valign": "vcenter",
+            "text_wrap": True,
+            "border": 1,
+        }
+    )
+    total_fmt = wb.add_format({"bold": True, "border": 1})
+    cell_fmt = wb.add_format({"border": 1})
+    ws.set_row(0, 32)
+    widths = (42, 14, 20, 24, 18)
+    for col, (label, width) in enumerate(zip(_UL_FOLDER_STATS_HEADERS, widths)):
+        ws.write(0, col, label, header_fmt)
+        ws.set_column(col, col, width)
+    written = ul_folder_stat_rows(samples)
+    for row_idx, item in enumerate(written, start=1):
+        fmt = total_fmt if item[0] == "ИТОГО" else cell_fmt
+        for col, value in enumerate(item):
+            ws.write(row_idx, col, value, fmt)
+    note_row = len(written) + 2
+    ws.merge_range(note_row, 0, note_row, 4, _UL_FOLDER_STATS_NOTE)
+    if written:
+        ws.autofilter(0, 0, len(written), 4)
+    ws.freeze_panes(1, 1)
+
+
+def add_ul_folder_stats_sheet(path: Path, dest: Path | None = None) -> int:
+    """Add or replace «Статистика по папкам» on an existing UL summary.
+
+    Args:
+        path: ``tsd_packing_summary_*.xlsx`` to read.
+        dest: Where to write. Defaults to ``path``. Use another path when
+            the source workbook is open in Excel.
+
+    Returns:
+        Number of folder rows, excluding the total.
+
+    Raises:
+        ValueError: The summary sheet or a required header is missing.
+    """
+    wb = openpyxl.load_workbook(path)
+    try:
+        if "ТСД свод" not in wb.sheetnames:
+            raise ValueError("в книге нет листа «ТСД свод»")
+        ws = wb["ТСД свод"]
+        headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        needed = ("Файл", "Код РД", "Наименование", "Кол-во")
+        missing = [title for title in needed if title not in headers]
+        if missing:
+            raise ValueError(f"нет колонок: {', '.join(missing)}")
+        index = {title: headers.index(title) for title in needed}
+
+        def _at(row: tuple[object, ...], title: str) -> object:
+            pos = index[title]
+            return row[pos] if pos < len(row) else None
+
+        samples: list[tuple[object, object, object, object]] = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not any(cell is not None and cell != "" for cell in row):
+                continue
+            source = _at(row, "Файл")
+            samples.append(
+                (
+                    _parent_folder_key(str(source or "")),
+                    _at(row, "Код РД"),
+                    _at(row, "Наименование"),
+                    _at(row, "Кол-во"),
+                )
+            )
+        if UL_FOLDER_STATS_SHEET in wb.sheetnames:
+            del wb[UL_FOLDER_STATS_SHEET]
+        stats = wb.create_sheet(UL_FOLDER_STATS_SHEET, 1)
+        stats.append(list(_UL_FOLDER_STATS_HEADERS))
+        for cell in stats[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(
+                wrap_text=True, vertical="center", horizontal="center"
+            )
+        written = ul_folder_stat_rows(samples)
+        for item in written:
+            stats.append(list(item))
+        for cell in stats[stats.max_row]:
+            cell.font = Font(bold=True)
+        note_row = stats.max_row + 2
+        stats.cell(row=note_row, column=1, value=_UL_FOLDER_STATS_NOTE)
+        stats.merge_cells(
+            start_row=note_row, start_column=1, end_row=note_row, end_column=5
+        )
+        for col_letter, width in {
+            "A": 42,
+            "B": 14,
+            "C": 20,
+            "D": 24,
+            "E": 18,
+        }.items():
+            stats.column_dimensions[col_letter].width = width
+        stats.row_dimensions[1].height = 32
+        stats.freeze_panes = "B2"
+        stats.auto_filter.ref = f"A1:E{max(len(written) + 1, 1)}"
+        wb.active = wb["ТСД свод"]
+        target = dest or path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(target)
+    finally:
+        wb.close()
+    return max(len(ul_folder_stat_rows(samples)) - 1, 0)
+
+
 def save_tsd_packing_summary_xlsx(rows: list[RowStd], out_path: Path | None = None) -> Path:
     """Write flat summary workbook for manual review (xlsxwriter).
 
@@ -1156,6 +1359,7 @@ def save_tsd_packing_summary_xlsx(rows: list[RowStd], out_path: Path | None = No
     if last_data_row > 0:
         ws.autofilter(0, 0, last_data_row, num_cols - 1)
     ws.freeze_panes(1, 0)
+    _write_ul_folder_stats_sheet(wb, _folder_stat_samples(rows))
 
     try:
         wb.close()
