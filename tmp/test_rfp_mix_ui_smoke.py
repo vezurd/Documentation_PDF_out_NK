@@ -86,6 +86,13 @@ class RfpMixSettingsSmokeTest(unittest.TestCase):
             mix=MIX_MIXED,
         )
         self.assertEqual(ds_only, "Запуск (только ДС)")
+        named = format_launch_rfp_button(
+            include_packing=False,
+            input_mode=INPUT_MODE_DS_ONLY,
+            mix=MIX_MIXED,
+            template_name="2026.09.25 ДС",
+        )
+        self.assertEqual(named, "Запуск (только ДС) (2026.09.25 ДС)")
 
     def test_two_json_keys_read_independently_without_cross_write(self) -> None:
         config = {

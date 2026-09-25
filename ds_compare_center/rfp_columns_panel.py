@@ -1089,6 +1089,8 @@ class RfpColumnsPanel(QWidget):
         set_active_template(template_id)
         self._load_columns_for_id(template_id)
         self._apply_readonly()
+        if self._on_saved is not None:
+            self._on_saved()
 
     def _on_card_select(self, index: int, modifiers: Qt.KeyboardModifiers) -> None:
         if modifiers & Qt.KeyboardModifier.ControlModifier:

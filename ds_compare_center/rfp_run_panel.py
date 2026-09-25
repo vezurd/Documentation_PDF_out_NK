@@ -48,6 +48,7 @@ from RFQ.tags_rfp_compare.rfp_tags_utils import (
     resolve_effective_rfp_path,
     save_config,
 )
+from RFQ.tags_rfp_compare.step4.step4_excel_columns import active_template_label
 from ds_compare_center.rfp_mix_blocks import RfpMixModeBlock
 from ds_compare_center.rfp_mix_settings import (
     format_launch_rfp_button,
@@ -514,6 +515,7 @@ class RfpRunPanel(QWidget):
                 include_packing=include_packing,
                 input_mode=resolve_input_mode(config),
                 mix=read_launch_mix_mode(config),
+                template_name=active_template_label(),
             )
         )
         self._source_mode.apply_config(config)

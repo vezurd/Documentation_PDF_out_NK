@@ -224,23 +224,31 @@ def format_launch_rfp_button(
     include_packing: bool,
     input_mode: str,
     mix: str,
+    template_name: str = "",
 ) -> str:
-    """Launch-tab run button: ``Запуск`` plus the selected source and mix.
+    """Launch-tab run button: source, mix, and the active column template.
 
     Mix is appended only when the source is hybrid. ``include_packing`` does
-    not change the text: packing stays a Step4 setting, not this label.
+    not change the text. A non-empty *template_name* is a second pair of
+    parentheses at the end.
 
     Args:
         include_packing: Kept for callers. Ignored.
         input_mode: Launch file picker (``legacy_net`` / ``ds_only`` / ``hybrid``).
         mix: ``launch_mix_mode`` (ignored unless ``input_mode`` is hybrid).
+        template_name: Active Step4 column template label.
 
     Returns:
-        For example ``Запуск (ДС+RFP · без смешения)`` or ``Запуск (части RFP)``.
+        For example ``Запуск (только ДС) (По умолчанию)``.
     """
     del include_packing
     mode = str(input_mode or "").strip()
     short = _LAUNCH_SOURCE_SHORT.get(mode, _LAUNCH_SOURCE_SHORT[INPUT_MODE_LEGACY_NET])
     if mode != INPUT_MODE_HYBRID:
-        return f"Запуск ({short})"
-    return f"Запуск ({short} · {mix_suffix_ru(mix)})"
+        label = f"Запуск ({short})"
+    else:
+        label = f"Запуск ({short} · {mix_suffix_ru(mix)})"
+    name = str(template_name or "").strip()
+    if not name:
+        return label
+    return f"{label} ({name})"

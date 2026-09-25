@@ -317,7 +317,7 @@ class CenterWindow(QWidget):
             on_saved=self._on_rfp_settings_saved,
             on_goto_packing=self._goto_tsd_packing,
         )
-        self._rfp_columns_panel = RfpColumnsPanel()
+        self._rfp_columns_panel = RfpColumnsPanel(on_saved=self._on_rfp_settings_saved)
         self._rfp_parts_panel = RfpPartsPanel(
             on_run=self._run_rfp_parts,
             on_ds_baseline=self._run_ds_baseline,

@@ -356,6 +356,24 @@ def load_step4_excel_column_state() -> dict[str, Any]:
     return {"active_id": active_id, "templates": templates}
 
 
+def active_template_label() -> str:
+    """Display name of the remembered Step4 column template.
+
+    Returns:
+        ``По умолчанию`` for the builtin template or a missing id, otherwise
+        the user template name.
+    """
+    state = load_step4_excel_column_state()
+    active_id = str(state.get("active_id") or DEFAULT_TEMPLATE_ID).strip()
+    if active_id == DEFAULT_TEMPLATE_ID:
+        return "По умолчанию"
+    for tmpl in state.get("templates") or []:
+        if tmpl.get("id") == active_id:
+            name = str(tmpl.get("name") or "").strip()
+            return name or active_id
+    return "По умолчанию"
+
+
 def save_step4_excel_column_state(state: dict[str, Any] | None) -> None:
     """Persist only the ``step4_excel_columns`` key of the RFP config.
 
