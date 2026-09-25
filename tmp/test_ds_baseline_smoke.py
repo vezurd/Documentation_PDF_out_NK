@@ -811,6 +811,51 @@ class DsBaselineSmokeTest(unittest.TestCase):
                 ],
             )
 
+    def test_contract_phrase_and_akpp_and_code_stub_stay_positions(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    DS_HEADER,
+                    _ds_row(
+                        npp=1,
+                        code="BCC0003506",
+                        supplier="Лицензия в соответствии с требованиями заказчика",
+                        qty=5,
+                    ),
+                    _ds_row(
+                        npp=2,
+                        code="BCC0002940",
+                        name="Пульт управления АКПП ПУ1",
+                        qty=1,
+                    ),
+                    _ds_row(
+                        npp=3,
+                        code="ЗапросКодаНетребуется",
+                        name="Комплект ЗИП",
+                        qty=1,
+                    ),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            self.assertFalse(result.blocking, result.summary_line())
+            self.assertEqual(
+                [(item.code, item.qty) for item in result.positions],
+                [
+                    ("BCC0003506", Decimal("5")),
+                    ("BCC0002940", Decimal("1")),
+                    ("ЗапросКодаНетребуется", Decimal("1")),
+                ],
+            )
+            self.assertFalse(
+                any(item.code == ISSUE_CODE_QTY_GAP for item in result.issues)
+            )
+
     def test_code_above_header_is_a_blocking_qty_gap(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
             root = Path(raw)

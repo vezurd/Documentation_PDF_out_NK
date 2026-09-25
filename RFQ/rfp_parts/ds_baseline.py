@@ -231,7 +231,6 @@ _BOILERPLATE_NEEDLES = (
     "стороны согласовали",
     "поставщик подтверждает",
     "во всем остальном",
-    "в соответствии с",
     "со стороны поставщика",
     "со стороны покупателя",
 )
@@ -247,6 +246,8 @@ _LEGAL_ENTITY_RE = re.compile(
     re.IGNORECASE,
 )
 _PARTY_LABELS = frozenset({"поставщик", "покупатель", "подрядчик", "заказчик"})
+# Cell text used instead of a BCC code. Counted as a code by the coarse sum.
+_CODE_PLACEHOLDERS = frozenset({"ЗАПРОСКОДАНЕТРЕБУЕТСЯ"})
 _FOOTER_NEEDLES = (
     "итого",
     "всего",
@@ -259,7 +260,6 @@ _FOOTER_NEEDLES = (
     "порядок оплаты",
     "срок поставки",
     "инн ",
-    "кпп ",
     "р/счет",
     "р/счёт",
     "к/счет",
@@ -1220,17 +1220,18 @@ def _coarse_code_qty(
     shows up as a code that the sheet had and the parser did not keep.
     """
 
-    if classify_header_role(code_cell) is not None:
-        return None
+    code = normalize_code(code_cell)
+    if code not in _CODE_PLACEHOLDERS:
+        if classify_header_role(code_cell) is not None:
+            return None
+        if (
+            _is_signature_text(code_cell)
+            or _is_legal_entity_name(code_cell)
+            or _is_party_label(code_cell)
+        ):
+            return None
     if _qty_formula_is_aggregate(qty_formula):
         return None
-    if (
-        _is_signature_text(code_cell)
-        or _is_legal_entity_name(code_cell)
-        or _is_party_label(code_cell)
-    ):
-        return None
-    code = normalize_code(code_cell)
     if not code:
         return None
     qty, error = _parse_qty(qty_cell)
