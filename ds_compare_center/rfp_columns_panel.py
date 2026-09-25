@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
+from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -826,6 +826,8 @@ class RfpColumnsPanel(QWidget):
         return card
 
     def _rebuild_rows(self) -> None:
+        bar = self._sheet_scroll.horizontalScrollBar()
+        saved_scroll = bar.value()
         self._hide_drop_line()
         self._clear_layout(self._sheet_layout)
         self._clear_unused_cards()
@@ -886,6 +888,17 @@ class RfpColumnsPanel(QWidget):
             card = self._make_card(master, setting, self._unused_row)
             self._cards.append(card)
         self._fit_host()
+        self._restore_sheet_scroll(saved_scroll)
+
+    def _restore_sheet_scroll(self, value: int) -> None:
+        """Keep the sheet viewport where it was after a row rebuild."""
+        bar = self._sheet_scroll.horizontalScrollBar()
+
+        def apply() -> None:
+            bar.setValue(min(value, bar.maximum()))
+
+        apply()
+        QTimer.singleShot(0, apply)
 
     def _clear_unused_cards(self) -> None:
         for child in list(self._unused_row.children()):

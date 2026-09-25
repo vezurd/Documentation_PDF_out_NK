@@ -316,6 +316,18 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
                     panel._sheet_row.minimumWidth(),
                     panel._sheet_layout.totalMinimumSize().width() - 4,
                 )
+                bar = panel._sheet_scroll.horizontalScrollBar()
+                self.app.processEvents()
+                target = min(400, bar.maximum())
+                self.assertGreater(bar.maximum(), 50)
+                bar.setValue(target)
+                panel._toggle_group(boxes[0].group_id)
+                self.app.processEvents()
+                self.assertEqual(bar.value(), target)
+                name = str(panel._columns[0].get("col_name") or "")
+                panel._move_names([name], visible_index=4, unused_at=None, group_id="")
+                self.app.processEvents()
+                self.assertEqual(bar.value(), target)
             finally:
                 panel.close()
                 panel.deleteLater()
