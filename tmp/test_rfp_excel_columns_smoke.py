@@ -279,10 +279,12 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
                     card for card in panel._cards if card.parent() is panel._unused_row
                 ]
                 self.assertGreater(len(unused_cards), 1)
-                limit = panel._unused_row.width()
+                limit = panel._unused_scroll.viewport().width()
                 self.assertGreater(limit, 0)
+                self.assertLessEqual(panel._unused_row.width(), limit + 2)
                 for card in unused_cards:
                     self.assertLessEqual(card.geometry().right(), limit)
+                    self.assertLessEqual(card.geometry().bottom(), panel._unused_row.minimumHeight())
                 ys = {card.geometry().top() for card in unused_cards}
                 self.assertGreater(len(ys), 1)
                 for card in unused_cards:

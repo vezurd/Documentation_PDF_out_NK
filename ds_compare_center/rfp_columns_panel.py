@@ -582,6 +582,16 @@ class _UnusedFlow(_RowFrame):
         super().resizeEvent(event)
         self.reflow()
 
+    def _viewport_width(self) -> int:
+        parent = self.parentWidget()
+        while parent is not None and not isinstance(parent, QScrollArea):
+            parent = parent.parentWidget()
+        if isinstance(parent, QScrollArea):
+            width = parent.viewport().width()
+            if width > 40:
+                return width
+        return max(self.width(), 80)
+
     def reflow(self) -> None:
         if self._reflowing:
             return
@@ -590,29 +600,45 @@ class _UnusedFlow(_RowFrame):
             cards = [card for card in self._order if card.parent() in {self, None}]
             while self._grid.count():
                 self._grid.takeAt(0)
-            width = self.width()
-            if width < 80 and self.parentWidget() is not None:
-                width = self.parentWidget().width()
-            width = max(width, 80)
-            x = 6
+            for col in range(self._grid.columnCount()):
+                self._grid.setColumnStretch(col, 0)
+                self._grid.setColumnMinimumWidth(col, 0)
+            width = self._viewport_width()
+            self.setMinimumWidth(0)
+            self.setMaximumWidth(width)
+            margin = 6
+            spacing = 4
+            limit = width - margin
+            x = margin
             col = 0
             row = 0
-            row_h = 0
             for card in cards:
                 card.setParent(self)
                 card.show()
-                card_w = max(card.width(), card.sizeHint().width(), 52)
-                card_h = max(card.minimumHeight(), card.sizeHint().height(), 150)
-                if col > 0 and x + card_w > width - 6:
-                    x = 6
+                card_w = max(card.width(), 52)
+                if col > 0 and x + card_w > limit:
+                    x = margin
                     row += 1
                     col = 0
-                    row_h = 0
-                self._grid.addWidget(card, row, col, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-                x += card_w + 4
+                layout = card.layout()
+                if layout is not None and layout.hasHeightForWidth():
+                    card_h = layout.heightForWidth(card_w)
+                else:
+                    card_h = card.sizeHint().height()
+                card_h = max(card_h, card.minimumSizeHint().height(), 160)
+                card.setMinimumHeight(card_h)
+                card.setMaximumHeight(card_h)
+                self._grid.addWidget(
+                    card,
+                    row,
+                    col,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
+                self._grid.setColumnMinimumWidth(col, 0)
+                x += card_w + spacing
                 col += 1
-                row_h = max(row_h, card_h)
-            content_h = 12 + (row + 1) * (row_h + 4) if cards else 80
+            self._grid.activate()
+            content_h = max(self._grid.totalMinimumSize().height(), 80)
             if self.minimumHeight() != content_h:
                 self.setMinimumHeight(content_h)
         finally:
