@@ -221,6 +221,7 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
 
             from ds_compare_center.rfp_columns_panel import (
                 RfpColumnsPanel,
+                _GroupBox,
                 heal_column_groups,
                 plan_sheet_insertion,
             )
@@ -284,6 +285,24 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
                     self.assertLessEqual(card.geometry().right(), limit)
                 ys = {card.geometry().top() for card in unused_cards}
                 self.assertGreater(len(ys), 1)
+                tid = create_template("проверка ширины", panel._columns_payload())
+                panel.reload_from_disk()
+                panel._load_columns_for_id(tid)
+                panel._apply_readonly()
+                self.app.processEvents()
+                self.assertFalse(panel._is_readonly())
+                boxes = panel._sheet_row.findChildren(_GroupBox)
+                self.assertTrue(boxes)
+                for box in boxes:
+                    self.assertGreaterEqual(box.width() + 8, box.minimumSizeHint().width())
+                unused_after = [
+                    card for card in panel._cards if card.parent() is panel._unused_row
+                ]
+                self.assertGreater(len(unused_after), 1)
+                self.assertGreaterEqual(
+                    panel._sheet_row.minimumWidth(),
+                    panel._sheet_layout.totalMinimumSize().width() - 4,
+                )
             finally:
                 panel.close()
                 panel.deleteLater()

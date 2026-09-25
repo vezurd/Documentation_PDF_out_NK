@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLayout,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -430,6 +431,7 @@ class _GroupBox(QFrame):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(2)
+        outer.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         head = QHBoxLayout()
         self._btn = QPushButton("+" if collapsed else "−", self)
         self._btn.setObjectName("group-toggle")
@@ -653,6 +655,7 @@ class RfpColumnsPanel(QWidget):
         self._sheet_layout = QHBoxLayout(self._sheet_row)
         self._sheet_layout.setContentsMargins(6, 6, 28, 6)
         self._sheet_layout.setSpacing(4)
+        self._sheet_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self._sheet_layout.addStretch(1)
         self._sheet_row.setStyleSheet("QFrame#sheet-row { background:#ffffff; border: 1px solid #cccccc; }")
         self._sheet_scroll.setWidget(self._sheet_row)
@@ -859,14 +862,20 @@ class RfpColumnsPanel(QWidget):
                 child.deleteLater()
 
     def _fit_host(self) -> None:
-        self._sheet_row.adjustSize()
-        hint = self._sheet_layout.sizeHint()
-        row_h = max(160, hint.height())
-        row_w = max(hint.width(), self._sheet_scroll.viewport().width(), 200)
-        self._sheet_row.setMinimumWidth(row_w)
+        for widget in self._sheet_row.findChildren(QWidget):
+            widget.ensurePolished()
+        self._sheet_layout.invalidate()
+        hint = self._sheet_layout.totalMinimumSize()
+        row_h = max(160, hint.height(), self._sheet_layout.sizeHint().height())
+        row_w = max(hint.width(), self._sheet_layout.sizeHint().width(), 200)
+        self._sheet_row.setMinimumSize(row_w, row_h)
         self._sheet_row.resize(row_w, row_h)
         bar_h = self._sheet_scroll.horizontalScrollBar().sizeHint().height()
         self._sheet_scroll.setFixedHeight(row_h + bar_h + 4)
+        for card in self._cards:
+            if card.parent() is self._unused_row:
+                card.ensurePolished()
+                card.adjustSize()
         unused = [card for card in self._cards if card.parent() is self._unused_row]
         self._unused_row.set_order(unused)
 
