@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from base.tables_columns import (
@@ -255,6 +256,34 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
                 self.assertTrue(sheet_names)
                 self.assertTrue(unused_names)
                 self.assertFalse(sheet_names & unused_names)
+                self.assertEqual(
+                    panel._sheet_scroll.horizontalScrollBarPolicy(),
+                    Qt.ScrollBarPolicy.ScrollBarAsNeeded,
+                )
+                self.assertEqual(
+                    panel._sheet_scroll.verticalScrollBarPolicy(),
+                    Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+                )
+                self.assertEqual(
+                    panel._unused_scroll.horizontalScrollBarPolicy(),
+                    Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+                )
+                self.assertEqual(
+                    panel._unused_scroll.verticalScrollBarPolicy(),
+                    Qt.ScrollBarPolicy.ScrollBarAsNeeded,
+                )
+                panel.resize(900, 720)
+                self.app.processEvents()
+                unused_cards = [
+                    card for card in panel._cards if card.parent() is panel._unused_row
+                ]
+                self.assertGreater(len(unused_cards), 1)
+                limit = panel._unused_row.width()
+                self.assertGreater(limit, 0)
+                for card in unused_cards:
+                    self.assertLessEqual(card.geometry().right(), limit)
+                ys = {card.geometry().top() for card in unused_cards}
+                self.assertGreater(len(ys), 1)
             finally:
                 panel.close()
                 panel.deleteLater()

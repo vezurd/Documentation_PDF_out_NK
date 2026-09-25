@@ -541,6 +541,50 @@ class _RowFrame(QFrame):
         self._emit(event, "drop")
 
 
+class _UnusedFlow(_RowFrame):
+    """Unused columns wrap inside the viewport width. No horizontal overflow."""
+
+    def __init__(
+        self,
+        name: str,
+        on_drag: Callable[[str, QPoint, str, str], None],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(name, on_drag, parent)
+        self._order: list[_ColumnCard] = []
+
+    def set_order(self, cards: list[_ColumnCard]) -> None:
+        self._order = list(cards)
+        self.reflow()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        self.reflow()
+
+    def reflow(self) -> None:
+        cards = [card for card in self._order if card.parent() is self]
+        margin = 6
+        spacing = 4
+        width = max(self.width(), margin * 2 + 40)
+        x = margin
+        y = margin
+        row_h = 0
+        for card in cards:
+            card.adjustSize()
+            card_w = card.width()
+            card_h = max(card.height(), card.sizeHint().height())
+            if x > margin and x + card_w > width - margin:
+                x = margin
+                y += row_h + spacing
+                row_h = 0
+            card.setGeometry(x, y, card_w, card_h)
+            x += card_w + spacing
+            row_h = max(row_h, card_h)
+        content_h = y + row_h + margin if cards else margin * 2 + 80
+        if self.minimumHeight() != content_h:
+            self.setMinimumHeight(content_h)
+
+
 class RfpColumnsPanel(QWidget):
     """Named Step4 templates: on-sheet row, unused row, group +/−."""
 
@@ -595,36 +639,33 @@ class RfpColumnsPanel(QWidget):
         group_row.addWidget(self._chk_hide)
         group_row.addStretch(1)
 
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(False)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setMinimumHeight(460)
-
-        self._host = QWidget(self)
-        host_layout = QVBoxLayout(self._host)
-        host_layout.setContentsMargins(8, 8, 8, 8)
-        host_layout.setSpacing(6)
-        sheet_title = QLabel("На листе — эти столбцы пишутся в файл", self._host)
+        sheet_title = QLabel("На листе — эти столбцы пишутся в файл", self)
         sheet_title.setStyleSheet("font-weight:bold;")
-        unused_title = QLabel("Не используются — на лист не попадают", self._host)
+        unused_title = QLabel("Не используются — на лист не попадают", self)
         unused_title.setStyleSheet("font-weight:bold;")
-        self._sheet_row = _RowFrame("sheet-row", self._on_row_drag, self._host)
-        self._unused_row = _RowFrame("unused-row", self._on_row_drag, self._host)
+
+        self._sheet_scroll = QScrollArea(self)
+        self._sheet_scroll.setObjectName("sheet-scroll")
+        self._sheet_scroll.setWidgetResizable(False)
+        self._sheet_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._sheet_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._sheet_row = _RowFrame("sheet-row", self._on_row_drag, self._sheet_scroll)
         self._sheet_layout = QHBoxLayout(self._sheet_row)
         self._sheet_layout.setContentsMargins(6, 6, 28, 6)
         self._sheet_layout.setSpacing(4)
         self._sheet_layout.addStretch(1)
-        self._unused_layout = QHBoxLayout(self._unused_row)
-        self._unused_layout.setContentsMargins(6, 6, 28, 6)
-        self._unused_layout.setSpacing(4)
-        self._unused_layout.addStretch(1)
         self._sheet_row.setStyleSheet("QFrame#sheet-row { background:#ffffff; border: 1px solid #cccccc; }")
+        self._sheet_scroll.setWidget(self._sheet_row)
+
+        self._unused_scroll = QScrollArea(self)
+        self._unused_scroll.setObjectName("unused-scroll")
+        self._unused_scroll.setWidgetResizable(True)
+        self._unused_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._unused_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._unused_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._unused_row = _UnusedFlow("unused-row", self._on_row_drag, self._unused_scroll)
         self._unused_row.setStyleSheet("QFrame#unused-row { background:#f3f3f3; border: 1px solid #cccccc; }")
-        host_layout.addWidget(sheet_title)
-        host_layout.addWidget(self._sheet_row)
-        host_layout.addWidget(unused_title)
-        host_layout.addWidget(self._unused_row)
+        self._unused_scroll.setWidget(self._unused_row)
 
         self._line = QFrame(self._sheet_row)
         self._line.setObjectName("drop-line")
@@ -635,13 +676,14 @@ class RfpColumnsPanel(QWidget):
         self._line_label.setObjectName("drop-label")
         self._line_label.hide()
 
-        self._scroll.setWidget(self._host)
-
         layout = QVBoxLayout(self)
         layout.addLayout(top)
         layout.addWidget(self._hint)
         layout.addLayout(group_row)
-        layout.addWidget(self._scroll, stretch=1)
+        layout.addWidget(sheet_title)
+        layout.addWidget(self._sheet_scroll)
+        layout.addWidget(unused_title)
+        layout.addWidget(self._unused_scroll, stretch=1)
         self.reload_from_disk()
 
     @staticmethod
@@ -751,7 +793,7 @@ class RfpColumnsPanel(QWidget):
     def _rebuild_rows(self) -> None:
         self._hide_drop_line()
         self._clear_layout(self._sheet_layout)
-        self._clear_layout(self._unused_layout)
+        self._clear_unused_cards()
         self._cards = []
         visible_idx = [i for i, item in enumerate(self._columns) if item.get("output")]
         pos = 0
@@ -807,24 +849,26 @@ class RfpColumnsPanel(QWidget):
             if setting.get("output"):
                 continue
             card = self._make_card(master, setting, self._unused_row)
-            self._unused_layout.insertWidget(self._unused_layout.count() - 1, card)
             self._cards.append(card)
         self._fit_host()
 
+    def _clear_unused_cards(self) -> None:
+        for child in list(self._unused_row.children()):
+            if isinstance(child, _ColumnCard):
+                child.setParent(None)
+                child.deleteLater()
+
     def _fit_host(self) -> None:
         self._sheet_row.adjustSize()
-        self._unused_row.adjustSize()
-        self._host.adjustSize()
-        width = max(
-            self._sheet_layout.sizeHint().width(),
-            self._unused_layout.sizeHint().width(),
-            self._scroll.viewport().width(),
-            200,
-        )
-        height = max(self._host.sizeHint().height(), 420)
-        self._host.resize(width + 24, height)
-        self._sheet_row.setMinimumHeight(max(160, self._sheet_row.sizeHint().height()))
-        self._unused_row.setMinimumHeight(max(140, self._unused_row.sizeHint().height()))
+        hint = self._sheet_layout.sizeHint()
+        row_h = max(160, hint.height())
+        row_w = max(hint.width(), self._sheet_scroll.viewport().width(), 200)
+        self._sheet_row.setMinimumWidth(row_w)
+        self._sheet_row.resize(row_w, row_h)
+        bar_h = self._sheet_scroll.horizontalScrollBar().sizeHint().height()
+        self._sheet_scroll.setFixedHeight(row_h + bar_h + 4)
+        unused = [card for card in self._cards if card.parent() is self._unused_row]
+        self._unused_row.set_order(unused)
 
     def _on_combo_changed(self, _index: int) -> None:
         if self._updating_combo:
@@ -1036,7 +1080,12 @@ class RfpColumnsPanel(QWidget):
         moving_group = token.startswith("group:")
         own_gid = token.split(":", 1)[1] if moving_group else ""
         if row_kind == "unused":
-            self._move_names(names, visible_index=None, unused_at=self._unused_insert_at(pos.x(), indices), group_id="")
+            self._move_names(
+                names,
+                visible_index=None,
+                unused_at=self._unused_insert_at(pos, indices),
+                group_id="",
+            )
             return
         skip = set(indices)
         units = self._visible_units(skip)
@@ -1045,18 +1094,26 @@ class RfpColumnsPanel(QWidget):
             gid = own_gid
         self._move_names(names, visible_index=insert_at, unused_at=None, group_id=gid)
 
-    def _unused_insert_at(self, x: int, skip: list[int]) -> int:
+    def _unused_insert_at(self, pos: QPoint, skip: list[int]) -> int:
         cards = [
             card
-            for card in self._cards
-            if not self._columns[card.column_index()].get("output")
-            and card.column_index() not in skip
+            for card in self._unused_row._order
+            if card.column_index() not in skip and card.parent() is self._unused_row
         ]
+        x = pos.x()
+        y = pos.y()
         at = 0
         for card in cards:
             geo = card.geometry()
-            if x > (geo.left() + geo.right()) / 2:
+            cy = (geo.top() + geo.bottom()) / 2
+            cx = (geo.left() + geo.right()) / 2
+            if cy < y - geo.height() / 2:
                 at += 1
+                continue
+            if abs(cy - y) <= geo.height() / 2 + 6 and cx < x:
+                at += 1
+                continue
+            break
         return at
 
     def _move_names(
