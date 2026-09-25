@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -232,6 +233,7 @@ class _ColumnCard(QFrame):
         self.setMouseTracking(True)
         self._build(setting)
         self._apply_width(int(setting.get("width") or MIN_COLUMN_WIDTH))
+        self.setMinimumHeight(max(150, self.sizeHint().height()))
         self._refresh_chrome()
 
     def column_index(self) -> int:
@@ -429,13 +431,16 @@ class _GroupBox(QFrame):
             f"QFrame#group-box {{ border: 2px solid {color}; background:#fafafa; }}"
         )
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(4, 4, 4, 4)
-        outer.setSpacing(2)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
         outer.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+        head.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._btn = QPushButton("+" if collapsed else "−", self)
         self._btn.setObjectName("group-toggle")
-        self._btn.setFixedSize(28, 28)
+        self._btn.setFixedSize(34, 34)
         self._btn.setEnabled(not readonly)
         self._btn.setToolTip(
             "Показать столбцы группы" if collapsed else "Скрыть столбцы группы в Excel"
@@ -443,18 +448,26 @@ class _GroupBox(QFrame):
         if readonly:
             self._btn.setToolTip("Создайте свой шаблон, чтобы менять группы.")
         self._btn.clicked.connect(lambda: self.toggle_requested.emit(group_id))
-        head.addWidget(self._btn)
-        caption = "скроется: " + " · ".join(titles) if collapsed else "группа"
-        self._caption = QLabel(caption, self)
-        self._caption.setWordWrap(True)
+        head.addWidget(self._btn, 0, Qt.AlignmentFlag.AlignTop)
+        self._caption = QLabel("группа", self)
+        self._caption.setObjectName("group-caption")
         self._caption.setStyleSheet(f"color:{color}; font-weight:bold;")
-        head.addWidget(self._caption, stretch=1)
+        self._caption.setMinimumHeight(34)
+        self._caption.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(self._caption, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addStretch(1)
         outer.addLayout(head)
+        if collapsed and titles:
+            hidden = "скроется: " + " · ".join(title for title in titles if title)
+            detail = QLabel(hidden, self)
+            detail.setObjectName("group-hidden")
+            detail.setWordWrap(True)
+            detail.setStyleSheet(f"color:{color};")
+            outer.addWidget(detail)
         self._cards = QHBoxLayout()
         self._cards.setSpacing(4)
         outer.addLayout(self._cards)
-        if collapsed:
-            self.setMinimumWidth(180)
+        self.setMinimumWidth(168)
 
     def add_card(self, card: QWidget) -> None:
         self._cards.addWidget(card)
@@ -554,6 +567,12 @@ class _UnusedFlow(_RowFrame):
     ) -> None:
         super().__init__(name, on_drag, parent)
         self._order: list[_ColumnCard] = []
+        self._reflowing = False
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(6, 6, 6, 6)
+        self._grid.setSpacing(4)
+        self._grid.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     def set_order(self, cards: list[_ColumnCard]) -> None:
         self._order = list(cards)
@@ -564,27 +583,40 @@ class _UnusedFlow(_RowFrame):
         self.reflow()
 
     def reflow(self) -> None:
-        cards = [card for card in self._order if card.parent() is self]
-        margin = 6
-        spacing = 4
-        width = max(self.width(), margin * 2 + 40)
-        x = margin
-        y = margin
-        row_h = 0
-        for card in cards:
-            card.adjustSize()
-            card_w = card.width()
-            card_h = max(card.height(), card.sizeHint().height())
-            if x > margin and x + card_w > width - margin:
-                x = margin
-                y += row_h + spacing
-                row_h = 0
-            card.setGeometry(x, y, card_w, card_h)
-            x += card_w + spacing
-            row_h = max(row_h, card_h)
-        content_h = y + row_h + margin if cards else margin * 2 + 80
-        if self.minimumHeight() != content_h:
-            self.setMinimumHeight(content_h)
+        if self._reflowing:
+            return
+        self._reflowing = True
+        try:
+            cards = [card for card in self._order if card.parent() in {self, None}]
+            while self._grid.count():
+                self._grid.takeAt(0)
+            width = self.width()
+            if width < 80 and self.parentWidget() is not None:
+                width = self.parentWidget().width()
+            width = max(width, 80)
+            x = 6
+            col = 0
+            row = 0
+            row_h = 0
+            for card in cards:
+                card.setParent(self)
+                card.show()
+                card_w = max(card.width(), card.sizeHint().width(), 52)
+                card_h = max(card.minimumHeight(), card.sizeHint().height(), 150)
+                if col > 0 and x + card_w > width - 6:
+                    x = 6
+                    row += 1
+                    col = 0
+                    row_h = 0
+                self._grid.addWidget(card, row, col, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+                x += card_w + 4
+                col += 1
+                row_h = max(row_h, card_h)
+            content_h = 12 + (row + 1) * (row_h + 4) if cards else 80
+            if self.minimumHeight() != content_h:
+                self.setMinimumHeight(content_h)
+        finally:
+            self._reflowing = False
 
 
 class RfpColumnsPanel(QWidget):
@@ -865,8 +897,15 @@ class RfpColumnsPanel(QWidget):
         for widget in self._sheet_row.findChildren(QWidget):
             widget.ensurePolished()
         self._sheet_layout.invalidate()
+        self._sheet_layout.activate()
         hint = self._sheet_layout.totalMinimumSize()
-        row_h = max(160, hint.height(), self._sheet_layout.sizeHint().height())
+        child_h = 0
+        for index in range(self._sheet_layout.count()):
+            widget = self._sheet_layout.itemAt(index).widget()
+            if widget is None:
+                continue
+            child_h = max(child_h, widget.sizeHint().height(), widget.minimumSizeHint().height())
+        row_h = max(200, child_h, hint.height(), self._sheet_layout.sizeHint().height()) + 36
         row_w = max(hint.width(), self._sheet_layout.sizeHint().width(), 200)
         self._sheet_row.setMinimumSize(row_w, row_h)
         self._sheet_row.resize(row_w, row_h)

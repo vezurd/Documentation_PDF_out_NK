@@ -285,6 +285,19 @@ class RfpColumnsPanelSmokeTest(unittest.TestCase):
                     self.assertLessEqual(card.geometry().right(), limit)
                 ys = {card.geometry().top() for card in unused_cards}
                 self.assertGreater(len(ys), 1)
+                for card in unused_cards:
+                    self.assertTrue(card.isVisible())
+                    self.assertGreaterEqual(card.height(), 40)
+                toggles = panel.findChildren(QPushButton, "group-toggle")
+                self.assertTrue(toggles)
+                for btn in toggles:
+                    box = btn.parentWidget()
+                    caption = box.findChild(QLabel, "group-caption")
+                    self.assertIsNotNone(caption)
+                    self.assertEqual(caption.text(), "группа")
+                    self.assertLessEqual(btn.y(), 12)
+                    self.assertGreaterEqual(caption.geometry().left(), btn.geometry().right() - 2)
+                    self.assertFalse(btn.geometry().intersects(caption.geometry()))
                 tid = create_template("проверка ширины", panel._columns_payload())
                 panel.reload_from_disk()
                 panel._load_columns_for_id(tid)
