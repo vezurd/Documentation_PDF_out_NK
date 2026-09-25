@@ -1470,13 +1470,15 @@ def _scan_sheet(
         if not _row_used(values):
             continue
         score, roles = _header_score(values)
-        if _is_candidate_header(values) and score >= best_score:
+        # Equal score keeps the first header. A second table on the same
+        # sheet repeats the canon header; rows above that repeat must stay.
+        if _is_candidate_header(values) and (not candidate or score > best_score):
             candidate = True
             best_score = score
             best_row = excel_row
             best_roles = roles
             header_values = list(values)
-        elif score > best_score:
+        elif not candidate and score > best_score:
             best_score = score
             best_row = excel_row
             best_roles = roles

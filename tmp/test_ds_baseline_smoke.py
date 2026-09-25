@@ -781,6 +781,35 @@ class DsBaselineSmokeTest(unittest.TestCase):
             self.assertEqual(result.positions, [])
             self.assertTrue(result.blocking)
 
+    def test_repeated_header_keeps_rows_from_both_tables(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    DS_HEADER,
+                    _ds_row(npp=1, code="BCC0000512", qty=1),
+                    _ds_row(npp=2, code="BCC0001041", qty=20),
+                    ["ИТОГО:", None, None, None, None, None, None, None, None, None, None, "=SUM(L2:L3)"],
+                    DS_HEADER,
+                    _ds_row(npp=3, code="BCC0002197", name="Базовое ПО", qty=2),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            self.assertFalse(result.blocking, result.summary_line())
+            self.assertEqual(
+                [(item.code, item.qty) for item in result.positions],
+                [
+                    ("BCC0000512", Decimal("1")),
+                    ("BCC0001041", Decimal("20")),
+                    ("BCC0002197", Decimal("2")),
+                ],
+            )
+
     def test_canon_footer_itogo_sum_is_not_a_position(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
             root = Path(raw)
