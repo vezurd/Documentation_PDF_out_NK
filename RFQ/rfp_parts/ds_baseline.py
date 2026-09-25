@@ -153,6 +153,7 @@ ISSUE_GROUP_FALLBACK = "group_fallback"
 ISSUE_WORKBOOK = "workbook_read_error"
 ISSUE_UNITS_CONVERT = "units_conversion_error"
 ISSUE_REGISTRY = "registry_error"
+ISSUE_CODE_QTY_GAP = "code_qty_gap"
 
 _LEVEL_LABELS = {
     "ERROR": "Ошибка",
@@ -183,6 +184,7 @@ _ISSUE_LABELS = {
     ISSUE_WORKBOOK: "Файл не прочитан",
     ISSUE_UNITS_CONVERT: "Ошибка конвертации",
     ISSUE_REGISTRY: "Ошибка реестра",
+    ISSUE_CODE_QTY_GAP: "Код есть на листе, в позиции не попал",
     "missing_source_id": "Нет номера ДС",
     "duplicate_source_id": "Повтор номера ДС",
     "missing_relation": "Нет связи в реестре",
@@ -1206,6 +1208,54 @@ def _position_comment(
     return " · " + " · ".join(parts)
 
 
+def _coarse_code_qty(
+    code_cell: object,
+    qty_cell: object,
+    qty_formula: object,
+) -> tuple[str, Decimal] | None:
+    """Code and quantity from the canon columns, without a position-row test.
+
+    The header label and a ``SUM`` / ``SUBTOTAL`` total are not positions.
+    A blank or non-numeric quantity counts as 0 so a dropped row still
+    shows up as a code that the sheet had and the parser did not keep.
+    """
+
+    if classify_header_role(code_cell) is not None:
+        return None
+    if _qty_formula_is_aggregate(qty_formula):
+        return None
+    if (
+        _is_signature_text(code_cell)
+        or _is_legal_entity_name(code_cell)
+        or _is_party_label(code_cell)
+    ):
+        return None
+    code = normalize_code(code_cell)
+    if not code:
+        return None
+    qty, error = _parse_qty(qty_cell)
+    amount = qty if qty is not None and error is None else Decimal(0)
+    return code, amount
+
+
+def _code_qty_gap_message(
+    sheet: dict[str, Decimal],
+    kept: dict[str, Decimal],
+) -> str:
+    """Russian lines for codes whose sheet sum differs from kept positions."""
+
+    lines: list[str] = []
+    for code in sorted(set(sheet) | set(kept)):
+        on_sheet = sheet.get(code, Decimal(0))
+        parsed = kept.get(code, Decimal(0))
+        if on_sheet == parsed:
+            continue
+        lines.append(
+            f"{code}: на листе {on_sheet}, в позиции попало {parsed}"
+        )
+    return "\n".join(lines)
+
+
 def _qty_formula_is_aggregate(text: object) -> bool:
     folded = _cell_text(text).strip().casefold().replace(" ", "")
     return folded.startswith("=sum") or folded.startswith("=subtotal")
@@ -1891,13 +1941,24 @@ def _parse_open_workbook(
     seen_core: dict[tuple[str, ...], int] = {}
     bad_titles: dict[str, list[object]] = {}
     qty_col_index = offset + ROLE_INDEX["qty"]
+    code_index = ROLE_INDEX["code"]
+    qty_index = ROLE_INDEX["qty"]
+    sheet_qty: dict[str, Decimal] = defaultdict(lambda: Decimal(0))
     emitted_group_fallback = False
     for excel_row, formula_values, value_values, formula_cols in _iter_paired_sheet_rows(
         ws_f, ws_v, max_col=read_max_col
     ):
+        padded = _pad(formula_values, read_max_col)
+        value_padded = _pad(value_values, read_max_col)
+        coarse = _coarse_code_qty(
+            value_padded[offset + code_index] if offset + code_index < len(value_padded) else None,
+            value_padded[offset + qty_index] if offset + qty_index < len(value_padded) else None,
+            padded[offset + qty_index] if offset + qty_index < len(padded) else None,
+        )
+        if coarse is not None:
+            sheet_qty[coarse[0]] += coarse[1]
         if header_row_num is not None and excel_row <= header_row_num:
             continue
-        padded = _pad(formula_values, read_max_col)
         if not _row_used(padded):
             continue
         shifted = padded[offset:]
@@ -2205,6 +2266,29 @@ def _parse_open_workbook(
                 relpath=source.relpath,
                 sheet=sheet_name,
                 excel_row=first_row,
+                source_id=source_id,
+            )
+        )
+    kept_qty: dict[str, Decimal] = defaultdict(lambda: Decimal(0))
+    for item in positions:
+        if not item.code_normalized:
+            continue
+        kept_qty[item.code_normalized] += (
+            item.qty if item.qty is not None else Decimal(0)
+        )
+    gap = _code_qty_gap_message(sheet_qty, kept_qty)
+    if gap:
+        issues.append(
+            _issue(
+                ISSUE_CODE_QTY_GAP,
+                "ERROR",
+                "сумма по закупочным кодам листа не совпала с прочитанными "
+                "позициями (шапка или отбор строки отбросил часть таблицы):\n"
+                + gap,
+                path=source.path,
+                relpath=source.relpath,
+                sheet=sheet_name,
+                excel_row=header_row_num,
                 source_id=source_id,
             )
         )

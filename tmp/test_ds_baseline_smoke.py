@@ -23,6 +23,7 @@ import base.t_comm_initial_classes as t_com_init_cls
 from RFQ.rfp_parts.ds_baseline import (
     BASELINE_XLSX_NAME,
     ISSUE_BAD_TITLE,
+    ISSUE_CODE_QTY_GAP,
     ISSUE_EMPTY_CODE,
     ISSUE_EXACT_DUPLICATE,
     ISSUE_GROUP_FALLBACK,
@@ -809,6 +810,30 @@ class DsBaselineSmokeTest(unittest.TestCase):
                     ("BCC0002197", Decimal("2")),
                 ],
             )
+
+    def test_code_above_header_is_a_blocking_qty_gap(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            root = Path(raw)
+            ds_root = root / "ds"
+            out_dir = root / "out"
+            registry_path = root / "registry.xlsx"
+            _write_registry(registry_path)
+            _write_xlsx(
+                ds_root / "ДС13.xlsx",
+                [
+                    _ds_row(npp=1, code="BCC0000512", qty=5),
+                    DS_HEADER,
+                    _ds_row(npp=2, code="BCC0002197", qty=2),
+                ],
+            )
+            result = _run_baseline(ds_root, registry_path, out_dir)
+            gaps = [item for item in result.issues if item.code == ISSUE_CODE_QTY_GAP]
+            self.assertEqual(len(gaps), 1, result.issues)
+            self.assertIn("BCC0000512", gaps[0].message)
+            self.assertIn("на листе 5", gaps[0].message)
+            self.assertIn("в позиции попало 0", gaps[0].message)
+            self.assertTrue(result.blocking)
+            self.assertIsNone(result.baseline_path)
 
     def test_canon_footer_itogo_sum_is_not_a_position(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
